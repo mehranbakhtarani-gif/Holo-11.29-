@@ -71,7 +71,7 @@ import { OfflineSmartGuideDrawer } from './components/OfflineSmartGuideDrawer';
 import { SyncConflictResolutionModal } from './components/SyncConflictResolutionModal';
 import { UniversalExcelImportModal } from './components/UniversalExcelImportModal';
 import { mapModuleToImportEntity } from './lib/universalExcelImport';
-import { OfflineIndicator } from './components/PWAInstallButton';
+import { OfflineIndicator, PwaUpdateBanner } from './components/PWAInstallButton';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import { useDualCloudSync } from './hooks/useDualCloudSync';
 import { useLocalFirstMeshSync } from './hooks/useLocalFirstMeshSync';
@@ -140,6 +140,7 @@ export default function App() {
     loginWithGoogle,
     logout,
     setCurrencyUnit,
+    exportBackupJson,
   } = useAccounting();
 
   const { onlineDevices, otherOnlineDevices, setPresenceModule } =
@@ -2169,6 +2170,24 @@ export default function App() {
         }}
       />
       <OfflineIndicator onOpenHealth={() => setShowHealthDrawer(true)} />
+      <PwaUpdateBanner
+        onCreatePreUpdateBackup={async () => {
+          const [{ computeSnapshotSha256Hex }, { OP_DB_VERSION, savePreUpdateSafetyBackup }] = await Promise.all([
+            import('./lib/offlineFirstCore'),
+            import('./lib/operationalDb'),
+          ]);
+          const snap = exportBackupJson();
+          const sha256 = await computeSnapshotSha256Hex(snap);
+          return savePreUpdateSafetyBackup({
+            id: `pre_update_${Date.now()}`,
+            reason: 'pwa_update',
+            schemaVersion: OP_DB_VERSION,
+            sha256,
+            snapshotJson: snap,
+            createdAt: new Date().toISOString(),
+          });
+        }}
+      />
     </div>
     </MotionConfig>
   );

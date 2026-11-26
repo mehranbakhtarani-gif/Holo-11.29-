@@ -66,6 +66,19 @@ export function auditPendingApprovalItems(
   const partyById = new Map(ctx.parties.map((p) => [p.id, p]));
   const productById = new Map(ctx.products.map((p) => [p.id, p]));
 
+  // O(M) pre-index by rounded debit amount so duplicate detection is O(1) amortized at 25,000+ vouchers
+  const vouchersByRoundedDebit = new Map<number, Voucher[]>();
+  for (const v of ctx.vouchers) {
+    const amt = Math.round(v.totalDebit || 0);
+    if (amt <= 0) continue;
+    let bucket = vouchersByRoundedDebit.get(amt);
+    if (!bucket) {
+      bucket = [];
+      vouchersByRoundedDebit.set(amt, bucket);
+    }
+    bucket.push(v);
+  }
+
   for (const item of items) {
     const flags: PreApprovalRiskFlag[] = [];
 
@@ -89,16 +102,27 @@ export function auditPendingApprovalItems(
           });
         }
 
-        // Duplicate voucher detection (same amount + same date, or identical description + amount)
+        // O(1) amortized duplicate voucher detection (same amount ±1 IRR + same date, or identical description + amount)
         const normalizedDesc = (v.description || '').trim();
-        const duplicate = ctx.vouchers.find(
-          (other) =>
-            other.id !== v.id &&
-            v.totalDebit > 0 &&
-            Math.abs((other.totalDebit || 0) - (v.totalDebit || 0)) <= 1 &&
-            (other.date === v.date ||
-              (normalizedDesc.length >= 8 && (other.description || '').trim() === normalizedDesc))
-        );
+        let duplicate: Voucher | undefined;
+        const baseAmt = Math.round(v.totalDebit || 0);
+        if (baseAmt > 0) {
+          outer: for (let delta = -1; delta <= 1; delta++) {
+            const bucket = vouchersByRoundedDebit.get(baseAmt + delta);
+            if (!bucket) continue;
+            for (const other of bucket) {
+              if (
+                other.id !== v.id &&
+                Math.abs((other.totalDebit || 0) - (v.totalDebit || 0)) <= 1 &&
+                (other.date === v.date ||
+                  (normalizedDesc.length >= 8 && (other.description || '').trim() === normalizedDesc))
+              ) {
+                duplicate = other;
+                break outer;
+              }
+            }
+          }
+        }
         if (duplicate) {
           flags.push({
             code: 'duplicate_voucher',
@@ -107,9 +131,13 @@ export function auditPendingApprovalItems(
           });
         }
 
-        // Party credit limit check on receivable debit lines
+        // Party credit limit check on receivable debit lines (10401 trade receivables & 103xx notes receivable)
         for (const line of v.lines) {
-          if (line.partyId && line.debit > 0 && line.accountCode.startsWith('103')) {
+          if (
+            line.partyId &&
+            line.debit > 0 &&
+            (line.accountCode.startsWith('104') || line.accountCode.startsWith('103'))
+          ) {
             const party = partyById.get(line.partyId);
             if (party && party.creditLimit > 0) {
               const currentBalance = ctx.partyBalances.get(party.id) ?? party.openingBalance ?? 0;

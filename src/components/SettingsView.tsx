@@ -42,6 +42,7 @@ import { playErrorTone, playSuccessChime } from '../lib/audioFeedback';
 import { PWAInstallButton } from './PWAInstallButton';
 import { NativeNotificationsPanel } from './NativeNotificationsPanel';
 import { LocalStorageMeshSettingsPanel } from './LocalStorageMeshSettingsPanel';
+import { OfflineFirstControlPanel } from './OfflineFirstControlPanel';
 import { InvoiceTemplateDesigner } from './InvoiceTemplateDesigner';
 import { SupabaseAutoDiagnosticPanel } from './SupabaseAutoDiagnosticPanel';
 import { SystemResetCenter } from './SystemResetCenter';
@@ -129,6 +130,7 @@ export const SettingsView: React.FC<{
   const [currencyUnit, setCurrencyUnit] = useState(profile.currencyUnit);
   const [deviceNameInput, setDeviceNameInput] = useState(deviceLabel);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const offlineFirstRef = useRef<HTMLDivElement | null>(null);
   const localFolderMeshRef = useRef<HTMLDivElement | null>(null);
   const cloudRef = useRef<HTMLDivElement | null>(null);
   const localBackupRef = useRef<HTMLDivElement | null>(null);
@@ -151,6 +153,13 @@ export const SettingsView: React.FC<{
 
   const settingsDirectory = useMemo(
     () => [
+      {
+        id: 'offline-first',
+        title: 'مرکز کنترل آفلاین-محور (Local / Hybrid / Online)، پشتیبان رمزنگاری‌شده و قفل محلی',
+        keywords:
+          'آفلاین مستقل حالت محلی local hybrid online رمزنگاری aes پشتیبان سهمیه حافظه pbkdf2 قفل بروزرسانی pwa update',
+        ref: offlineFirstRef,
+      },
       {
         id: 'local-folder-mesh',
         title: 'مسیر ذخیره‌سازی محلی و همگام‌سازی P2P (۳ دستگاه)',
@@ -412,6 +421,11 @@ export const SettingsView: React.FC<{
             ))
           )}
         </div>
+      </div>
+
+      {/* Standalone Offline-First PWA Control Center (3 Modes, AES-256-GCM Backups, PBKDF2 Auth, Storage & Safe Updates) */}
+      <div ref={offlineFirstRef}>
+        <OfflineFirstControlPanel highlighted={highlightedSection === 'offline-first'} />
       </div>
 
       {/* Local Storage Directory (File System Access API + Dexie) & 3-Device PeerJS Mesh Panel */}

@@ -750,6 +750,14 @@ export function computeAuditReport(input: {
       invVoucherRefs.push(inv.id);
     }
   }
+  const reversedOriginalIds = new Set<string>();
+  const scopedRefCounts = new Map<string, number>();
+  for (const rv of scopedVouchers) {
+    if (rv.reversalOfVoucherId) reversedOriginalIds.add(rv.reversalOfVoucherId);
+    if (rv.referenceId) {
+      scopedRefCounts.set(rv.referenceId, (scopedRefCounts.get(rv.referenceId) ?? 0) + 1);
+    }
+  }
   for (const v of scopedVouchers) {
     if (v.referenceId && v.referenceId.startsWith('inv_')) {
       const inv = invoiceById.get(v.referenceId);
@@ -757,9 +765,8 @@ export function computeAuditReport(input: {
         invVoucherIssues.push(`سند #${v.voucherNumber} به فاکتور ناموجود (${v.referenceId}) ارجاع دارد (سند یتیم).`);
         invVoucherRefs.push(v.id);
       } else if (inv.status === 'cancelled' && !v.reversalOfVoucherId) {
-        const hasReversal = scopedVouchers.some(
-          (rv) => rv.reversalOfVoucherId === v.id || (rv.referenceId === inv.id && rv.id !== v.id)
-        );
+        const hasReversal =
+          reversedOriginalIds.has(v.id) || (scopedRefCounts.get(inv.id) ?? 0) > 1;
         if (!hasReversal) {
           invVoucherIssues.push(
             `فاکتور ${inv.invoiceNumber} ابطال شده اما سند #${v.voucherNumber} بدون سند معکوس باقی مانده است.`
@@ -4056,7 +4063,14 @@ export function planStockAdjustmentWithCostLayers(input: {
     throw new Error(`سال مالی ${fy} بسته شده است و ثبت سند تعدیل انبارگردانی مجاز نیست.`);
   }
 
-  const sanitizedStock = roundQty(Math.max(0, Number(newStock) || 0));
+  const rawNewStock = Number(newStock);
+  if (!Number.isFinite(rawNewStock)) {
+    throw new Error(`موجودی شمارش‌شده کالا («${product.name}») عدد معتبری نیست.`);
+  }
+  if (rawNewStock < 0 && !allowNegativeStock) {
+    throw new Error(`موجودی شمارش‌شده کالا («${product.name}») نمی‌تواند منفی باشد.`);
+  }
+  const sanitizedStock = roundQty(rawNewStock);
   const diffQty = roundQty(sanitizedStock - product.stock);
   const prevVersion = product._version ?? 1;
   const currentState = normalizeProductCostState(product, costingMethod, date);

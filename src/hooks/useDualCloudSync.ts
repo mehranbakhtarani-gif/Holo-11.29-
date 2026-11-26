@@ -63,16 +63,16 @@ import {
   type SyncConflictResolutionChoice,
 } from '../lib/syncConflictResolver';
 import { useOnlineStatus } from './usePWAInstall';
+import {
+  computeSnapshotDigest256Sync,
+  loadOperatingMode,
+  resolveEffectiveOperatingMode,
+  type OperatingMode,
+} from '../lib/offlineFirstCore';
 
-/** Fast deterministic FNV-1a fingerprint ignoring volatile exportedAt timestamp */
+/** Collision-resistant 256-bit snapshot digest ignoring volatile exportedAt timestamp */
 function fingerprintWorkspacePayload(rawJson: string): string {
-  const normalized = rawJson.replace(/"exportedAt"\s*:\s*"[^"]*"/, '"exportedAt":""');
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < normalized.length; i++) {
-    hash ^= normalized.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `${normalized.length}_${(hash >>> 0).toString(16)}`;
+  return computeSnapshotDigest256Sync(rawJson);
 }
 
 const LAST_FB_BACKUP_KEY = 'holoo_apex_firebase_last_backup_v1';
@@ -120,7 +120,18 @@ export function useDualCloudSync() {
     showToast,
   } = useAccounting();
 
-  const isOnline = useOnlineStatus();
+  const rawIsOnline = useOnlineStatus();
+  const [operatingMode, setOperatingMode] = useState<OperatingMode>(() => loadOperatingMode());
+  useEffect(() => {
+    const handleModeChanged = (event: Event) => {
+      const custom = event as CustomEvent<OperatingMode>;
+      setOperatingMode(custom.detail || loadOperatingMode());
+    };
+    window.addEventListener('holoo:operating-mode-changed', handleModeChanged);
+    return () => window.removeEventListener('holoo:operating-mode-changed', handleModeChanged);
+  }, []);
+  const effectiveModeCaps = resolveEffectiveOperatingMode(operatingMode, rawIsOnline);
+  const isOnline = effectiveModeCaps.allowCloudPush;
 
   // ---- Independent Supabase Session State (100% Decoupled from Firebase!) ----
   // Persists across page reloads & PWA launches via server-issued HttpOnly; Secure; SameSite=None; Partitioned cookie.

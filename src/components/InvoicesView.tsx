@@ -137,10 +137,15 @@ export const InvoicesView: React.FC<{ initialIntent?: string; clearIntent?: () =
 
   const [filterType, setFilterType] = useState<'all' | InvoiceType>('all');
   const [search, setSearch] = useState('');
+  const [visibleInvoiceCount, setVisibleInvoiceCount] = useState(60);
   const [highlightedInvoiceId, setHighlightedInvoiceId] = useState<string | null>(null);
   const [showComposer, setShowComposer] = useState(false);
   const [printInvoice, setPrintInvoice] = useState<Invoice | null>(null);
   const [showPrintCustomizer, setShowPrintCustomizer] = useState(false);
+
+  useEffect(() => {
+    setVisibleInvoiceCount(60);
+  }, [filterType, search]);
 
   const {
     reservedInvoices,
@@ -2555,7 +2560,7 @@ export const InvoicesView: React.FC<{ initialIntent?: string; clearIntent?: () =
                   </td>
                 </tr>
               ) : (
-                filteredInvoices.map((inv) => {
+                filteredInvoices.slice(0, visibleInvoiceCount).map((inv) => {
                   const isCancelled = inv.status === 'cancelled';
                   const isOfficialTax = inv.invoiceType === 'sale';
                   const isProforma = inv.invoiceType === 'proforma';
@@ -2713,6 +2718,30 @@ export const InvoicesView: React.FC<{ initialIntent?: string; clearIntent?: () =
             </tbody>
           </table>
         </div>
+        {filteredInvoices.length > visibleInvoiceCount && (
+          <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="text-slate-600 dark:text-slate-400">
+              نمایش <strong className="font-code">{toPersianDigits(visibleInvoiceCount)}</strong> از{' '}
+              <strong className="font-code">{toPersianDigits(filteredInvoices.length)}</strong> فاکتور
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setVisibleInvoiceCount((c) => c + 60)}
+                className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold"
+              >
+                نمایش ۶۰ فاکتور بعدی
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisibleInvoiceCount(filteredInvoices.length)}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                نمایش همه
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Customizable Official Printable & Shareable Invoice Modal */}

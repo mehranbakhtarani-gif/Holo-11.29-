@@ -89,6 +89,30 @@ export async function applyPendingSwRefresh(): Promise<void> {
 }
 
 /**
+ * Controlled PWA Update Activator:
+ * Executes an optional pre-update safety backup hook BEFORE activating a waiting Service Worker,
+ * ensuring local accounting data is preserved even if a migration or partial update occurs.
+ */
+export async function safeApplySwUpdateWithBackup(
+  createSafetyBackup?: () => Promise<boolean> | boolean
+): Promise<{ backupCreated: boolean; applied: boolean; error?: string }> {
+  let backupCreated = false;
+  try {
+    if (createSafetyBackup) {
+      backupCreated = Boolean(await createSafetyBackup());
+    }
+    await applyPendingSwRefresh();
+    return { backupCreated, applied: true };
+  } catch (err) {
+    return {
+      backupCreated,
+      applied: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * Warms up essential runtime assets into Cache Storage so the app opens seamlessly when offline.
  */
 export async function warmOfflineCacheNow(): Promise<{ cachedCount: number; cacheName: string }> {

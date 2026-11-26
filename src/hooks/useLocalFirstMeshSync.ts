@@ -53,18 +53,13 @@ import {
   type PendingSyncConflict,
   type SyncConflictResolutionChoice,
 } from '../lib/syncConflictResolver';
+import { computeSnapshotDigest256Sync } from '../lib/offlineFirstCore';
 
 const ONBOARDING_DISMISSED_KEY = 'holoo_apex_mesh_onboarding_dismissed_v1';
 
-/** Fast deterministic FNV-1a payload fingerprint ignoring volatile exportedAt timestamp */
+/** Collision-resistant 256-bit workspace snapshot digest (ignores volatile exportedAt timestamp) */
 function computePayloadFingerprint(rawJson: string): string {
-  const normalized = rawJson.replace(/"exportedAt"\s*:\s*"[^"]*"/g, '"exportedAt":""');
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < normalized.length; i++) {
-    hash ^= normalized.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `${normalized.length}_${(hash >>> 0).toString(16)}`;
+  return computeSnapshotDigest256Sync(rawJson);
 }
 
 export function useLocalFirstMeshSync() {

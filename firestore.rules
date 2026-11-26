@@ -124,7 +124,7 @@ service cloud.firestore {
 
     function isValidProduct(data) {
       return data.keys().hasAll(['ownerId', 'sku', 'name', 'category', 'warehouse', 'unit', 'buyPrice', 'sellPrice', 'stock', 'reorderPoint', 'vatExempt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'sku', 'name', 'category', 'warehouse', 'unit', 'secondaryUnit', 'kgPerCarton', 'bobbinUnit', 'bobbinsPerCarton', 'yarnCount', 'lotNumber', 'originCountry', 'buyPrice', 'sellPrice', 'stock', 'reorderPoint', 'vatExempt', '_version', 'updatedByDevice', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'sku', 'name', 'category', 'warehouse', 'unit', 'secondaryUnit', 'kgPerCarton', 'bobbinUnit', 'bobbinsPerCarton', 'yarnCount', 'lotNumber', 'originCountry', 'buyPrice', 'sellPrice', 'stock', 'reorderPoint', 'vatExempt', 'costingMethod', 'costLayers', 'inventoryValueIrr', '_version', 'updatedByDevice', 'createdAt', 'updatedAt'])
         && data.ownerId == request.auth.uid
         && isValidId(data.ownerId)
         && isNonEmptyString(data.sku, 48)
@@ -144,6 +144,9 @@ service cloud.firestore {
         && data.stock is number
         && data.reorderPoint is number && data.reorderPoint >= 0
         && data.vatExempt is bool
+        && (!('costingMethod' in data) || data.costingMethod in ['fifo', 'moving_average', 'periodic_average'])
+        && (!('costLayers' in data) || (data.costLayers is list && data.costLayers.size() <= 200))
+        && (!('inventoryValueIrr' in data) || (data.inventoryValueIrr is number && data.inventoryValueIrr >= 0))
         && isOptionalVersion(data)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -151,11 +154,12 @@ service cloud.firestore {
 
     function isValidVoucher(data) {
       return data.keys().hasAll(['ownerId', 'voucherNumber', 'date', 'description', 'voucherType', 'status', 'totalDebit', 'totalCredit', 'lines', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'voucherNumber', 'date', 'description', 'voucherType', 'status', 'totalDebit', 'totalCredit', 'currencyCode', 'exchangeRate', 'foreignTotalDebit', 'foreignTotalCredit', 'referenceId', 'lines', '_version', 'updatedByDevice', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'voucherNumber', 'date', 'fiscalYear', 'description', 'voucherType', 'status', 'totalDebit', 'totalCredit', 'currencyCode', 'exchangeRate', 'foreignTotalDebit', 'foreignTotalCredit', 'referenceId', 'reversalOfVoucherId', 'integrityHash', 'lines', '_version', 'updatedByDevice', 'createdAt', 'updatedAt'])
         && data.ownerId == request.auth.uid
         && isValidId(data.ownerId)
         && data.voucherNumber is number && data.voucherNumber >= 1
         && isNonEmptyString(data.date, 20)
+        && isOptionalString(data, 'fiscalYear', 16)
         && isNonEmptyString(data.description, 300)
         && data.voucherType in ['opening', 'general', 'sales', 'purchase', 'treasury', 'payroll', 'depreciation', 'closing']
         && data.status in ['draft', 'permanent']
@@ -167,6 +171,8 @@ service cloud.firestore {
         && (!('foreignTotalDebit' in data) || (data.foreignTotalDebit is number && data.foreignTotalDebit >= 0))
         && (!('foreignTotalCredit' in data) || (data.foreignTotalCredit is number && data.foreignTotalCredit >= 0))
         && isOptionalString(data, 'referenceId', 128)
+        && isOptionalString(data, 'reversalOfVoucherId', 128)
+        && isOptionalString(data, 'integrityHash', 128)
         && data.lines is list && data.lines.size() >= 2 && data.lines.size() <= 100 && data.lines[0] is map
         && isOptionalVersion(data)
         && data.createdAt is timestamp
@@ -625,9 +631,9 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && (
             incoming().diff(existing()).affectedKeys().hasOnly(['stock', '_version', 'updatedByDevice', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'buyPrice', 'lotNumber', '_version', 'updatedByDevice', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'buyPrice', 'lotNumber', 'costLayers', 'inventoryValueIrr', '_version', 'updatedByDevice', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['warehouse', '_version', 'updatedByDevice', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'warehouse', 'unit', 'secondaryUnit', 'kgPerCarton', 'bobbinUnit', 'bobbinsPerCarton', 'yarnCount', 'lotNumber', 'originCountry', 'buyPrice', 'sellPrice', 'stock', 'reorderPoint', 'vatExempt', '_version', 'updatedByDevice', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'warehouse', 'unit', 'secondaryUnit', 'kgPerCarton', 'bobbinUnit', 'bobbinsPerCarton', 'yarnCount', 'lotNumber', 'originCountry', 'buyPrice', 'sellPrice', 'stock', 'reorderPoint', 'vatExempt', 'costingMethod', 'costLayers', 'inventoryValueIrr', '_version', 'updatedByDevice', 'updatedAt'])
           )
         )
       );
@@ -682,7 +688,7 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['paidCash', 'paidBank', 'paidCheque', 'creditAmount', 'status', '_version', 'updatedByDevice', 'updatedAt']) ||
             (
               existing().invoiceType == 'proforma'
-              && incoming().diff(existing()).affectedKeys().hasOnly(['invoiceNumber', 'invoiceType', 'status', 'voucherId', 'items', '_version', 'updatedByDevice', 'updatedAt'])
+              && incoming().diff(existing()).affectedKeys().hasOnly(['invoiceNumber', 'invoiceType', 'date', 'status', 'voucherId', 'items', '_version', 'updatedByDevice', 'updatedAt'])
             )
           )
         )

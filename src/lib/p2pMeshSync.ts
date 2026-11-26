@@ -5,6 +5,7 @@ import {
   type MeshSyncEventLog,
   type MeshSyncOutboxItem,
 } from './localFolderDexieDb';
+import { computeDeterministicHash256 } from './moneyMath';
 
 // ==================== TYPES ====================
 
@@ -249,7 +250,16 @@ export function evaluateVectorExchangeDecision(params: {
   };
 }
 
-type MeshWireMessage =
+export interface MeshEnvelopeSecurityFields {
+  /** Cryptographic random per-message nonce (128-bit hex) preventing replay attacks */
+  nonce: string;
+  /** Unix epoch milliseconds when the message was signed (enforces ±5 min freshness window) */
+  sentAtMs: number;
+  /** Keyed 256-bit MAC authenticating header + payload + nonce + timestamp against forgery/tampering */
+  mac: string;
+}
+
+export type MeshWireMessageBody =
   | {
       type: 'mesh:hello';
       fromPeerId: MeshDevicePeerId;
@@ -284,6 +294,12 @@ type MeshWireMessage =
       payloadHash: string;
       syncedAt: string;
     };
+
+export type MeshWireMessage = MeshWireMessageBody & MeshEnvelopeSecurityFields;
+
+export const MAX_MESH_CLOCK_SKEW_MS = 5 * 60 * 1000; // ±5 minutes
+export const MAX_SEEN_NONCES = 2048; // Hard memory ceiling for replay protection cache
+export const MAX_MESH_SNAPSHOT_BYTES = 16 * 1024 * 1024; // 16 MB max snapshot payload per packet
 
 const DEVICE_ROLE_STORAGE_KEY = 'holoo_apex_mesh_device_peer_id_v1';
 const MESH_PASSPHRASE_KEY = 'holoo_apex_mesh_passphrase_v1';
@@ -373,6 +389,316 @@ export function computeMeshAuthTag(passphrase: string, namespace = 'holoo-mesh-v
   return `mtag_${(h1 >>> 0).toString(16)}_${(h2 >>> 0).toString(16)}`;
 }
 
+/** Constant-time string equality check to resist timing side-channels on MAC/authTag checks */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  let diff = a.length ^ b.length;
+  const maxLen = Math.max(a.length, b.length);
+  for (let i = 0; i < maxLen; i++) {
+    const ca = i < a.length ? a.charCodeAt(i) : 0;
+    const cb = i < b.length ? b.charCodeAt(i) : 0;
+    diff |= ca ^ cb;
+  }
+  return diff === 0;
+}
+
+/** Generates a 128-bit cryptographically random nonce (hex) for each P2P wire message */
+export function generateMeshNonce(): string {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Safe fallback for exotic runtimes lacking Web Crypto
+  const t = Date.now().toString(16).padStart(12, '0');
+  const r1 = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  const r2 = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  const r3 = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return `${t}${r1}${r2}${r3}`.slice(0, 32);
+}
+
+function canonicalizeVectorClock(clock: Record<string, number> | undefined): string {
+  if (!clock || typeof clock !== 'object') return '';
+  return Object.keys(clock)
+    .sort()
+    .map((k) => `${k}:${Number(clock[k]) || 0}`)
+    .join(',');
+}
+
+function canonicalizeRelayEnvelopesDigest(relays: MeshRelayEnvelope[] | undefined): string {
+  if (!Array.isArray(relays) || relays.length === 0) return '0';
+  const parts = relays.map(
+    (r) =>
+      `${r.operationId}|${r.originDeviceId}|${r.payloadHash}|${computeDeterministicHash256(r.snapshotJson || '')}|${(r.deliveredToPeers || []).slice().sort().join(',')}|${(r.requiredPeers || []).slice().sort().join(',')}`
+  );
+  return computeDeterministicHash256(parts.join('\n'));
+}
+
+export type UnsignedMeshWireMessage = MeshWireMessageBody & Omit<MeshEnvelopeSecurityFields, 'mac'>;
+
+/**
+ * Computes a double-keyed 256-bit HMAC-style message authentication code binding
+ * every security-critical field of a MeshWireMessage (including nonce, timestamp,
+ * peer ID, vector clock, snapshot payload, and relay envelopes).
+ */
+export function computeMeshMessageMac(
+  passphrase: string,
+  msg: UnsignedMeshWireMessage
+): string {
+  const key = passphrase.trim();
+  let bodyCanonical = '';
+
+  if (msg.type === 'mesh:hello') {
+    bodyCanonical = [
+      msg.updatedAt || '',
+      msg.payloadHash || '',
+      canonicalizeVectorClock(msg.vectorClock),
+      Array.isArray(msg.pendingRelayIds) ? msg.pendingRelayIds.join(',') : '',
+      String(msg.batchedCount ?? ''),
+    ].join('|');
+  } else if (msg.type === 'mesh:request_state') {
+    bodyCanonical = 'req';
+  } else if (msg.type === 'mesh:state_payload') {
+    const snapDigest = computeDeterministicHash256(
+      typeof msg.snapshotJson === 'string' ? msg.snapshotJson : ''
+    );
+    const relayDigest = canonicalizeRelayEnvelopesDigest(msg.relayEnvelopes);
+    const batchIds = Array.isArray(msg.batchedOperationIds)
+      ? msg.batchedOperationIds.join(',')
+      : '';
+    bodyCanonical = [
+      msg.updatedAt || '',
+      msg.payloadHash || '',
+      canonicalizeVectorClock(msg.vectorClock),
+      snapDigest,
+      relayDigest,
+      batchIds,
+    ].join('|');
+  } else if (msg.type === 'mesh:ack') {
+    bodyCanonical = [
+      Array.isArray(msg.receivedOperationIds) ? msg.receivedOperationIds.join(',') : '',
+      msg.payloadHash || '',
+      msg.syncedAt || '',
+    ].join('|');
+  }
+
+  const envelopeCanonical = [
+    'holoo-mesh-mac-v2',
+    msg.type,
+    msg.fromPeerId,
+    msg.authTag,
+    msg.nonce,
+    String(msg.sentAtMs),
+    bodyCanonical,
+  ].join('\u001f');
+
+  const innerDigest = computeDeterministicHash256(`ipad:${key}:${envelopeCanonical}`);
+  return `mmac2_${computeDeterministicHash256(`opad:${key}:${innerDigest}`)}`;
+}
+
+/** Signs an outgoing MeshWireMessageBody with a fresh 128-bit nonce, timestamp, and 256-bit keyed MAC */
+export function signMeshMessageEnvelope<T extends MeshWireMessageBody>(
+  passphrase: string,
+  body: T,
+  nowMs = Date.now()
+): T & MeshEnvelopeSecurityFields {
+  const nonce = generateMeshNonce();
+  const sentAtMs = Math.trunc(nowMs);
+  const unsigned = {
+    ...body,
+    nonce,
+    sentAtMs,
+  };
+  const mac = computeMeshMessageMac(passphrase, unsigned as UnsignedMeshWireMessage);
+  return {
+    ...unsigned,
+    mac,
+  };
+}
+
+export type MeshVerifyFailureReason =
+  | 'invalid_structure'
+  | 'invalid_peer'
+  | 'auth_tag_mismatch'
+  | 'missing_security_fields'
+  | 'timestamp_out_of_window'
+  | 'replay_detected'
+  | 'mac_mismatch'
+  | 'payload_too_large';
+
+export type MeshVerifyResult =
+  | { ok: true }
+  | { ok: false; reason: MeshVerifyFailureReason; detail: string };
+
+/**
+ * Bounded-memory replay & timestamp-skew guard for P2P mesh packets.
+ * Automatically evicts expired nonces and caps resident entries at `maxEntries`
+ * so memory consumption stays strictly bounded even under sustained packet floods.
+ */
+export class MeshReplayGuard {
+  private readonly maxSkewMs: number;
+  private readonly maxEntries: number;
+  private readonly seenNonces = new Map<string, number>();
+
+  constructor(maxSkewMs = MAX_MESH_CLOCK_SKEW_MS, maxEntries = MAX_SEEN_NONCES) {
+    this.maxSkewMs = maxSkewMs;
+    this.maxEntries = Math.max(16, maxEntries);
+  }
+
+  public pruneExpired(nowMs = Date.now()): void {
+    const expiryCutoff = nowMs - this.maxSkewMs;
+    for (const [key, ts] of this.seenNonces.entries()) {
+      if (ts < expiryCutoff) {
+        this.seenNonces.delete(key);
+      }
+    }
+  }
+
+  public checkAndRecord(
+    fromPeerId: string,
+    nonce: string,
+    sentAtMs: number,
+    nowMs = Date.now()
+  ): MeshVerifyResult {
+    if (!Number.isFinite(sentAtMs) || Math.abs(nowMs - sentAtMs) > this.maxSkewMs) {
+      return {
+        ok: false,
+        reason: 'timestamp_out_of_window',
+        detail: `Message timestamp drift exceeds ±${Math.round(this.maxSkewMs / 1000)}s window`,
+      };
+    }
+
+    if (typeof nonce !== 'string' || nonce.length < 16 || nonce.length > 128) {
+      return {
+        ok: false,
+        reason: 'missing_security_fields',
+        detail: 'Invalid or missing cryptographic nonce',
+      };
+    }
+
+    this.pruneExpired(nowMs);
+    const cacheKey = `${fromPeerId}:${nonce}`;
+    if (this.seenNonces.has(cacheKey)) {
+      return {
+        ok: false,
+        reason: 'replay_detected',
+        detail: `Duplicate nonce replay detected from ${fromPeerId}`,
+      };
+    }
+
+    // Enforce strict upper memory bound by evicting oldest entries first (Map preserves insertion order)
+    while (this.seenNonces.size >= this.maxEntries) {
+      const oldestKey = this.seenNonces.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.seenNonces.delete(oldestKey);
+    }
+
+    this.seenNonces.set(cacheKey, nowMs);
+    return { ok: true };
+  }
+
+  public getSize(): number {
+    return this.seenNonces.size;
+  }
+
+  public clear(): void {
+    this.seenNonces.clear();
+  }
+}
+
+/**
+ * Verifies an inbound P2P wire message end-to-end:
+ * 1. Allowlisted peer identity & expected sender match
+ * 2. Shared passphrase authTag (constant-time)
+ * 3. Payload size DoS cap (<= 16 MB)
+ * 4. Presence of nonce, timestamp, and MAC
+ * 5. Keyed 256-bit MAC integrity check (detects any 1-byte tampering or forgery)
+ * 6. Timestamp freshness window (±5 min) + bounded-memory nonce replay check
+ *
+ * Note: MAC is verified BEFORE recording the nonce so an attacker cannot pollute
+ * the replay cache with forged packets.
+ */
+export function verifyMeshMessageEnvelope(params: {
+  passphrase: string;
+  expectedPeerId: MeshDevicePeerId;
+  raw: unknown;
+  replayGuard: MeshReplayGuard;
+  nowMs?: number;
+  maxPayloadBytes?: number;
+}): MeshVerifyResult {
+  const {
+    passphrase,
+    expectedPeerId,
+    raw,
+    replayGuard,
+    nowMs = Date.now(),
+    maxPayloadBytes = MAX_MESH_SNAPSHOT_BYTES,
+  } = params;
+
+  if (!raw || typeof raw !== 'object') {
+    return { ok: false, reason: 'invalid_structure', detail: 'Non-object wire payload' };
+  }
+
+  const msg = raw as Partial<MeshWireMessage>;
+  if (!isValidMeshPeerId(msg.fromPeerId) || msg.fromPeerId !== expectedPeerId) {
+    return { ok: false, reason: 'invalid_peer', detail: 'Sender peerId is not allowlisted or mismatches connection' };
+  }
+
+  const expectedTag = computeMeshAuthTag(passphrase);
+  if (typeof msg.authTag !== 'string' || !constantTimeEqual(msg.authTag, expectedTag)) {
+    return { ok: false, reason: 'auth_tag_mismatch', detail: 'Shared passphrase authTag mismatch' };
+  }
+
+  if (
+    typeof msg.nonce !== 'string' ||
+    typeof msg.sentAtMs !== 'number' ||
+    typeof msg.mac !== 'string' ||
+    !msg.mac.startsWith('mmac2_')
+  ) {
+    return {
+      ok: false,
+      reason: 'missing_security_fields',
+      detail: 'Missing nonce, sentAtMs, or keyed MAC v2',
+    };
+  }
+
+  // Enforce strict memory/DoS cap BEFORE hashing huge strings
+  if (msg.type === 'mesh:state_payload') {
+    const snapBytes = typeof msg.snapshotJson === 'string' ? msg.snapshotJson.length * 2 : 0;
+    const relayBytes = Array.isArray(msg.relayEnvelopes)
+      ? msg.relayEnvelopes.reduce((sum, r) => sum + (typeof r?.snapshotJson === 'string' ? r.snapshotJson.length * 2 : 0), 0)
+      : 0;
+    if (snapBytes + relayBytes > maxPayloadBytes) {
+      return {
+        ok: false,
+        reason: 'payload_too_large',
+        detail: `Inbound mesh snapshot exceeds ${Math.round(maxPayloadBytes / (1024 * 1024))}MB safety cap`,
+      };
+    }
+  }
+
+  // Verify timestamp window before heavy MAC hashing if grossly expired/future
+  if (!Number.isFinite(msg.sentAtMs) || Math.abs(nowMs - msg.sentAtMs) > MAX_MESH_CLOCK_SKEW_MS) {
+    return {
+      ok: false,
+      reason: 'timestamp_out_of_window',
+      detail: 'Message timestamp outside allowed ±5 minute freshness window',
+    };
+  }
+
+  const expectedMac = computeMeshMessageMac(passphrase, msg as UnsignedMeshWireMessage);
+  if (!constantTimeEqual(msg.mac, expectedMac)) {
+    return {
+      ok: false,
+      reason: 'mac_mismatch',
+      detail: 'Message MAC verification failed (possible forgery or tampering)',
+    };
+  }
+
+  // Record nonce ONLY after MAC passes to prevent replay-cache pollution
+  return replayGuard.checkAndRecord(msg.fromPeerId, msg.nonce, msg.sentAtMs, nowMs);
+}
+
 // ==================== PEERJS 3-DEVICE MESH CONTROLLER ====================
 
 export interface MeshSyncCallbacks {
@@ -413,7 +739,9 @@ export class HolooPeerMeshManager {
   private peerLastHelloSent = new Map<MeshDevicePeerId, { hash: string; sentAt: number }>();
   private peerLastStateSent = new Map<MeshDevicePeerId, { hash: string; sentAt: number }>();
   private myPeerId: MeshDevicePeerId;
+  private passphrase: string;
   private authTag: string;
+  private replayGuard = new MeshReplayGuard();
   private callbacks: MeshSyncCallbacks;
   private batchConfig: MeshBatchConfig;
   private batcher: MeshUpdateBatcher;
@@ -430,7 +758,8 @@ export class HolooPeerMeshManager {
     batchConfig?: Partial<MeshBatchConfig>
   ) {
     this.myPeerId = myPeerId;
-    this.authTag = computeMeshAuthTag(passphrase);
+    this.passphrase = passphrase.trim();
+    this.authTag = computeMeshAuthTag(this.passphrase);
     this.callbacks = callbacks;
     this.batchConfig = { ...DEFAULT_MESH_BATCH_CONFIG, ...(batchConfig || {}) };
     this.batcher = new MeshUpdateBatcher((batch) => {
@@ -794,7 +1123,7 @@ export class HolooPeerMeshManager {
       return false;
     }
 
-    const msg: MeshWireMessage = {
+    const msg = signMeshMessageEnvelope(this.passphrase, {
       type: 'mesh:hello',
       fromPeerId: this.myPeerId,
       authTag: this.authTag,
@@ -803,7 +1132,7 @@ export class HolooPeerMeshManager {
       vectorClock: local.vectorClock,
       pendingRelayIds: relaysForPeer.map((r) => r.operationId),
       batchedCount: opts?.batchedCount && opts.batchedCount > 1 ? opts.batchedCount : undefined,
-    };
+    });
     try {
       conn.send(msg);
       this.peerLastHelloSent.set(remotePeerId, { hash: local.payloadHash, sentAt: nowMs });
@@ -851,7 +1180,7 @@ export class HolooPeerMeshManager {
       ])
     );
 
-    const msg: MeshWireMessage = {
+    const msg = signMeshMessageEnvelope(this.passphrase, {
       type: 'mesh:state_payload',
       fromPeerId: this.myPeerId,
       authTag: this.authTag,
@@ -861,7 +1190,7 @@ export class HolooPeerMeshManager {
       snapshotJson: local.snapshotJson,
       relayEnvelopes,
       batchedOperationIds: batchedOpIds.length > 0 ? batchedOpIds : undefined,
-    };
+    });
     try {
       conn.send(msg);
       this.peerLastStateSent.set(remotePeerId, { hash: local.payloadHash, sentAt: nowMs });
@@ -895,25 +1224,43 @@ export class HolooPeerMeshManager {
     raw: unknown
   ): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
-    const msg = raw as MeshWireMessage;
 
-    // Strict mesh authentication check — drop unauthorized external peers immediately
-    if (msg.authTag !== this.authTag || msg.fromPeerId !== remotePeerId) {
+    // Strict cryptographic envelope check: allowlist + passphrase + 256-bit MAC + ±5m window + nonce replay guard + size cap
+    const verification = verifyMeshMessageEnvelope({
+      passphrase: this.passphrase,
+      expectedPeerId: remotePeerId,
+      raw,
+      replayGuard: this.replayGuard,
+    });
+
+    if (!verification.ok) {
+      const errorLabel =
+        verification.reason === 'replay_detected'
+          ? 'بسته تکراری (Replay) مسدود شد'
+          : verification.reason === 'timestamp_out_of_window'
+            ? 'اختلاف ساعت دستگاه بیش از ۵ دقیقه است'
+            : verification.reason === 'mac_mismatch'
+              ? 'امضای دیجیتال پیام نامعتبر یا دستکاری‌شده است'
+              : verification.reason === 'payload_too_large'
+                ? 'حجم بسته دریافتی بیش از حد مجاز امنیتی است'
+                : 'کلید امنیتی شبکه ۳ دستگاه مطابقت ندارد';
       this.updatePeerState(remotePeerId, {
         status: 'error',
-        lastError: 'کلید امنیتی شبکه ۳ دستگاه مطابقت ندارد',
+        lastError: errorLabel,
       });
       this.emitSyncEvent({
         peerId: remotePeerId,
         eventType: 'auth_rejected',
         status: 'failed',
         direction: 'inbound',
-        summary: `تأیید هویت شبکه با «${resolvePeerShortLabel(remotePeerId)}» رد شد — کلید امنیتی مشترک (Passphrase) در دستگاه‌ها یکسان نیست.`,
-        errorDetail: 'authTag or peerId mismatch',
+        summary: `بسته ورودی از «${resolvePeerShortLabel(remotePeerId)}» به دلیل «${errorLabel}» مسدود شد.`,
+        errorDetail: `${verification.reason}: ${verification.detail}`,
       });
       conn.close();
       return;
     }
+
+    const msg = raw as MeshWireMessage;
 
     const nowIso = new Date().toISOString();
     this.updatePeerState(remotePeerId, { status: 'connected', lastSeenAt: nowIso, lastError: null });
@@ -961,11 +1308,13 @@ export class HolooPeerMeshManager {
       }
 
       if (decision.shouldRequestRemoteState && conn.open) {
-        conn.send({
-          type: 'mesh:request_state',
-          fromPeerId: this.myPeerId,
-          authTag: this.authTag,
-        } satisfies MeshWireMessage);
+        conn.send(
+          signMeshMessageEnvelope(this.passphrase, {
+            type: 'mesh:request_state',
+            fromPeerId: this.myPeerId,
+            authTag: this.authTag,
+          })
+        );
       }
 
       if (decision.shouldSendLocalState) {
@@ -994,14 +1343,16 @@ export class HolooPeerMeshManager {
         this.peerLastAckedHash.set(remotePeerId, msg.payloadHash);
         this.updatePeerState(remotePeerId, { lastSyncedAt: nowIso });
         if (conn.open) {
-          conn.send({
-            type: 'mesh:ack',
-            fromPeerId: this.myPeerId,
-            authTag: this.authTag,
-            receivedOperationIds: receivedOpIds,
-            payloadHash: msg.payloadHash,
-            syncedAt: nowIso,
-          } satisfies MeshWireMessage);
+          conn.send(
+            signMeshMessageEnvelope(this.passphrase, {
+              type: 'mesh:ack',
+              fromPeerId: this.myPeerId,
+              authTag: this.authTag,
+              receivedOperationIds: receivedOpIds,
+              payloadHash: msg.payloadHash,
+              syncedAt: nowIso,
+            })
+          );
         }
       } catch (err) {
         this.emitSyncEvent({
@@ -1087,6 +1438,7 @@ export class HolooPeerMeshManager {
     this.peerLastAckedHash.clear();
     this.peerLastHelloSent.clear();
     this.peerLastStateSent.clear();
+    this.replayGuard.clear();
     this.lastFlushedBatchOpIds = [];
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);

@@ -102,3 +102,57 @@ export const OfflineIndicator: React.FC<{ onOpenHealth?: () => void }> = ({ onOp
     </div>
   );
 };
+
+export const PwaUpdateBanner: React.FC<{
+  onCreatePreUpdateBackup?: () => Promise<boolean> | boolean;
+}> = ({ onCreatePreUpdateBackup }) => {
+  const [needRefresh, setNeedRefresh] = React.useState(false);
+  const [applying, setApplying] = React.useState(false);
+  const [dismissed, setDismissed] = React.useState(false);
+
+  React.useEffect(() => {
+    let unsub: (() => void) | undefined;
+    void import('../lib/offlineStatus').then(({ subscribeOfflineSwState }) => {
+      unsub = subscribeOfflineSwState((st) => {
+        setNeedRefresh(st.needRefresh);
+      });
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
+
+  if (!needRefresh || dismissed) return null;
+
+  const handleApply = async () => {
+    setApplying(true);
+    try {
+      const { safeApplySwUpdateWithBackup } = await import('../lib/offlineStatus');
+      await safeApplySwUpdateWithBackup(onCreatePreUpdateBackup);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="fixed bottom-4 left-4 z-50 flex flex-wrap items-center gap-3 rounded-xl bg-indigo-700 px-4 py-2.5 text-xs font-semibold text-white shadow-xl border border-indigo-400/30 no-print">
+      <span>نسخه جدید هلو Apex آماده نصب است (اطلاعات محلی محفوظ می‌ماند).</span>
+      <button
+        type="button"
+        onClick={() => void handleApply()}
+        disabled={applying}
+        className="px-3 py-1 rounded-lg bg-white text-indigo-800 hover:bg-indigo-50 font-bold disabled:opacity-60 whitespace-nowrap"
+      >
+        {applying ? 'پشتیبان ایمنی و بروزرسانی...' : 'پشتیبان و بروزرسانی'}
+      </button>
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        className="text-indigo-200 hover:text-white"
+        aria-label="بستن اعلان بروزرسانی"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+};

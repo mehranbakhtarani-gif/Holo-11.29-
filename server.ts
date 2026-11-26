@@ -944,6 +944,10 @@ async function startServer() {
 
   // Independent Supabase Workspace Auth — First-run setup (creates scrypt-hashed passcode in Supabase)
   app.post('/api/supabase/auth/setup', async (req: Request, res: Response) => {
+    if (!hasValidCsrfGuard(req)) {
+      res.status(403).json({ error: 'درخواست نامعتبر است (محافظ CSRF).' });
+      return;
+    }
     const cfg = getValidatedSupabaseConfig();
     if (!cfg) {
       res.status(503).json({ error: 'Supabase در تنظیمات سرور پیکربندی نشده است.', code: 'NOT_CONFIGURED' });
@@ -1073,6 +1077,10 @@ async function startServer() {
 
   // Independent Supabase Workspace Auth — Sign in with workspaceId + passcode (no Firebase/Google required!)
   app.post('/api/supabase/auth/login', async (req: Request, res: Response) => {
+    if (!hasValidCsrfGuard(req)) {
+      res.status(403).json({ error: 'درخواست ورود نامعتبر است (محافظ CSRF).' });
+      return;
+    }
     const cfg = getValidatedSupabaseConfig();
     if (!cfg) {
       res.status(503).json({ error: 'Supabase در تنظیمات سرور پیکربندی نشده است.', code: 'NOT_CONFIGURED' });

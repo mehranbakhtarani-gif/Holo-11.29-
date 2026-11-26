@@ -11,15 +11,15 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
           name: 'هلو شرکتی Apex — سامانه جامع حسابداری',
           short_name: 'هلو Apex',
           description: 'سامانه جامع حسابداری شرکتی با هسته هلو Apex، داشبورد مدیریت مالی و گزارش‌گیری پیشرفته',
-          theme_color: '#0f766e',
-          background_color: '#f8fafc',
+          theme_color: '#0B0F17',
+          background_color: '#0B0F17',
           display: 'standalone',
           orientation: 'any',
           dir: 'rtl',
@@ -68,8 +68,6 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          skipWaiting: true,
-          clientsClaim: true,
           cleanupOutdatedCaches: true,
           maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,jpg,jpeg,webp,svg,woff,woff2,json}'],
@@ -81,10 +79,10 @@ export default defineConfig(() => {
               handler: 'NetworkOnly',
             },
             {
-              urlPattern: /\/api\/fx\/rates/i,
+              urlPattern: /\/api\/live-fx/i,
               handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'apex-fx-rates-cache',
+                cacheName: 'apex-live-fx-cache-v1',
                 expiration: {
                   maxEntries: 8,
                   maxAgeSeconds: 60 * 60 * 24 * 7,
@@ -98,38 +96,10 @@ export default defineConfig(() => {
               urlPattern: /\/src\/assets\/.*\.(?:png|jpg|jpeg|svg|webp)$/i,
               handler: 'CacheFirst',
               options: {
-                cacheName: 'apex-local-assets-cache',
+                cacheName: 'apex-local-assets-cache-v1',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 90,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'google-fonts-cache',
-                expiration: {
-                  maxEntries: 15,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'gstatic-fonts-cache',
-                expiration: {
-                  maxEntries: 15,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
                 },
                 cacheableResponse: {
                   statuses: [0, 200],

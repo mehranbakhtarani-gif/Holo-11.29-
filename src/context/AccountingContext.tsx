@@ -50,7 +50,7 @@ import {
   VoucherType,
 } from '../types/accounting';
 import { createHolooSeedData } from '../data/holooSeed';
-import { FxRevaluationRow } from '../lib/enterpriseAccounting';
+import { checkOperatorPermission, FxRevaluationRow } from '../lib/enterpriseAccounting';
 import {
   AuditReport,
   calculateEmployeePayroll,
@@ -416,6 +416,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setToast((prev) => (prev === msg ? null : prev));
     }, 4500);
   }, []);
+
+  const assertPermission = useCallback(
+    (perm: Parameters<typeof checkOperatorPermission>[1], internalBypass = false): boolean => {
+      if (internalBypass) return true;
+      const verdict = checkOperatorPermission(activeOperator, perm);
+      if (!verdict.allowed) {
+        showToast(verdict.reason || 'عدم دسترسی (RBAC) برای انجام این عملیات.', 'error');
+        return false;
+      }
+      return true;
+    },
+    [activeOperator, showToast]
+  );
 
   const setAudioEnabled = useCallback((enabled: boolean) => {
     setAudioFeedbackEnabled(enabled);
@@ -960,6 +973,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const updateCompanyProfile = useCallback(
     async (patch: Partial<CompanyProfile>) => {
+      const patchKeys = Object.keys(patch) as (keyof CompanyProfile)[];
+      const isDisplayCurrencyToggleOnly =
+        patchKeys.length === 1 && patchKeys[0] === 'currencyUnit';
+      if (!isDisplayCurrencyToggleOnly && !assertPermission('canManageSettings')) return;
       const next = { ...profile, ...patch };
       setProfile(next);
       if (user) {
@@ -980,7 +997,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast('مشخصات شرکتی و سال مالی ذخیره شد.');
     },
-    [profile, user, showToast]
+    [profile, user, showToast, assertPermission]
   );
 
   const setCurrencyUnit = useCallback(
@@ -993,6 +1010,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- ACCOUNTS CRUD ----------------
   const addAccount = useCallback(
     async (acc: Omit<Account, 'id' | 'ownerId'>) => {
+      if (!assertPermission('canCreateVoucher')) return;
       const id = generateSafeId('acc');
       const full: Account = { ...acc, id, ownerId };
       if (user) {
@@ -1017,7 +1035,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast(`حساب «${acc.title}» با کد ${acc.code} در کدینگ ثبت شد.`);
     },
-    [ownerId, user, showToast]
+    [ownerId, user, showToast, assertPermission]
   );
 
   const updateAccount = useCallback(
@@ -1025,6 +1043,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       accountId: string,
       patch: Partial<Pick<Account, 'title' | 'parentCode' | 'category' | 'nature'>>
     ) => {
+      if (!assertPermission('canCreateVoucher')) return;
       const existing = accounts.find((a) => a.id === accountId);
       if (!existing) return;
       const updatePayload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -1046,11 +1065,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast(`حساب «${patch.title ?? existing.title}» ویرایش شد.`);
     },
-    [accounts, user, showToast]
+    [accounts, user, showToast, assertPermission]
   );
 
   const deleteAccount = useCallback(
     async (accountId: string): Promise<boolean> => {
+      if (!assertPermission('canDeleteRecords')) return false;
       const acc = accounts.find((a) => a.id === accountId);
       if (!acc) return false;
       if (acc.isSystem) {
@@ -1074,7 +1094,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       showToast(`حساب «${acc.title}» از کدینگ حذف شد.`);
       return true;
     },
-    [accounts, vouchers, user, showToast]
+    [accounts, vouchers, user, showToast, assertPermission]
   );
 
   // ---------------- PARTIES CRUD ----------------
@@ -1227,7 +1247,17 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       allowDuplicate?: boolean;
       currencyCode?: string;
       exchangeRate?: number;
+      internalSystemCall?: boolean;
     }): Promise<Voucher> => {
+      if (!assertPermission('canCreateVoucher', Boolean(payload.internalSystemCall))) {
+        throw new Error('عدم دسترسی (RBAC) برای ثبت سند حسابداری.');
+      }
+      if (
+        payload.status === 'permanent' &&
+        !assertPermission('canFinalizeVoucher', Boolean(payload.internalSystemCall))
+      ) {
+        throw new Error('عدم دسترسی (RBAC) برای ثبت مستقیم سند دائم.');
+      }
       const validation = validateVoucherPayload({
         payload,
         accounts,
@@ -1356,6 +1386,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       deviceId,
       reserveNextVoucherNumber,
       showToast,
+      assertPermission,
     ]
   );
 
@@ -1372,6 +1403,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         exchangeRate?: number;
       }
     ) => {
+      if (!assertPermission('canCreateVoucher')) return;
+      if (payload.status === 'permanent' && !assertPermission('canFinalizeVoucher')) return;
       const existing = vouchers.find((v) => v.id === voucherId);
       if (!existing) return;
       if (existing.status === 'permanent') {
@@ -1525,11 +1558,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast(`سند موقت شماره ${existing.voucherNumber} با موفقیت اصلاح شد.`);
     },
-    [accounts, parties, vouchers, profile.closedFiscalYears, user, deviceId, showToast]
+    [accounts, parties, vouchers, profile.closedFiscalYears, user, deviceId, showToast, assertPermission]
   );
 
   const deleteVoucher = useCallback(
     async (voucherId: string): Promise<boolean> => {
+      if (!assertPermission('canDeleteRecords')) return false;
       const existing = vouchers.find((v) => v.id === voucherId);
       if (!existing) return false;
       if (existing.status === 'permanent') {
@@ -1553,11 +1587,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       showToast(`سند موقت شماره ${existing.voucherNumber} حذف شد.`);
       return true;
     },
-    [vouchers, profile.closedFiscalYears, user, showToast]
+    [vouchers, profile.closedFiscalYears, user, showToast, assertPermission]
   );
 
   const finalizeVoucher = useCallback(
     async (voucherId: string, suppressNativeNotification = false) => {
+      if (!assertPermission('canFinalizeVoucher')) return;
       const target = vouchers.find((v) => v.id === voucherId);
       if (target) {
         const fy = target.fiscalYear || extractFiscalYearFromDate(target.date);
@@ -1593,11 +1628,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast('سند حسابداری به وضعیت «دائم و قطعی» تبدیل و مُهر اصالت ثبت شد.');
     },
-    [vouchers, profile.closedFiscalYears, profile.currencyUnit, user, showToast]
+    [vouchers, profile.closedFiscalYears, profile.currencyUnit, user, showToast, assertPermission]
   );
 
   const createReversingVoucher = useCallback(
     async (voucherId: string): Promise<Voucher | null> => {
+      if (!assertPermission('canCreateVoucher')) return null;
       const orig = vouchers.find((v) => v.id === voucherId);
       if (!orig) return null;
       const reversedLines: VoucherLine[] = orig.lines.map((l) => ({
@@ -1622,7 +1658,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           : {}),
       });
     },
-    [vouchers, createVoucher]
+    [vouchers, createVoucher, assertPermission]
   );
 
   const renumberVouchersChronologically = useCallback(async () => {
@@ -1686,6 +1722,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- PRODUCTS & WAREHOUSE CRUD ----------------
   const addProduct = useCallback(
     async (product: Omit<Product, 'id' | 'ownerId'>) => {
+      if (!assertPermission('canEditInventory')) return;
       const id = generateSafeId('prd');
       const full: Product = { ...product, id, ownerId };
       if (user) {
@@ -1729,11 +1766,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast(`نخ/کالای «${product.name}» با موفقیت در انبار ثبت شد.`);
     },
-    [ownerId, user, showToast]
+    [ownerId, user, showToast, assertPermission]
   );
 
   const updateProduct = useCallback(
     async (productId: string, patch: Partial<Omit<Product, 'id' | 'ownerId' | 'sku'>>) => {
+      if (!assertPermission('canEditInventory')) return;
       const existing = products.find((p) => p.id === productId);
       if (!existing) return;
       if (user) {
@@ -1773,11 +1811,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast(`مشخصات نخ/کالا «${patch.name ?? existing.name}» ویرایش شد.`);
     },
-    [products, user, showToast]
+    [products, user, showToast, assertPermission]
   );
 
   const deleteProduct = useCallback(
     async (productId: string): Promise<boolean> => {
+      if (!assertPermission('canDeleteRecords')) return false;
       const prod = products.find((p) => p.id === productId);
       if (!prod) return false;
       const used = invoices.some((i) => i.items.some((it) => it.productId === productId));
@@ -1797,11 +1836,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       showToast(`کالا «${prod.name}» از انبار حذف شد.`);
       return true;
     },
-    [products, invoices, user, showToast]
+    [products, invoices, user, showToast, assertPermission]
   );
 
   const adjustProductStock = useCallback(
     async (productId: string, newStock: number) => {
+      if (!assertPermission('canEditInventory')) return;
       if (user) {
         try {
           await updateDoc(doc(db, 'products', productId), {
@@ -1817,15 +1857,20 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         );
       }
     },
-    [user]
+    [user, assertPermission]
   );
 
   const adjustProductStockWithVoucher = useCallback(
     async (productId: string, countedStock: number, reason: string) => {
+      if (!assertPermission('canEditInventory')) return;
       const prod = products.find((p) => p.id === productId);
       if (!prod) return;
       const today = getTodayShamsi();
       const refId = generateSafeId('stk');
+      const voucherId = generateSafeId('vch');
+      const localMaxVoucherNum = vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0);
+      const nextNum = localMaxVoucherNum + 1;
+
       let plan;
       try {
         plan = planStockAdjustmentWithCostLayers({
@@ -1839,13 +1884,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           accounts,
           ownerId,
           referenceId: refId,
-          voucherId: generateSafeId('vch'),
-          nextVoucherNumber:
-            vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0) + 1,
+          voucherId,
+          nextVoucherNumber: nextNum,
           deviceId,
         });
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'خطا در تعدیل موجودی انبارگردانی.');
+        showToast(err instanceof Error ? err.message : 'خطا در تعدیل موجودی انبارگردانی.', 'error');
         return;
       }
 
@@ -1854,35 +1898,188 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
-      await updateProduct(prod.id, {
-        stock: plan.productDelta.stock,
-        buyPrice: plan.productDelta.buyPrice,
-        costLayers: plan.productDelta.costLayers,
-        inventoryValueIrr: plan.productDelta.inventoryValueIrr,
-      });
+      const buildVoucherFirestoreDoc = (vch: Voucher) => {
+        const sealedHash = vch.integrityHash || computeVoucherIntegrityHash(vch);
+        return {
+          ownerId,
+          voucherNumber: vch.voucherNumber,
+          date: vch.date.slice(0, 20),
+          ...(vch.fiscalYear ? { fiscalYear: vch.fiscalYear.slice(0, 16) } : {}),
+          description: vch.description.slice(0, 300),
+          voucherType: vch.voucherType,
+          status: 'permanent' as const,
+          totalDebit: vch.totalDebit,
+          totalCredit: vch.totalCredit,
+          ...(vch.referenceId ? { referenceId: vch.referenceId.slice(0, 128) } : {}),
+          integrityHash: sealedHash.slice(0, 128),
+          lines: vch.lines.slice(0, 100),
+          _version: 1,
+          updatedByDevice: deviceId.slice(0, 64),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+      };
 
-      if (plan.voucher) {
-        await createVoucher({
-          date: plan.voucher.date,
-          description: plan.voucher.description,
-          voucherType: 'general',
-          status: 'permanent',
-          lines: plan.voucher.lines,
-          referenceId: refId,
+      const commitOfflineStockAdjustBatch = async () => {
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'products', prod.id), {
+          stock: plan.productDelta.stock,
+          buyPrice: plan.productDelta.buyPrice,
+          costLayers: plan.productDelta.costLayers,
+          inventoryValueIrr: plan.productDelta.inventoryValueIrr,
+          _version: (prod._version ?? 1) + 1,
+          updatedByDevice: deviceId.slice(0, 64),
+          updatedAt: serverTimestamp(),
         });
+        if (plan.voucher) {
+          batch.set(doc(db, 'vouchers', plan.voucher.id), buildVoucherFirestoreDoc(plan.voucher));
+        }
+        await batch.commit();
+      };
+
+      if (user) {
+        const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOfflineNow) {
+          await commitOfflineStockAdjustBatch();
+        } else {
+          try {
+            await runTransaction(db, async (tx) => {
+              const counterRef = doc(db, 'counters', user.uid);
+              const prodRef = doc(db, 'products', prod.id);
+              const [counterSnap, prodSnap] = await Promise.all([tx.get(counterRef), tx.get(prodRef)]);
+              const currentMax = counterSnap.exists()
+                ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
+                : localMaxVoucherNum;
+              const liveNextNum = currentMax + 1;
+
+              const liveProd: Product = prodSnap.exists()
+                ? {
+                    ...prod,
+                    stock: Number(prodSnap.data().stock) || 0,
+                    buyPrice: Number(prodSnap.data().buyPrice) || 0,
+                    costLayers: Array.isArray(prodSnap.data().costLayers)
+                      ? prodSnap.data().costLayers
+                      : prod.costLayers,
+                    inventoryValueIrr:
+                      typeof prodSnap.data().inventoryValueIrr === 'number'
+                        ? prodSnap.data().inventoryValueIrr
+                        : prod.inventoryValueIrr,
+                    _version: Number(prodSnap.data()._version) || 1,
+                  }
+                : prod;
+
+              const livePlan = planStockAdjustmentWithCostLayers({
+                product: liveProd,
+                newStock: countedStock,
+                date: today,
+                reason,
+                costingMethod: profile.defaultCostingMethod ?? 'fifo',
+                allowNegativeStock: false,
+                closedFiscalYears: profile.closedFiscalYears ?? [],
+                accounts,
+                ownerId,
+                referenceId: refId,
+                voucherId,
+                nextVoucherNumber: liveNextNum,
+                deviceId,
+              });
+
+              if (Math.abs(livePlan.diffQty) < 0.001) return;
+
+              if (livePlan.voucher) {
+                if (!counterSnap.exists()) {
+                  tx.set(counterRef, {
+                    ownerId: user.uid,
+                    lastVoucherNumber: liveNextNum,
+                    lastInvoiceSeq: 102,
+                    updatedByDevice: deviceId.slice(0, 64),
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  });
+                } else {
+                  tx.update(counterRef, {
+                    lastVoucherNumber: liveNextNum,
+                    updatedByDevice: deviceId.slice(0, 64),
+                    updatedAt: serverTimestamp(),
+                  });
+                }
+                tx.set(doc(db, 'vouchers', livePlan.voucher.id), buildVoucherFirestoreDoc(livePlan.voucher));
+              }
+
+              tx.update(prodRef, {
+                stock: livePlan.productDelta.stock,
+                buyPrice: livePlan.productDelta.buyPrice,
+                costLayers: livePlan.productDelta.costLayers,
+                inventoryValueIrr: livePlan.productDelta.inventoryValueIrr,
+                _version: (liveProd._version ?? 1) + 1,
+                updatedByDevice: deviceId.slice(0, 64),
+                updatedAt: serverTimestamp(),
+              });
+            });
+          } catch (err) {
+            if (isFirestoreOfflineError(err)) {
+              await commitOfflineStockAdjustBatch();
+            } else {
+              handleFirestoreError(err, OperationType.UPDATE, `atomic-stock-adjust/${prod.id}`);
+              return;
+            }
+          }
+        }
       } else {
-        showToast('موجودی انبارگردانی با موفقیت تعدیل شد.');
+        // Local atomic state commit (only after full validation succeeded)
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.id === prod.id
+              ? {
+                  ...p,
+                  stock: plan.productDelta.stock,
+                  buyPrice: plan.productDelta.buyPrice,
+                  costLayers: plan.productDelta.costLayers,
+                  inventoryValueIrr: plan.productDelta.inventoryValueIrr,
+                  _version: (p._version ?? 1) + 1,
+                  updatedByDevice: deviceId,
+                }
+              : p
+          )
+        );
+        if (plan.voucher) {
+          const sealedVoucher: Voucher = {
+            ...plan.voucher,
+            integrityHash: plan.voucher.integrityHash || computeVoucherIntegrityHash(plan.voucher),
+          };
+          setVouchers((prev) => [...prev, sealedVoucher]);
+          emitVoucherNotificationEvent({
+            type: 'created_permanent',
+            voucher: sealedVoucher,
+            unit: profile.currencyUnit,
+          });
+        }
       }
+
+      showToast(
+        plan.voucher
+          ? `تعدیل موجودی انبارگردانی «${prod.name}» و سند دائم شماره ${plan.voucher.voucherNumber} به‌صورت اتمیک ثبت شد.`
+          : 'موجودی انبارگردانی با موفقیت تعدیل شد.'
+      );
     },
-    [products, profile, accounts, ownerId, vouchers, deviceId, updateProduct, createVoucher, showToast]
+    [products, profile, accounts, ownerId, vouchers, deviceId, user, showToast, assertPermission]
   );
 
   const bulkStocktakingWithVoucher = useCallback(
     async (items: { productId: string; countedStock: number }[], reason: string) => {
+      if (!assertPermission('canEditInventory')) return;
       const today = getTodayShamsi();
       const batchRefId = generateSafeId('stk_bulk');
+      const voucherId = generateSafeId('vch');
+      const localMaxVoucherNum = vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0);
+      const nextNum = localMaxVoucherNum + 1;
+
+      // Phase 1: Validate & plan EVERY item upfront BEFORE writing a single record (zero partial writes!)
+      const plannedEntries: Array<{
+        product: Product;
+        delta: ReturnType<typeof planStockAdjustmentWithCostLayers>['productDelta'];
+      }> = [];
       const voucherLines: VoucherLine[] = [];
-      let changedCount = 0;
 
       for (const entry of items) {
         const prod = products.find((p) => p.id === entry.productId);
@@ -1901,50 +2098,201 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             ownerId,
             referenceId: `${batchRefId}_${prod.id}`,
             voucherId: generateSafeId('vch'),
-            nextVoucherNumber: 1,
+            nextVoucherNumber: nextNum,
             deviceId,
           });
         } catch (err) {
-          showToast(err instanceof Error ? err.message : `خطا در تعدیل کالای «${prod.name}».`);
+          showToast(err instanceof Error ? err.message : `خطا در تعدیل کالای «${prod.name}».`, 'error');
           return;
         }
         if (Math.abs(plan.diffQty) < 0.001) continue;
 
-        changedCount += 1;
-        await updateProduct(prod.id, {
-          stock: plan.productDelta.stock,
-          buyPrice: plan.productDelta.buyPrice,
-          costLayers: plan.productDelta.costLayers,
-          inventoryValueIrr: plan.productDelta.inventoryValueIrr,
-        });
+        plannedEntries.push({ product: prod, delta: plan.productDelta });
         if (plan.voucher && plan.voucher.lines.length >= 2) {
           voucherLines.push(...plan.voucher.lines);
         }
       }
 
-      if (changedCount === 0) {
+      if (plannedEntries.length === 0) {
         showToast('تغییری در موجودی شمارش‌شده نسبت به سیستم وجود نداشت.');
         return;
       }
 
-      if (voucherLines.length >= 2) {
-        await createVoucher({
+      const buildConsolidatedVoucher = (vNum: number): Voucher | null => {
+        if (voucherLines.length < 2) return null;
+        const totalDebit = voucherLines.reduce((s, l) => s + Math.round(Number(l.debit) || 0), 0);
+        const totalCredit = voucherLines.reduce((s, l) => s + Math.round(Number(l.credit) || 0), 0);
+        if (totalDebit !== totalCredit || totalDebit <= 0) {
+          throw new Error('سند تجمیعی انبارگردانی تراز نیست؛ کل عملیات لغو شد.');
+        }
+        const base: Voucher = {
+          id: voucherId,
+          ownerId,
+          voucherNumber: vNum,
           date: today,
-          description: `سند تجمیعی انبارگردانی (${changedCount} قلم کالا) — ${reason}`,
+          fiscalYear: extractFiscalYearFromDate(today) || profile.fiscalYear,
+          description: `سند تجمیعی انبارگردانی (${plannedEntries.length} قلم کالا) — ${reason}`.slice(0, 300),
           voucherType: 'general',
           status: 'permanent',
-          lines: voucherLines,
+          totalDebit,
+          totalCredit,
           referenceId: batchRefId,
-        });
-      } else {
-        showToast(`موجودی ${changedCount} قلم کالا با موفقیت اصلاح شد.`);
+          lines: voucherLines.slice(0, 100),
+          _version: 1,
+          updatedByDevice: deviceId,
+        };
+        return { ...base, integrityHash: computeVoucherIntegrityHash(base) };
+      };
+
+      let plannedVoucher: Voucher | null;
+      try {
+        plannedVoucher = buildConsolidatedVoucher(nextNum);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'خطا در تراز سند انبارگردانی.', 'error');
+        return;
       }
+
+      const serializeBulkVoucher = (vch: Voucher) => ({
+        ownerId,
+        voucherNumber: vch.voucherNumber,
+        date: vch.date.slice(0, 20),
+        ...(vch.fiscalYear ? { fiscalYear: vch.fiscalYear.slice(0, 16) } : {}),
+        description: vch.description.slice(0, 300),
+        voucherType: vch.voucherType,
+        status: 'permanent' as const,
+        totalDebit: vch.totalDebit,
+        totalCredit: vch.totalCredit,
+        referenceId: batchRefId.slice(0, 128),
+        ...(vch.integrityHash ? { integrityHash: vch.integrityHash.slice(0, 128) } : {}),
+        lines: vch.lines.slice(0, 100),
+        _version: 1,
+        updatedByDevice: deviceId.slice(0, 64),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const commitOfflineBulkBatch = async () => {
+        const batch = writeBatch(db);
+        for (const { product, delta } of plannedEntries) {
+          batch.update(doc(db, 'products', product.id), {
+            stock: delta.stock,
+            buyPrice: delta.buyPrice,
+            costLayers: delta.costLayers,
+            inventoryValueIrr: delta.inventoryValueIrr,
+            _version: (product._version ?? 1) + 1,
+            updatedByDevice: deviceId.slice(0, 64),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        if (plannedVoucher) {
+          batch.set(doc(db, 'vouchers', plannedVoucher.id), serializeBulkVoucher(plannedVoucher));
+        }
+        await batch.commit();
+      };
+
+      // Phase 2: Single Atomic Commit (all products + counter + consolidated voucher together)
+      if (user) {
+        const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOfflineNow) {
+          await commitOfflineBulkBatch();
+        } else {
+          try {
+            await runTransaction(db, async (tx) => {
+              const counterRef = doc(db, 'counters', user.uid);
+              const counterSnap = await tx.get(counterRef);
+              const currentMax = counterSnap.exists()
+                ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
+                : localMaxVoucherNum;
+              const liveNextNum = currentMax + 1;
+              const liveVoucher = buildConsolidatedVoucher(liveNextNum);
+
+              // Read all target products inside the transaction before writing
+              const productSnaps = await Promise.all(
+                plannedEntries.map(({ product }) => tx.get(doc(db, 'products', product.id)))
+              );
+
+              if (liveVoucher) {
+                if (!counterSnap.exists()) {
+                  tx.set(counterRef, {
+                    ownerId: user.uid,
+                    lastVoucherNumber: liveNextNum,
+                    lastInvoiceSeq: 102,
+                    updatedByDevice: deviceId.slice(0, 64),
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  });
+                } else {
+                  tx.update(counterRef, {
+                    lastVoucherNumber: liveNextNum,
+                    updatedByDevice: deviceId.slice(0, 64),
+                    updatedAt: serverTimestamp(),
+                  });
+                }
+                tx.set(doc(db, 'vouchers', liveVoucher.id), serializeBulkVoucher(liveVoucher));
+              }
+
+              plannedEntries.forEach(({ product, delta }, idx) => {
+                const snap = productSnaps[idx];
+                const liveVer = snap.exists() ? Number(snap.data()._version) || 1 : product._version ?? 1;
+                tx.update(doc(db, 'products', product.id), {
+                  stock: delta.stock,
+                  buyPrice: delta.buyPrice,
+                  costLayers: delta.costLayers,
+                  inventoryValueIrr: delta.inventoryValueIrr,
+                  _version: liveVer + 1,
+                  updatedByDevice: deviceId.slice(0, 64),
+                  updatedAt: serverTimestamp(),
+                });
+              });
+            });
+          } catch (err) {
+            if (isFirestoreOfflineError(err)) {
+              await commitOfflineBulkBatch();
+            } else {
+              handleFirestoreError(err, OperationType.UPDATE, `atomic-bulk-stocktaking/${batchRefId}`);
+              return;
+            }
+          }
+        }
+      } else {
+        const deltaMap = new Map(plannedEntries.map((e) => [e.product.id, e.delta]));
+        setProducts((prev) =>
+          prev.map((p) => {
+            const d = deltaMap.get(p.id);
+            if (!d) return p;
+            return {
+              ...p,
+              stock: d.stock,
+              buyPrice: d.buyPrice,
+              costLayers: d.costLayers,
+              inventoryValueIrr: d.inventoryValueIrr,
+              _version: (p._version ?? 1) + 1,
+              updatedByDevice: deviceId,
+            };
+          })
+        );
+        if (plannedVoucher) {
+          setVouchers((prev) => [...prev, plannedVoucher!]);
+          emitVoucherNotificationEvent({
+            type: 'created_permanent',
+            voucher: plannedVoucher,
+            unit: profile.currencyUnit,
+          });
+        }
+      }
+
+      showToast(
+        plannedVoucher
+          ? `انبارگردانی ${plannedEntries.length} قلم کالا همراه با سند تجمیعی دائم #${plannedVoucher.voucherNumber} به‌صورت اتمیک ثبت شد.`
+          : `موجودی ${plannedEntries.length} قلم کالا با موفقیت اصلاح شد.`
+      );
     },
-    [products, profile, accounts, ownerId, deviceId, updateProduct, createVoucher, showToast]
+    [products, profile, accounts, ownerId, vouchers, deviceId, user, showToast, assertPermission]
   );
 
   const bulkUpdateProductPrices = useCallback(
     async (productIds: string[], target: 'sellPrice' | 'buyPrice', percentDelta: number) => {
+      if (!assertPermission('canEditInventory')) return;
       if (productIds.length === 0 || percentDelta === 0) return;
       const factor = 1 + percentDelta / 100;
       let count = 0;
@@ -1961,10 +2309,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           : `بهای خرید ${count} کالا به‌روزرسانی شد (توجه: تغییر مستقیم بهای خرید بدون سند، تطبیق معین ۱۰۵۰۱ را متأثر می‌کند).`
       );
     },
-    [products, updateProduct, showToast]
+    [products, updateProduct, showToast, assertPermission]
   );
 
   const finalizeAllDraftVouchers = useCallback(async (): Promise<number> => {
+    if (!assertPermission('canFinalizeVoucher')) return 0;
     const drafts = vouchers.filter((v) => v.status === 'draft');
     if (drafts.length === 0) {
       showToast('هیچ سند موقتی برای دائم‌سازی وجود ندارد.');
@@ -1986,35 +2335,48 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
     showToast(`${finalized} سند موقت تراز با موفقیت به دائم تبدیل شد.`);
     return finalized;
-  }, [vouchers, finalizeVoucher, profile.currencyUnit, showToast]);
+  }, [vouchers, finalizeVoucher, profile.currencyUnit, showToast, assertPermission]);
 
   const transferProductWarehouse = useCallback(
     async (productId: string, targetWarehouse: string) => {
+      if (!assertPermission('canEditInventory')) return;
       const prod = products.find((p) => p.id === productId);
       if (!prod || !targetWarehouse.trim()) return;
       const cleanWh = targetWarehouse.trim().slice(0, 80);
+      if (prod.warehouse === cleanWh) {
+        showToast(`کالای «${prod.name}» هم‌اکنون در «${cleanWh}» قرار دارد.`);
+        return;
+      }
       if (user) {
         try {
           await updateDoc(doc(db, 'products', productId), {
             warehouse: cleanWh,
+            _version: (prod._version ?? 1) + 1,
+            updatedByDevice: deviceId.slice(0, 64),
             updatedAt: serverTimestamp(),
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `products/${productId}`);
+          return;
         }
       } else {
         setProducts((prev) =>
-          prev.map((p) => (p.id === productId ? { ...p, warehouse: cleanWh } : p))
+          prev.map((p) =>
+            p.id === productId
+              ? { ...p, warehouse: cleanWh, _version: (p._version ?? 1) + 1, updatedByDevice: deviceId }
+              : p
+          )
         );
       }
-      showToast(`حواله انتقال کالای «${prod.name}» به «${cleanWh}» ثبت شد.`);
+      showToast(`حواله انتقال کالای «${prod.name}» از «${prod.warehouse}» به «${cleanWh}» ثبت شد.`);
     },
-    [products, user, showToast]
+    [products, user, deviceId, showToast, assertPermission]
   );
 
   // ---------------- CHEQUES & TREASURY ----------------
   const addCheque = useCallback(
     async (payload: Omit<Cheque, 'id' | 'ownerId'>, skipVoucher = false) => {
+      if (!assertPermission('canManageTreasury', skipVoucher)) return;
       const id = generateSafeId('chq');
       const full: Cheque = { ...payload, id, ownerId };
 
@@ -2095,10 +2457,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           status: 'permanent',
           lines,
           referenceId: id,
+          internalSystemCall: true,
         });
       }
     },
-    [ownerId, user, createVoucher]
+    [ownerId, user, createVoucher, assertPermission]
   );
 
   const updateCheque = useCallback(
@@ -2106,6 +2469,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       chequeId: string,
       patch: Partial<Pick<Cheque, 'bankName' | 'branch' | 'dueDate' | 'notes'>>
     ) => {
+      if (!assertPermission('canManageTreasury')) return;
       if (user) {
         try {
           const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -2122,7 +2486,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast('مشخصات چک صیادی ویرایش شد.');
     },
-    [user, showToast]
+    [user, showToast, assertPermission]
   );
 
   const updateChequeStatus = useCallback(
@@ -2131,6 +2495,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       newStatus: ChequeStatus,
       options?: { bankAccountCode?: string; endorsePartyId?: string }
     ) => {
+      if (!assertPermission('canManageTreasury')) return;
       const chq = cheques.find((c) => c.id === chequeId);
       if (!chq || chq.status === newStatus) return;
 
@@ -2171,12 +2536,13 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           lines: plan.lines,
           referenceId: `${chequeId}_${newStatus}_${Date.now()}`,
           allowDuplicate: true,
+          internalSystemCall: true,
         });
       } else {
         showToast(plan.description || 'وضعیت چک صیادی به‌روزرسانی شد.');
       }
     },
-    [cheques, accounts, parties, user, createVoucher, showToast]
+    [cheques, accounts, parties, user, createVoucher, showToast, assertPermission]
   );
 
   const recordQuickTreasury = useCallback(
@@ -2188,6 +2554,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       date: string;
       description: string;
     }) => {
+      if (!assertPermission('canManageTreasury')) return;
       const party = parties.find((p) => p.id === payload.partyId);
       if (!party) return;
       const cashAcc = accounts.find((a) => a.code === payload.accountCode);
@@ -2292,6 +2659,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- INVOICES CRUD & COMMERCIAL OPS (STRICT 4-ENTITY ATOMICITY) ----------------
   const createInvoice = useCallback(
     async (payload: Omit<Invoice, 'id' | 'ownerId' | 'voucherId'>): Promise<Invoice> => {
+      if (!assertPermission('canIssueInvoice')) {
+        throw new Error('عدم دسترسی (RBAC) برای صدور فاکتور.');
+      }
       const id = generateSafeId('inv');
       const plannedVoucherId = generateSafeId('vch');
       const plannedChequeId = generateSafeId('chq');
@@ -2374,10 +2744,16 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               )
             : undefined;
 
+        const sealedHash =
+          vch.status === 'permanent'
+            ? vch.integrityHash || computeVoucherIntegrityHash(vch)
+            : undefined;
+
         return {
           ownerId,
           voucherNumber: vch.voucherNumber,
           date: vch.date.slice(0, 20),
+          ...(vch.fiscalYear ? { fiscalYear: vch.fiscalYear.slice(0, 16) } : {}),
           description: vch.description.slice(0, 300),
           voucherType: vch.voucherType,
           status: vch.status,
@@ -2392,6 +2768,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               }
             : {}),
           ...(vch.referenceId ? { referenceId: vch.referenceId.slice(0, 128) } : {}),
+          ...(sealedHash ? { integrityHash: sealedHash.slice(0, 128) } : {}),
           lines: annotatedLines.slice(0, 100),
           _version: 1,
           updatedByDevice: deviceId.slice(0, 64),
@@ -2463,6 +2840,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           batch.update(doc(db, 'products', prod.id), {
             stock: prod.stock,
             buyPrice: prod.buyPrice,
+            ...(Array.isArray(prod.costLayers) ? { costLayers: prod.costLayers } : {}),
+            ...(typeof prod.inventoryValueIrr === 'number' && Number.isFinite(prod.inventoryValueIrr)
+              ? { inventoryValueIrr: Math.max(0, Math.round(prod.inventoryValueIrr)) }
+              : {}),
             _version: prod._version ?? 2,
             updatedByDevice: deviceId.slice(0, 64),
             updatedAt: serverTimestamp(),
@@ -2487,7 +2868,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           // Single atomic Firestore writeBatch (products + voucher + cheque + invoice) queued in local IndexedDB
           committedInvoice = await commitAtomicOfflineCloudBatch();
         } else {
-          // Single atomic Firestore runTransaction: reads live counter & live product stocks,
+          // Single atomic Firestore runTransaction: reads live counter & live product stocks/costLayers,
           // validates & writes ALL 4 entities (products + voucher + cheque + invoice) in ONE commit!
           try {
             committedInvoice = await runTransaction(db, async (tx) => {
@@ -2498,7 +2879,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 : localMaxVoucherNum;
               const liveNextVoucherNum = currentMax + 1;
 
-              // Read live products for every item in the invoice
+              // Read live products (including FIFO/MWA costLayers) for every item in the invoice
               const uniqueProductIds = Array.from(new Set(payload.items.map((it) => it.productId)));
               const liveProductsMap = new Map<string, Product>(products.map((p) => [p.id, p]));
 
@@ -2514,6 +2895,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                         ...base,
                         stock: Number(d.stock) || 0,
                         buyPrice: Number(d.buyPrice) || 0,
+                        costLayers: Array.isArray(d.costLayers) ? d.costLayers : base.costLayers,
+                        inventoryValueIrr:
+                          typeof d.inventoryValueIrr === 'number'
+                            ? d.inventoryValueIrr
+                            : base.inventoryValueIrr,
                         _version: Number(d._version) || 1,
                       });
                     }
@@ -2566,6 +2952,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 tx.update(doc(db, 'products', prod.id), {
                   stock: prod.stock,
                   buyPrice: prod.buyPrice,
+                  ...(Array.isArray(prod.costLayers) ? { costLayers: prod.costLayers } : {}),
+                  ...(typeof prod.inventoryValueIrr === 'number' && Number.isFinite(prod.inventoryValueIrr)
+                    ? { inventoryValueIrr: Math.max(0, Math.round(prod.inventoryValueIrr)) }
+                    : {}),
                   _version: prod._version ?? 2,
                   updatedByDevice: deviceId.slice(0, 64),
                   updatedAt: serverTimestamp(),
@@ -2678,16 +3068,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       user,
       deviceId,
       showToast,
+      assertPermission,
     ]
   );
 
   const cancelInvoice = useCallback(
     async (invoiceId: string) => {
+      if (!assertPermission('canIssueInvoice')) return;
       const inv = invoices.find((i) => i.id === invoiceId);
       if (!inv || inv.status === 'cancelled') return;
 
       const today = getTodayShamsi();
-      const nextNum = vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0) + 1;
+      const localMaxVoucherNum = vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0);
+      const nextNum = localMaxVoucherNum + 1;
       let plan;
       try {
         plan = planInvoiceCancellation({
@@ -2704,11 +3097,84 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           deviceId,
         });
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'خطا در ابطال فاکتور.');
+        showToast(err instanceof Error ? err.message : 'خطا در ابطال فاکتور.', 'error');
         return;
       }
 
       if (inv.invoiceType !== 'proforma') {
+        // Prepare FX-preserving reversing voucher payload once for strict atomic commit
+        const buildReversalVoucher = (vNum: number): Voucher | null => {
+          if (!plan.reversalVoucher) return null;
+          const revV = plan.reversalVoucher;
+          const origVoucher = vouchers.find((v) => v.id === revV.reversalOfVoucherId);
+          const isFxOrig =
+            Boolean(origVoucher && isForeignCurrency(origVoucher.currencyCode) && origVoucher.exchangeRate);
+          const fxLines = isFxOrig && origVoucher
+            ? origVoucher.lines.map((l) => ({
+                ...l,
+                description: `ابطال و معکوس: ${l.description || origVoucher.description}`,
+                debit: Math.max(0, Math.round(Number(l.credit) || 0)),
+                credit: Math.max(0, Math.round(Number(l.debit) || 0)),
+                ...(l.foreignCredit !== undefined ? { foreignDebit: l.foreignCredit } : {}),
+                ...(l.foreignDebit !== undefined ? { foreignCredit: l.foreignDebit } : {}),
+              }))
+            : revV.lines;
+          const totalDebit = fxLines.reduce((s, l) => s + Math.round(Number(l.debit) || 0), 0);
+          const totalCredit = fxLines.reduce((s, l) => s + Math.round(Number(l.credit) || 0), 0);
+          const base: Voucher = {
+            ...revV,
+            voucherNumber: vNum,
+            status: 'permanent',
+            fiscalYear: revV.fiscalYear || extractFiscalYearFromDate(revV.date) || profile.fiscalYear,
+            totalDebit,
+            totalCredit,
+            lines: fxLines.slice(0, 100),
+            _version: 1,
+            updatedByDevice: deviceId,
+          };
+          return { ...base, integrityHash: computeVoucherIntegrityHash(base) };
+        };
+
+        const serializeReversalVoucher = (vch: Voucher) => {
+          const isFx = isForeignCurrency(vch.currencyCode) && Number(vch.exchangeRate) > 0;
+          const foreignTotalDebit = isFx
+            ? roundCurrency(vch.lines.reduce((s, l) => s + (Number(l.foreignDebit) || 0), 0), 2)
+            : undefined;
+          const foreignTotalCredit = isFx
+            ? roundCurrency(vch.lines.reduce((s, l) => s + (Number(l.foreignCredit) || 0), 0), 2)
+            : undefined;
+          return {
+            ownerId,
+            voucherNumber: vch.voucherNumber,
+            date: vch.date.slice(0, 20),
+            ...(vch.fiscalYear ? { fiscalYear: vch.fiscalYear.slice(0, 16) } : {}),
+            description: vch.description.slice(0, 300),
+            voucherType: vch.voucherType,
+            status: 'permanent' as const,
+            totalDebit: vch.totalDebit,
+            totalCredit: vch.totalCredit,
+            ...(isFx && vch.currencyCode && vch.exchangeRate
+              ? {
+                  currencyCode: normalizeCurrencyCode(vch.currencyCode).slice(0, 10),
+                  exchangeRate: Number(vch.exchangeRate),
+                  foreignTotalDebit: foreignTotalDebit ?? 0,
+                  foreignTotalCredit: foreignTotalCredit ?? 0,
+                }
+              : {}),
+            ...(vch.referenceId ? { referenceId: vch.referenceId.slice(0, 128) } : {}),
+            ...(vch.reversalOfVoucherId ? { reversalOfVoucherId: vch.reversalOfVoucherId.slice(0, 128) } : {}),
+            ...(vch.integrityHash ? { integrityHash: vch.integrityHash.slice(0, 128) } : {}),
+            lines: vch.lines.slice(0, 100),
+            _version: 1,
+            updatedByDevice: deviceId.slice(0, 64),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          };
+        };
+
+        const preparedReversalVoucher = buildReversalVoucher(nextNum);
+
+        // Single atomic offline batch: products + invoice + reversing voucher + linked cheques ALL together!
         const applyOfflineCancelBatch = async () => {
           const batch = writeBatch(db);
           for (const [pid, delta] of plan.productDeltas.entries()) {
@@ -2728,6 +3194,23 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             updatedByDevice: deviceId.slice(0, 64),
             updatedAt: serverTimestamp(),
           });
+          if (preparedReversalVoucher) {
+            batch.set(
+              doc(db, 'vouchers', preparedReversalVoucher.id),
+              serializeReversalVoucher(preparedReversalVoucher)
+            );
+          }
+          for (const chqId of plan.chequeIdsToCancel) {
+            const chq = cheques.find((c) => c.id === chqId);
+            if (!chq) continue;
+            batch.update(doc(db, 'cheques', chq.id), {
+              status: 'cancelled',
+              notes: `${chq.notes || ''} (ابطال خودکار همراه فاکتور ${inv.invoiceNumber})`.slice(0, 300),
+              _version: (chq._version ?? 1) + 1,
+              updatedByDevice: deviceId.slice(0, 64),
+              updatedAt: serverTimestamp(),
+            });
+          }
           await batch.commit();
         };
 
@@ -2738,14 +3221,31 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           } else {
             try {
               const invRef = doc(db, 'invoices', invoiceId);
+              const counterRef = doc(db, 'counters', user.uid);
               const alreadyCancelled = await runTransaction(db, async (tx) => {
-                const invSnap = await tx.get(invRef);
+                // Phase 1: ALL reads before ANY writes (Firestore transaction requirement)
+                const [invSnap, counterSnap] = await Promise.all([tx.get(invRef), tx.get(counterRef)]);
                 if (!invSnap.exists() || invSnap.data().status === 'cancelled') return true;
-                for (const [pid, delta] of plan.productDeltas.entries()) {
-                  const pRef = doc(db, 'products', pid);
-                  const ps = await tx.get(pRef);
+
+                const productEntries = Array.from(plan.productDeltas.entries());
+                const productSnaps = await Promise.all(
+                  productEntries.map(([pid]) => tx.get(doc(db, 'products', pid)))
+                );
+                const chequeSnaps = await Promise.all(
+                  plan.chequeIdsToCancel.map((chqId) => tx.get(doc(db, 'cheques', chqId)))
+                );
+
+                const currentMax = counterSnap.exists()
+                  ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
+                  : localMaxVoucherNum;
+                const liveNextNum = currentMax + 1;
+                const liveRevVoucher = buildReversalVoucher(liveNextNum);
+
+                // Phase 2: ALL writes in ONE atomic commit (products + invoice + counter + reversal voucher + cheques)
+                productEntries.forEach(([pid, delta], idx) => {
+                  const ps = productSnaps[idx];
                   if (ps.exists()) {
-                    tx.update(pRef, {
+                    tx.update(doc(db, 'products', pid), {
                       stock: delta.stock,
                       buyPrice: delta.buyPrice,
                       costLayers: delta.costLayers,
@@ -2755,13 +3255,49 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                       updatedAt: serverTimestamp(),
                     });
                   }
-                }
+                });
+
                 tx.update(invRef, {
                   status: 'cancelled',
                   _version: (Number(invSnap.data()._version) || 1) + 1,
                   updatedByDevice: deviceId.slice(0, 64),
                   updatedAt: serverTimestamp(),
                 });
+
+                if (liveRevVoucher) {
+                  if (!counterSnap.exists()) {
+                    tx.set(counterRef, {
+                      ownerId: user.uid,
+                      lastVoucherNumber: liveNextNum,
+                      lastInvoiceSeq: 102,
+                      updatedByDevice: deviceId.slice(0, 64),
+                      createdAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    });
+                  } else {
+                    tx.update(counterRef, {
+                      lastVoucherNumber: liveNextNum,
+                      updatedByDevice: deviceId.slice(0, 64),
+                      updatedAt: serverTimestamp(),
+                    });
+                  }
+                  tx.set(doc(db, 'vouchers', liveRevVoucher.id), serializeReversalVoucher(liveRevVoucher));
+                }
+
+                plan.chequeIdsToCancel.forEach((chqId, idx) => {
+                  const cs = chequeSnaps[idx];
+                  if (cs.exists() && cs.data().status !== 'cancelled') {
+                    const prevNotes = typeof cs.data().notes === 'string' ? cs.data().notes : '';
+                    tx.update(doc(db, 'cheques', chqId), {
+                      status: 'cancelled',
+                      notes: `${prevNotes} (ابطال خودکار همراه فاکتور ${inv.invoiceNumber})`.slice(0, 300),
+                      _version: (Number(cs.data()._version) || 1) + 1,
+                      updatedByDevice: deviceId.slice(0, 64),
+                      updatedAt: serverTimestamp(),
+                    });
+                  }
+                });
+
                 return false;
               });
               if (alreadyCancelled) {
@@ -2772,12 +3308,13 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               if (isFirestoreOfflineError(err)) {
                 await applyOfflineCancelBatch();
               } else {
-                handleFirestoreError(err, OperationType.UPDATE, `invoices/${invoiceId}`);
+                handleFirestoreError(err, OperationType.UPDATE, `atomic-cancel-invoice/${invoiceId}`);
                 return;
               }
             }
           }
         } else {
+          // Local atomic commit: apply all 4 entity mutations together
           setProducts((prev) =>
             prev.map((p) => {
               const delta = plan.productDeltas.get(p.id);
@@ -2800,55 +3337,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 : i
             )
           );
-        }
-
-        // Issue sealed reversing voucher with explicit reversalOfVoucherId (no duplicate referenceId!)
-        if (plan.reversalVoucher) {
-          const revV = plan.reversalVoucher;
-          const origVoucher = vouchers.find((v) => v.id === revV.reversalOfVoucherId);
-          const fxLines =
-            origVoucher && isForeignCurrency(origVoucher.currencyCode) && origVoucher.exchangeRate
-              ? origVoucher.lines.map((l) => ({
-                  ...l,
-                  description: `ابطال و معکوس: ${l.description || origVoucher.description}`,
-                  debit: Math.max(0, Math.round(Number(l.credit) || 0)),
-                  credit: Math.max(0, Math.round(Number(l.debit) || 0)),
-                  ...(l.foreignCredit !== undefined ? { foreignDebit: l.foreignCredit } : {}),
-                  ...(l.foreignDebit !== undefined ? { foreignCredit: l.foreignDebit } : {}),
-                }))
-              : revV.lines;
-          await createVoucher({
-            date: revV.date,
-            description: revV.description,
-            voucherType: revV.voucherType,
-            status: 'permanent',
-            lines: fxLines,
-            referenceId: revV.referenceId,
-            reversalOfVoucherId: revV.reversalOfVoucherId,
-            ...(revV.currencyCode && revV.exchangeRate
-              ? { currencyCode: revV.currencyCode, exchangeRate: revV.exchangeRate }
-              : {}),
-          });
-        }
-
-        // Cancel linked in_box Sayadi cheques atomically
-        for (const chqId of plan.chequeIdsToCancel) {
-          const chq = cheques.find((c) => c.id === chqId);
-          if (!chq) continue;
-          if (user) {
-            try {
-              await updateDoc(doc(db, 'cheques', chq.id), {
-                status: 'cancelled',
-                notes: `${chq.notes || ''} (ابطال خودکار همراه فاکتور ${inv.invoiceNumber})`.slice(0, 300),
-                updatedAt: serverTimestamp(),
-              });
-            } catch {
-              // non-blocking
-            }
-          } else {
+          if (preparedReversalVoucher) {
+            setVouchers((prev) => [...prev, preparedReversalVoucher]);
+            emitVoucherNotificationEvent({
+              type: 'created_permanent',
+              voucher: preparedReversalVoucher,
+              unit: profile.currencyUnit,
+            });
+          }
+          if (plan.chequeIdsToCancel.length > 0) {
+            const cancelSet = new Set(plan.chequeIdsToCancel);
             setCheques((prev) =>
               prev.map((c) =>
-                c.id === chq.id
+                cancelSet.has(c.id)
                   ? { ...c, status: 'cancelled', notes: `${c.notes || ''} (ابطال همراه فاکتور)` }
                   : c
               )
@@ -2860,10 +3361,13 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           try {
             await updateDoc(doc(db, 'invoices', invoiceId), {
               status: 'cancelled',
+              _version: (inv._version ?? 1) + 1,
+              updatedByDevice: deviceId.slice(0, 64),
               updatedAt: serverTimestamp(),
             });
           } catch (err) {
             handleFirestoreError(err, OperationType.UPDATE, `invoices/${invoiceId}`);
+            return;
           }
         } else {
           setInvoices((prev) =>
@@ -2871,22 +3375,22 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           );
         }
       }
-      showToast(`فاکتور ${inv.invoiceNumber} ابطال شد، لایه‌های بهای تمام‌شده انبار بازگردانی و سند معکوس ثبت گردید.`);
+      showToast(`فاکتور ${inv.invoiceNumber} به‌صورت اتمیک ابطال شد، لایه‌های بهای تمام‌شده انبار بازگردانی و سند معکوس ثبت گردید.`);
     },
-    [invoices, products, vouchers, cheques, profile, ownerId, createVoucher, user, deviceId, showToast]
+    [invoices, products, vouchers, cheques, profile, ownerId, user, deviceId, showToast, assertPermission]
   );
 
   const convertProformaToSale = useCallback(
     async (invoiceId: string) => {
-      if (!activeOperator.permissions.canIssueInvoice) {
-        showToast('نقش فعال مجوز تبدیل پیش‌فاکتور و صدور فاکتور فروش قطعی را ندارد.');
-        return;
-      }
+      if (!assertPermission('canIssueInvoice')) return;
       const inv = invoices.find((i) => i.id === invoiceId);
       if (!inv || inv.invoiceType !== 'proforma' || inv.status === 'cancelled') return;
 
       const conversionDate = getTodayShamsi();
-      const nextNum = vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0) + 1;
+      const localMaxVoucherNum = vouchers.reduce((m, v) => Math.max(m, v.voucherNumber || 0), 0);
+      const nextNum = localMaxVoucherNum + 1;
+      const plannedVoucherId = generateSafeId('vch');
+
       let plan;
       try {
         plan = planProformaToSaleConversion({
@@ -2900,98 +3404,345 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           allowNegativeStock: false,
           closedFiscalYears: profile.closedFiscalYears ?? [],
           ownerId,
-          voucherId: generateSafeId('vch'),
+          voucherId: plannedVoucherId,
           nextVoucherNumber: nextNum,
           chequeId: `chq_inv_${inv.id}`,
           deviceId,
           partyBalances,
         });
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'خطا در تبدیل پیش‌فاکتور به فاکتور فروش.');
+        showToast(err instanceof Error ? err.message : 'خطا در تبدیل پیش‌فاکتور به فاکتور فروش.', 'error');
         return;
       }
 
-      // Apply exact FIFO/MWA product updates (stock, buyPrice, costLayers, inventoryValueIrr)
-      for (const [pid, delta] of plan.productDeltas.entries()) {
-        await updateProduct(pid, {
-          stock: delta.stock,
-          buyPrice: delta.buyPrice,
-          costLayers: delta.costLayers,
-          inventoryValueIrr: delta.inventoryValueIrr,
-        });
-      }
+      const isFx = isForeignCurrency(inv.currencyCode) && Number(inv.exchangeRate) > 0;
+      const fxRate = isFx ? Number(inv.exchangeRate) : undefined;
+      const fxCode = isFx ? normalizeCurrencyCode(inv.currencyCode) : undefined;
 
-      // Issue FX-aware sealed permanent voucher
-      let createdVoucherId = plan.voucher?.id;
-      if (plan.voucher) {
-        const isFx = isForeignCurrency(inv.currencyCode) && Number(inv.exchangeRate) > 0;
+      const buildConversionVoucher = (vNum: number): Voucher | null => {
+        if (!plan.voucher) return null;
         const vLines =
-          isFx && inv.exchangeRate
-            ? annotateVoucherLinesWithCurrency(plan.voucher.lines, inv.exchangeRate, 2)
+          isFx && fxRate
+            ? annotateVoucherLinesWithCurrency(plan.voucher.lines, fxRate, 2)
             : plan.voucher.lines;
-        const createdVoucher = await createVoucher({
-          date: plan.voucher.date,
-          description: `سند اتوماتیک تبدیل پیش‌فاکتور به فروش رسمی ${plan.invoice.invoiceNumber} — ${inv.partyName}`,
+        const foreignTotalDebit =
+          isFx && fxRate
+            ? roundCurrency(vLines.reduce((s, l) => s + (Number(l.foreignDebit) || 0), 0), 2)
+            : undefined;
+        const foreignTotalCredit =
+          isFx && fxRate
+            ? roundCurrency(vLines.reduce((s, l) => s + (Number(l.foreignCredit) || 0), 0), 2)
+            : undefined;
+        const base: Voucher = {
+          ...plan.voucher,
+          id: plannedVoucherId,
+          voucherNumber: vNum,
+          fiscalYear: extractFiscalYearFromDate(plan.voucher.date) || profile.fiscalYear,
+          description: `سند اتوماتیک تبدیل پیش‌فاکتور به فروش رسمی ${plan.invoice.invoiceNumber} — ${inv.partyName}`.slice(0, 300),
           voucherType: 'sales',
           status: 'permanent',
-          lines: vLines,
           referenceId: inv.id,
-          ...(isFx && inv.currencyCode && inv.exchangeRate
-            ? { currencyCode: inv.currencyCode, exchangeRate: inv.exchangeRate }
+          ...(isFx && fxCode && fxRate
+            ? {
+                currencyCode: fxCode,
+                exchangeRate: fxRate,
+                foreignTotalDebit,
+                foreignTotalCredit,
+              }
             : {}),
-        });
-        createdVoucherId = createdVoucher.id;
-      }
-
-      // Register Sayadi receivable cheque if proforma had paidCheque > 0 (keeps GL 10301 reconciled!)
-      if (plan.cheque) {
-        if (user) {
-          try {
-            await setDoc(doc(db, 'cheques', plan.cheque.id), {
-              ...plan.cheque,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          } catch (err) {
-            handleFirestoreError(err, OperationType.CREATE, `cheques/${plan.cheque.id}`);
-          }
-        } else {
-          setCheques((prev) => [plan.cheque!, ...prev]);
-        }
-      }
-
-      const finalInvoice: Invoice = {
-        ...plan.invoice,
-        voucherId: createdVoucherId,
+          lines: vLines.slice(0, 100),
+          _version: 1,
+          updatedByDevice: deviceId,
+        };
+        return { ...base, integrityHash: computeVoucherIntegrityHash(base) };
       };
 
-      if (user) {
-        try {
-          await updateDoc(doc(db, 'invoices', invoiceId), {
-            invoiceNumber: finalInvoice.invoiceNumber,
-            invoiceType: 'sale',
-            date: finalInvoice.date,
-            status: finalInvoice.status,
-            voucherId: createdVoucherId ?? null,
-            items: finalInvoice.items.slice(0, 100),
-            _version: finalInvoice._version ?? (inv._version ?? 1) + 1,
+      const serializeConvVoucher = (vch: Voucher) => ({
+        ownerId,
+        voucherNumber: vch.voucherNumber,
+        date: vch.date.slice(0, 20),
+        ...(vch.fiscalYear ? { fiscalYear: vch.fiscalYear.slice(0, 16) } : {}),
+        description: vch.description.slice(0, 300),
+        voucherType: vch.voucherType,
+        status: 'permanent' as const,
+        totalDebit: vch.totalDebit,
+        totalCredit: vch.totalCredit,
+        ...(isFx && fxCode && fxRate
+          ? {
+              currencyCode: fxCode.slice(0, 10),
+              exchangeRate: fxRate,
+              foreignTotalDebit: vch.foreignTotalDebit ?? 0,
+              foreignTotalCredit: vch.foreignTotalCredit ?? 0,
+            }
+          : {}),
+        referenceId: inv.id.slice(0, 128),
+        ...(vch.integrityHash ? { integrityHash: vch.integrityHash.slice(0, 128) } : {}),
+        lines: vch.lines.slice(0, 100),
+        _version: 1,
+        updatedByDevice: deviceId.slice(0, 64),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const serializeConvCheque = (chq: Cheque) => ({
+        ownerId,
+        sayadiId: chq.sayadiId.slice(0, 32),
+        serial: chq.serial.slice(0, 48),
+        direction: chq.direction,
+        partyId: chq.partyId.slice(0, 128),
+        partyName: chq.partyName.slice(0, 160),
+        bankName: chq.bankName.slice(0, 100),
+        ...(chq.branch ? { branch: chq.branch.slice(0, 100) } : {}),
+        amount: chq.amount,
+        issueDate: chq.issueDate.slice(0, 20),
+        dueDate: chq.dueDate.slice(0, 20),
+        status: chq.status,
+        ...(chq.notes ? { notes: chq.notes.slice(0, 300) } : {}),
+        _version: 1,
+        updatedByDevice: deviceId.slice(0, 64),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const preparedVoucher = buildConversionVoucher(nextNum);
+      const finalInvoice: Invoice = {
+        ...plan.invoice,
+        voucherId: preparedVoucher?.id,
+      };
+
+      const updatedProductList: Product[] = products
+        .filter((p) => plan.productDeltas.has(p.id))
+        .map((p) => {
+          const delta = plan.productDeltas.get(p.id)!;
+          return {
+            ...p,
+            stock: delta.stock,
+            buyPrice: delta.buyPrice,
+            costLayers: delta.costLayers,
+            inventoryValueIrr: delta.inventoryValueIrr,
+            _version: (p._version ?? 1) + 1,
+            updatedByDevice: deviceId,
+          };
+        });
+
+      const commitOfflineProformaBatch = async () => {
+        const batch = writeBatch(db);
+        for (const prod of updatedProductList) {
+          batch.update(doc(db, 'products', prod.id), {
+            stock: prod.stock,
+            buyPrice: prod.buyPrice,
+            costLayers: prod.costLayers,
+            inventoryValueIrr: prod.inventoryValueIrr,
+            _version: prod._version ?? 2,
             updatedByDevice: deviceId.slice(0, 64),
             updatedAt: serverTimestamp(),
           });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `invoices/${invoiceId}`);
+        }
+        if (preparedVoucher) {
+          batch.set(doc(db, 'vouchers', preparedVoucher.id), serializeConvVoucher(preparedVoucher));
+        }
+        if (plan.cheque) {
+          batch.set(doc(db, 'cheques', plan.cheque.id), serializeConvCheque(plan.cheque));
+        }
+        batch.update(doc(db, 'invoices', invoiceId), {
+          invoiceNumber: finalInvoice.invoiceNumber.slice(0, 48),
+          invoiceType: 'sale',
+          date: finalInvoice.date.slice(0, 20),
+          status: finalInvoice.status,
+          ...(finalInvoice.voucherId ? { voucherId: finalInvoice.voucherId } : {}),
+          items: finalInvoice.items.slice(0, 100),
+          _version: finalInvoice._version ?? (inv._version ?? 1) + 1,
+          updatedByDevice: deviceId.slice(0, 64),
+          updatedAt: serverTimestamp(),
+        });
+        await batch.commit();
+      };
+
+      if (user) {
+        const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOfflineNow) {
+          await commitOfflineProformaBatch();
+        } else {
+          try {
+            const alreadyConverted = await runTransaction(db, async (tx) => {
+              const invRef = doc(db, 'invoices', invoiceId);
+              const counterRef = doc(db, 'counters', user.uid);
+              const [invSnap, counterSnap] = await Promise.all([tx.get(invRef), tx.get(counterRef)]);
+              if (!invSnap.exists() || invSnap.data().invoiceType !== 'proforma' || invSnap.data().status === 'cancelled') {
+                return true;
+              }
+
+              const uniquePids = Array.from(plan.productDeltas.keys());
+              const prodSnaps = await Promise.all(uniquePids.map((pid) => tx.get(doc(db, 'products', pid))));
+              const liveProductsMap = new Map<string, Product>(products.map((p) => [p.id, p]));
+              uniquePids.forEach((pid, idx) => {
+                const ps = prodSnaps[idx];
+                const base = liveProductsMap.get(pid);
+                if (ps.exists() && base) {
+                  const d = ps.data();
+                  liveProductsMap.set(pid, {
+                    ...base,
+                    stock: Number(d.stock) || 0,
+                    buyPrice: Number(d.buyPrice) || 0,
+                    costLayers: Array.isArray(d.costLayers) ? d.costLayers : base.costLayers,
+                    inventoryValueIrr:
+                      typeof d.inventoryValueIrr === 'number'
+                        ? d.inventoryValueIrr
+                        : base.inventoryValueIrr,
+                    _version: Number(d._version) || 1,
+                  });
+                }
+              });
+
+              const currentMax = counterSnap.exists()
+                ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
+                : localMaxVoucherNum;
+              const liveNextNum = currentMax + 1;
+
+              const livePlan = planProformaToSaleConversion({
+                proforma: inv,
+                conversionDate,
+                products: Array.from(liveProductsMap.values()),
+                parties,
+                existingInvoices: invoices,
+                existingVouchers: vouchers,
+                costingMethod: profile.defaultCostingMethod ?? 'fifo',
+                allowNegativeStock: false,
+                closedFiscalYears: profile.closedFiscalYears ?? [],
+                ownerId,
+                voucherId: plannedVoucherId,
+                nextVoucherNumber: liveNextNum,
+                chequeId: `chq_inv_${inv.id}`,
+                deviceId,
+                partyBalances,
+              });
+
+              const liveVoucher = livePlan.voucher ? buildConversionVoucher(liveNextNum) : null;
+              if (liveVoucher && livePlan.voucher) {
+                liveVoucher.lines = (
+                  isFx && fxRate
+                    ? annotateVoucherLinesWithCurrency(livePlan.voucher.lines, fxRate, 2)
+                    : livePlan.voucher.lines
+                ).slice(0, 100);
+                liveVoucher.totalDebit = livePlan.voucher.totalDebit;
+                liveVoucher.totalCredit = livePlan.voucher.totalCredit;
+                liveVoucher.integrityHash = computeVoucherIntegrityHash(liveVoucher);
+              }
+
+              // Atomic write of ALL 4 entities + counter
+              for (const [pid, delta] of livePlan.productDeltas.entries()) {
+                const liveVer = liveProductsMap.get(pid)?._version ?? 1;
+                tx.update(doc(db, 'products', pid), {
+                  stock: delta.stock,
+                  buyPrice: delta.buyPrice,
+                  costLayers: delta.costLayers,
+                  inventoryValueIrr: delta.inventoryValueIrr,
+                  _version: liveVer + 1,
+                  updatedByDevice: deviceId.slice(0, 64),
+                  updatedAt: serverTimestamp(),
+                });
+              }
+
+              if (liveVoucher) {
+                if (!counterSnap.exists()) {
+                  tx.set(counterRef, {
+                    ownerId: user.uid,
+                    lastVoucherNumber: liveNextNum,
+                    lastInvoiceSeq: 102,
+                    updatedByDevice: deviceId.slice(0, 64),
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  });
+                } else {
+                  tx.update(counterRef, {
+                    lastVoucherNumber: liveNextNum,
+                    updatedByDevice: deviceId.slice(0, 64),
+                    updatedAt: serverTimestamp(),
+                  });
+                }
+                tx.set(doc(db, 'vouchers', liveVoucher.id), serializeConvVoucher(liveVoucher));
+              }
+
+              if (livePlan.cheque) {
+                tx.set(doc(db, 'cheques', livePlan.cheque.id), serializeConvCheque(livePlan.cheque));
+              }
+
+              tx.update(invRef, {
+                invoiceNumber: livePlan.invoice.invoiceNumber.slice(0, 48),
+                invoiceType: 'sale',
+                date: livePlan.invoice.date.slice(0, 20),
+                status: livePlan.invoice.status,
+                ...(liveVoucher ? { voucherId: liveVoucher.id } : {}),
+                items: livePlan.invoice.items.slice(0, 100),
+                _version: (Number(invSnap.data()._version) || 1) + 1,
+                updatedByDevice: deviceId.slice(0, 64),
+                updatedAt: serverTimestamp(),
+              });
+
+              return false;
+            });
+
+            if (alreadyConverted) {
+              showToast('این پیش‌فاکتور قبلاً تبدیل یا ابطال شده است.');
+              return;
+            }
+          } catch (err) {
+            if (isFirestoreOfflineError(err)) {
+              await commitOfflineProformaBatch();
+            } else {
+              handleFirestoreError(err, OperationType.UPDATE, `atomic-proforma-convert/${invoiceId}`);
+              return;
+            }
+          }
         }
       } else {
+        // Local Operational Mode: Single atomic 4-store IndexedDB transaction before mutating React state
+        try {
+          await commitInvoiceOperationalTx({
+            updatedProducts: updatedProductList,
+            voucher: preparedVoucher ?? undefined,
+            cheque: plan.cheque ?? undefined,
+            invoice: finalInvoice,
+          });
+        } catch (err) {
+          showToast(
+            err instanceof Error
+              ? `تراکنش اتمیک تبدیل پیش‌فاکتور لغو شد (بدون ثبت ناقص): ${err.message}`
+              : 'تراکنش اتمیک تبدیل پیش‌فاکتور لغو شد.',
+            'error'
+          );
+          return;
+        }
+
+        const updatedMap = new Map(updatedProductList.map((p) => [p.id, p]));
+        if (updatedMap.size > 0) {
+          setProducts((prev) => prev.map((p) => updatedMap.get(p.id) ?? p));
+        }
+        if (preparedVoucher) {
+          setVouchers((prev) => [preparedVoucher, ...prev]);
+          emitVoucherNotificationEvent({
+            type: 'created_permanent',
+            voucher: preparedVoucher,
+            unit: profile.currencyUnit,
+          });
+        }
+        if (plan.cheque) {
+          setCheques((prev) => [plan.cheque!, ...prev]);
+        }
         setInvoices((prev) => prev.map((i) => (i.id === invoiceId ? finalInvoice : i)));
+        void getOperationalDbStats()
+          .then(setOperationalDbStats)
+          .catch(() => {});
       }
+
       showToast(
-        `پیش‌فاکتور با موفقیت به فاکتور فروش رسمی ${finalInvoice.invoiceNumber} تبدیل، موجودی لایه‌ای کسر و سند قطعی صادر شد.${
+        `پیش‌فاکتور به‌صورت اتمیک به فاکتور فروش رسمی ${finalInvoice.invoiceNumber} تبدیل، موجودی لایه‌ای کسر و سند قطعی صادر شد.${
           plan.cheque ? ' (چک صیادی نیز در خزانه‌داری ثبت شد)' : ''
-        }`
+        }`,
+        'success'
       );
     },
     [
-      activeOperator,
       invoices,
       products,
       parties,
@@ -3000,10 +3751,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       ownerId,
       deviceId,
       partyBalances,
-      updateProduct,
-      createVoucher,
       user,
       showToast,
+      assertPermission,
     ]
   );
 
@@ -4801,6 +5551,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- RBAC OPERATORS CRUD ----------------
   const addRbacOperator = useCallback(
     async (op: Omit<RbacOperator, 'id' | 'ownerId'>) => {
+      if (!assertPermission('canManageSettings')) return;
       const full: RbacOperator = { ...op, id: generateSafeId('op'), ownerId };
       if (user) {
         try {
@@ -4823,7 +5574,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       logActivity('مدیریت کاربران', `تعریف کاربر ${full.fullName}`, `نقش: ${full.role}`);
       showToast(`کاربر «${full.fullName}» به لیست اپراتورها اضافه شد.`);
     },
-    [user, ownerId, logActivity, showToast]
+    [user, ownerId, logActivity, showToast, assertPermission]
   );
 
   const updateRbacOperator = useCallback(
@@ -4831,6 +5582,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       opId: string,
       patch: Partial<Pick<RbacOperator, 'fullName' | 'role' | 'email' | 'active' | 'permissions'>>
     ) => {
+      if (!assertPermission('canManageSettings')) return;
       if (user) {
         try {
           await updateDoc(doc(db, 'rbacOperators', opId), {
@@ -4846,11 +5598,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       logActivity('مدیریت کاربران', 'ویرایش سطح دسترسی کاربر', `شناسه اپراتور: ${opId}`);
       showToast('سطح دسترسی کاربر به‌روزرسانی شد.');
     },
-    [user, logActivity, showToast]
+    [user, logActivity, showToast, assertPermission]
   );
 
   const deleteRbacOperator = useCallback(
     async (opId: string) => {
+      if (!assertPermission('canManageSettings')) return;
       if (rbacOperators.length <= 1) {
         showToast('حداقل یک کاربر مدیر در سیستم باید باقی بماند.');
         return;
@@ -4871,7 +5624,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       logActivity('مدیریت کاربران', 'حذف اپراتور', `شناسه اپراتور: ${opId}`);
       showToast('اپراتور حذف شد.');
     },
-    [user, rbacOperators, activeOperatorId, logActivity, showToast]
+    [user, rbacOperators, activeOperatorId, logActivity, showToast, assertPermission]
   );
 
   // ---------------- BACKUP & RESTORE (CLOUD + LOCAL DEVICE STORAGE) ----------------
@@ -4927,6 +5680,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const reopenFiscalYear = useCallback(
     async (fiscalYear: string, reason: string): Promise<boolean> => {
+      if (!assertPermission('canManageSettings')) return false;
       const nowTime = new Date().toLocaleTimeString('fa-IR', {
         hour: '2-digit',
         minute: '2-digit',
@@ -4976,6 +5730,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       updateCompanyProfile,
       logActivity,
       showToast,
+      assertPermission,
     ]
   );
 

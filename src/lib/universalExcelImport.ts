@@ -798,15 +798,55 @@ export function mapModuleToImportEntity(mod: ActiveModule): UniversalImportEntit
   }
 }
 
+export const MAX_EXCEL_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MB safety cap
+export const MAX_EXCEL_ROWS = 25_000;
+export const MAX_EXCEL_COLS = 100;
+
+const DANGEROUS_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function sanitizeSafeHeaderKey(rawHeader: string, colIdx: number): string {
+  const cleaned = cleanStr(rawHeader).slice(0, 120);
+  if (!cleaned) return `ستون ${colIdx + 1}`;
+  if (DANGEROUS_OBJECT_KEYS.has(cleaned.toLowerCase())) {
+    return `ستون_ایمن_${colIdx + 1}`;
+  }
+  return cleaned;
+}
+
+/**
+ * Neutralizes spreadsheet formula injection (CSV/Excel cells starting with =, +, -, @, tab, CR)
+ * while leaving signed numeric values untouched.
+ */
+export function sanitizeSpreadsheetFormulaCell(value: unknown): string {
+  const text = String(value ?? '');
+  if (!text) return '';
+  if (/^[+-]?\d+(?:[.,]\d+)?$/.test(text.trim())) return text;
+  if (/^[=+\-@\t\r]/.test(text)) {
+    return `'${text}`;
+  }
+  return text;
+}
+
 /**
  * Parses an Excel (.xlsx / .xls) or CSV binary buffer into headers and raw row records.
+ * Enforces strict byte-size, row/column bounds, and prototype-pollution guards.
  */
 export function parseExcelArrayBuffer(
   buffer: ArrayBuffer | Uint8Array,
   preferredSheetName?: string
 ): ParsedExcelSheet {
+  const byteLength = buffer instanceof Uint8Array ? buffer.byteLength : buffer.byteLength;
+  if (byteLength <= 0) {
+    return { sheetName: '', sheetNames: [], headers: [], rows: [] };
+  }
+  if (byteLength > MAX_EXCEL_BUFFER_BYTES) {
+    throw new Error(
+      `حجم فایل اکسل (${Math.ceil(byteLength / (1024 * 1024))} مگابایت) بیش از سقف مجاز ۱۰ مگابایت است.`
+    );
+  }
+
   const workbook = XLSX.read(buffer, { type: 'array', raw: false });
-  const sheetNames = workbook.SheetNames || [];
+  const sheetNames = (workbook.SheetNames || []).slice(0, 50);
   if (sheetNames.length === 0) {
     return { sheetName: '', sheetNames: [], headers: [], rows: [] };
   }
@@ -833,10 +873,9 @@ export function parseExcelArrayBuffer(
     return { sheetName: targetSheet, sheetNames, headers: [], rows: [] };
   }
 
-  const rawHeaders = (matrix[headerRowIdx] as unknown[]).map((h, idx) => {
-    const cleaned = cleanStr(h);
-    return cleaned || `ستون ${idx + 1}`;
-  });
+  const rawHeaders = (matrix[headerRowIdx] as unknown[])
+    .slice(0, MAX_EXCEL_COLS)
+    .map((h, idx) => sanitizeSafeHeaderKey(String(h ?? ''), idx));
 
   // Deduplicate identical headers safely
   const headerCounts = new Map<string, number>();
@@ -847,12 +886,14 @@ export function parseExcelArrayBuffer(
   });
 
   const rows: Record<string, unknown>[] = [];
-  for (let i = headerRowIdx + 1; i < matrix.length; i++) {
+  const maxRowIdx = Math.min(matrix.length, headerRowIdx + 1 + MAX_EXCEL_ROWS);
+  for (let i = headerRowIdx + 1; i < maxRowIdx; i++) {
     const rawRow = matrix[i] as unknown[];
     if (!Array.isArray(rawRow)) continue;
-    const obj: Record<string, unknown> = {};
+    const obj = Object.create(null) as Record<string, unknown>;
     let hasValue = false;
     headers.forEach((header, colIdx) => {
+      if (DANGEROUS_OBJECT_KEYS.has(header.toLowerCase())) return;
       const val = rawRow[colIdx] ?? '';
       if (cleanStr(val).length > 0) hasValue = true;
       obj[header] = val;

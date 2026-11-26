@@ -25,7 +25,7 @@ import {
 } from '../types/accounting';
 
 const OP_DB_NAME = 'holoo_apex_operational_db_v1';
-const OP_DB_VERSION = 1;
+export const OP_DB_VERSION = 3;
 
 export const OPERATIONAL_STORES = [
   'meta',
@@ -46,6 +46,11 @@ export const OPERATIONAL_STORES = [
   'rbacOperators',
   'auditLogs',
   'syncOutbox',
+  'syncInbox',
+  'localProfiles',
+  'warehouses',
+  'taxReports',
+  'preUpdateBackups',
 ] as const;
 
 export type OperationalStoreName = (typeof OPERATIONAL_STORES)[number];
@@ -81,7 +86,16 @@ export interface SyncOutboxOperation {
   payloadHash: string;
   createdAt: string;
   retryCount: number;
+  nextRetryAt?: string;
+  lastError?: string;
   status: 'pending' | 'synced' | 'conflict';
+}
+
+export interface SyncInboxRecord {
+  operationId: string;
+  sourceDeviceId: string;
+  payloadHash: string;
+  receivedAt: string;
 }
 
 export interface OperationalDbStats {
@@ -108,17 +122,55 @@ function openOperationalDb(): Promise<IDBDatabase> {
     const req = window.indexedDB.open(OP_DB_NAME, OP_DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
+      const upgradeTx = req.transaction;
       for (const storeName of OPERATIONAL_STORES) {
+        let store: IDBObjectStore;
         if (!db.objectStoreNames.contains(storeName)) {
           if (storeName === 'meta') {
-            db.createObjectStore(storeName, { keyPath: 'key' });
-          } else if (storeName === 'syncOutbox') {
-            const outbox = db.createObjectStore(storeName, { keyPath: 'operationId' });
-            outbox.createIndex('status', 'status', { unique: false });
-            outbox.createIndex('createdAt', 'createdAt', { unique: false });
+            store = db.createObjectStore(storeName, { keyPath: 'key' });
+          } else if (storeName === 'syncOutbox' || storeName === 'syncInbox') {
+            store = db.createObjectStore(storeName, { keyPath: 'operationId' });
+          } else if (storeName === 'localProfiles') {
+            store = db.createObjectStore(storeName, { keyPath: 'workspaceId' });
           } else {
-            db.createObjectStore(storeName, { keyPath: 'id' });
+            store = db.createObjectStore(storeName, { keyPath: 'id' });
           }
+        } else if (upgradeTx) {
+          store = upgradeTx.objectStore(storeName);
+        } else {
+          continue;
+        }
+
+        const ensureIndex = (name: string, keyPath: string) => {
+          if (!store.indexNames.contains(name)) {
+            store.createIndex(name, keyPath, { unique: false });
+          }
+        };
+
+        if (storeName === 'syncOutbox') {
+          ensureIndex('status', 'status');
+          ensureIndex('createdAt', 'createdAt');
+          ensureIndex('nextRetryAt', 'nextRetryAt');
+        } else if (storeName === 'syncInbox') {
+          ensureIndex('receivedAt', 'receivedAt');
+        } else if (storeName === 'vouchers') {
+          ensureIndex('date', 'date');
+          ensureIndex('status', 'status');
+          ensureIndex('voucherNumber', 'voucherNumber');
+        } else if (storeName === 'invoices') {
+          ensureIndex('date', 'date');
+          ensureIndex('partyId', 'partyId');
+          ensureIndex('status', 'status');
+        } else if (storeName === 'products') {
+          ensureIndex('warehouse', 'warehouse');
+          ensureIndex('sku', 'sku');
+        } else if (storeName === 'cheques') {
+          ensureIndex('dueDate', 'dueDate');
+          ensureIndex('status', 'status');
+        } else if (storeName === 'preUpdateBackups') {
+          ensureIndex('createdAt', 'createdAt');
+        } else if (storeName === 'taxReports') {
+          ensureIndex('period', 'period');
         }
       }
     };
@@ -493,6 +545,98 @@ export async function clearPendingSyncOutboxOperations(): Promise<void> {
   }
 }
 
+/** Records a processed inbound sync operation in durable syncInbox for duplicate detection */
+export async function recordInboxOperation(rec: SyncInboxRecord): Promise<void> {
+  if (!isIndexedDbAvailable()) return;
+  try {
+    const db = await openOperationalDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(['syncInbox'], 'readwrite');
+      tx.objectStore('syncInbox').put(rec);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    // ignore
+  }
+}
+
+/** Checks whether an inbound operationId was already durably applied to this device */
+export async function isInboxOperationProcessed(operationId: string): Promise<boolean> {
+  if (!isIndexedDbAvailable()) return false;
+  try {
+    const db = await openOperationalDb();
+    const exists = await new Promise<boolean>((resolve, reject) => {
+      const tx = db.transaction(['syncInbox'], 'readonly');
+      const req = tx.objectStore('syncInbox').get(operationId);
+      req.onsuccess = () => resolve(Boolean(req.result));
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return exists;
+  } catch {
+    return false;
+  }
+}
+
+/** Atomic Stocktaking Adjustment commit in Operational IndexedDB (products + permanent voucher) */
+export async function commitStockAdjustmentOperationalTx(payload: {
+  updatedProducts: Product[];
+  voucher?: Voucher | null;
+}): Promise<boolean> {
+  if (!isIndexedDbAvailable()) return false;
+  const db = await openOperationalDb();
+  const committedAt = new Date().toISOString();
+
+  return new Promise((resolve, reject) => {
+    let tx: IDBTransaction | null = null;
+    try {
+      tx = db.transaction(['meta', 'products', 'vouchers'], 'readwrite');
+      const prodStore = tx.objectStore('products');
+      for (const p of payload.updatedProducts) {
+        prodStore.put(p);
+      }
+      if (payload.voucher) {
+        tx.objectStore('vouchers').put(payload.voucher);
+      }
+      const metaStore = tx.objectStore('meta');
+      const revReq = metaStore.get('workspace_meta');
+      revReq.onsuccess = () => {
+        const existing = revReq.result as { localRevision?: number } | undefined;
+        metaStore.put({
+          key: 'workspace_meta',
+          localRevision: (existing?.localRevision ?? 0) + 1,
+          updatedAt: committedAt,
+          schemaVersion: OP_DB_VERSION,
+        });
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve(true);
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx?.error ?? new Error('Atomic stock adjustment IndexedDB commit failed'));
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx?.error ?? new Error('Atomic stock adjustment IndexedDB transaction aborted'));
+      };
+    } catch (err) {
+      if (tx) {
+        try {
+          tx.abort();
+        } catch {
+          // ignore
+        }
+      }
+      db.close();
+      reject(err);
+    }
+  });
+}
+
 export async function getOperationalDbStats(): Promise<OperationalDbStats> {
   if (!isIndexedDbAvailable()) {
     return {
@@ -589,7 +733,105 @@ const OPERATIONAL_STORE_LABELS: Record<OperationalStoreName, string> = {
   rbacOperators: 'اپراتورها و دسترسی (rbacOperators)',
   auditLogs: 'گزارش فعالیت‌ها (auditLogs)',
   syncOutbox: 'صف خروجی سینک (syncOutbox)',
+  syncInbox: 'صندوق ورودی سینک (syncInbox)',
+  localProfiles: 'پروفایل‌های محلی آفلاین (localProfiles)',
+  warehouses: 'انبارها (warehouses)',
+  taxReports: 'گزارش‌های مالیاتی و کش‌شده (taxReports)',
+  preUpdateBackups: 'پشتیبان ایمنی پیش از بروزرسانی (preUpdateBackups)',
 };
+
+export interface PreUpdateSafetyBackupRecord {
+  id: string;
+  reason: 'pwa_update' | 'schema_migration' | 'manual_guard';
+  schemaVersion: number;
+  sha256: string;
+  snapshotJson: string;
+  createdAt: string;
+}
+
+/** Saves an immutable pre-update / pre-migration safety backup inside IndexedDB */
+export async function savePreUpdateSafetyBackup(
+  rec: PreUpdateSafetyBackupRecord
+): Promise<boolean> {
+  if (!isIndexedDbAvailable()) return false;
+  try {
+    const db = await openOperationalDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(['preUpdateBackups'], 'readwrite');
+      tx.objectStore('preUpdateBackups').put(rec);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function listPreUpdateSafetyBackups(): Promise<PreUpdateSafetyBackupRecord[]> {
+  if (!isIndexedDbAvailable()) return [];
+  try {
+    const db = await openOperationalDb();
+    const tx = db.transaction(['preUpdateBackups'], 'readonly');
+    const rows = await readAllFromStore<PreUpdateSafetyBackupRecord>(tx, 'preUpdateBackups');
+    db.close();
+    return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  } catch {
+    return [];
+  }
+}
+
+/** Indexed cursor-based pagination query for high-volume IndexedDB operational stores */
+export async function queryOperationalStorePaginated<T>(
+  storeName: OperationalStoreName,
+  options: { page?: number; pageSize?: number; indexName?: string; direction?: IDBCursorDirection } = {}
+): Promise<{ items: T[]; total: number; page: number; pageSize: number }> {
+  const page = Math.max(1, Math.trunc(options.page ?? 1));
+  const pageSize = Math.max(1, Math.min(500, Math.trunc(options.pageSize ?? 50)));
+  if (!isIndexedDbAvailable()) {
+    return { items: [], total: 0, page, pageSize };
+  }
+  try {
+    const db = await openOperationalDb();
+    const result = await new Promise<{ items: T[]; total: number }>((resolve, reject) => {
+      const tx = db.transaction([storeName], 'readonly');
+      const store = tx.objectStore(storeName);
+      const source: IDBObjectStore | IDBIndex =
+        options.indexName && store.indexNames.contains(options.indexName)
+          ? store.index(options.indexName)
+          : store;
+      const countReq = source.count();
+      let total = 0;
+      countReq.onsuccess = () => {
+        total = countReq.result;
+      };
+      const items: T[] = [];
+      const offset = (page - 1) * pageSize;
+      let skipped = false;
+      const cursorReq = source.openCursor(null, options.direction ?? 'prev');
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor || items.length >= pageSize) {
+          return;
+        }
+        if (!skipped && offset > 0) {
+          skipped = true;
+          cursor.advance(offset);
+          return;
+        }
+        items.push(cursor.value as T);
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve({ items, total });
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+    return { items: result.items, total: result.total, page, pageSize };
+  } catch {
+    return { items: [], total: 0, page, pageSize };
+  }
+}
 
 export async function getOperationalDbDetailedReport(): Promise<OperationalDbDetailedReport> {
   const started = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -641,6 +883,8 @@ export async function getOperationalDbDetailedReport(): Promise<OperationalDbDet
           else if (r.status === 'synced') outboxBreakdown.synced += 1;
           else if (r.status === 'conflict') outboxBreakdown.conflict += 1;
         }
+      } else if (storeName === 'syncInbox') {
+        // Inbox rows track processed inbound operations and are not counted as user accounting entities
       } else {
         totalRecords += rows.length;
       }

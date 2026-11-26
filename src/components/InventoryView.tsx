@@ -123,6 +123,16 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
   const [showFullKardexModal, setShowFullKardexModal] = useState(false);
   const [priceTarget, setPriceTarget] = useState<'sellPrice' | 'buyPrice'>('sellPrice');
   const [pricePercent, setPricePercent] = useState(0);
+  const [visibleProductCount, setVisibleProductCount] = useState(60);
+  const [visibleKardexCount, setVisibleKardexCount] = useState(60);
+
+  useEffect(() => {
+    setVisibleProductCount(60);
+  }, [warehouseFilter, search]);
+
+  useEffect(() => {
+    setVisibleKardexCount(60);
+  }, [selectedProductId]);
 
   // Holoo Apex 9.6 Cloud-Synced Extension Meta (barcode, multi-tier prices, maxStock, binLocation)
   const { productMetaMap: apexMetaMap, upsertProductMetaSynced } = useWorkspaceExtensions();
@@ -422,7 +432,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
         });
       });
 
-    // 3. Completed Subcontracting Jobs (Raw Yarn Outbound)
+    // 3. Completed Subcontracting Jobs (Raw Yarn Outbound & Finished Yarn Inbound)
     subcontractJobs
       .filter((j) => j.status === 'completed')
       .forEach((job) => {
@@ -439,28 +449,72 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
             unitCostOverride: job.rawUnitCostIrr,
           });
         }
+        if (job.finishedProductId === selectedProduct.id && (job.returnedWeightKg || 0) > 0) {
+          const finishedQty = job.returnedWeightKg;
+          const finishedUnitCost =
+            job.finishedUnitCostIrr > 0 ? job.finishedUnitCostIrr : selectedProduct.buyPrice;
+          rawMovements.push({
+            date: job.completionDate || job.date,
+            invoiceNumber: job.jobNumber,
+            typeLabel: 'ورود (تحویل کالای تکمیل‌شده پیمانکاری)',
+            partyName: job.contractorName,
+            inQty: finishedQty,
+            outQty: 0,
+            cartons: computeCartons(finishedQty, selectedProduct.kgPerCarton),
+            secondaryUnit: selectedProduct.secondaryUnit || 'کارتن',
+            unitCostOverride: finishedUnitCost,
+            isCostedInbound: true,
+          });
+        }
       });
 
-    // 4. Stocktaking Adjustment Vouchers directly referencing this product
+    // 4. Stocktaking Adjustment Vouchers referencing this product (direct ID or stk_* / stk_bulk_* vouchers)
     vouchers
-      .filter((v) => v.referenceId === selectedProduct.id)
+      .filter((v) => {
+        if (v.referenceId === selectedProduct.id) return true;
+        if (v.referenceId && (v.referenceId.startsWith('stk_') || v.referenceId.startsWith('stk'))) {
+          if (
+            v.description.includes(selectedProduct.name) ||
+            v.description.includes(selectedProduct.sku)
+          ) {
+            return true;
+          }
+          return v.lines.some(
+            (l) =>
+              l.accountCode === '10501' &&
+              (l.description.includes(selectedProduct.name) ||
+                l.description.includes(selectedProduct.sku))
+          );
+        }
+        return false;
+      })
       .forEach((v) => {
-        const invLine = v.lines.find((l) => l.accountCode === '10501');
-        if (!invLine || selectedProduct.buyPrice <= 0) return;
-        const amt = invLine.debit > 0 ? invLine.debit : invLine.credit;
-        const estQty = Number((amt / selectedProduct.buyPrice).toFixed(2));
-        if (estQty <= 0) return;
-        const isSurplus = invLine.debit > 0;
-        rawMovements.push({
-          date: v.date,
-          invoiceNumber: `سند #${v.voucherNumber}`,
-          typeLabel: isSurplus ? 'ورود (اضافی انبارگردانی)' : 'خروج (کسری انبارگردانی)',
-          partyName: selectedProduct.warehouse,
-          inQty: isSurplus ? estQty : 0,
-          outQty: isSurplus ? 0 : estQty,
-          cartons: computeCartons(estQty, selectedProduct.kgPerCarton),
-          secondaryUnit: selectedProduct.secondaryUnit || 'کارتن',
-          unitCostOverride: selectedProduct.buyPrice,
+        const matchingLines = v.lines.filter(
+          (l) =>
+            l.accountCode === '10501' &&
+            (v.referenceId === selectedProduct.id ||
+              l.description.includes(selectedProduct.name) ||
+              l.description.includes(selectedProduct.sku) ||
+              v.lines.filter((x) => x.accountCode === '10501').length === 1)
+        );
+        matchingLines.forEach((invLine) => {
+          if (selectedProduct.buyPrice <= 0) return;
+          const amt = invLine.debit > 0 ? invLine.debit : invLine.credit;
+          const estQty = Number((amt / selectedProduct.buyPrice).toFixed(2));
+          if (estQty <= 0) return;
+          const isSurplus = invLine.debit > 0;
+          rawMovements.push({
+            date: v.date,
+            invoiceNumber: `سند #${v.voucherNumber}`,
+            typeLabel: isSurplus ? 'ورود (اضافی انبارگردانی)' : 'خروج (کسری انبارگردانی)',
+            partyName: selectedProduct.warehouse,
+            inQty: isSurplus ? estQty : 0,
+            outQty: isSurplus ? 0 : estQty,
+            cartons: computeCartons(estQty, selectedProduct.kgPerCarton),
+            secondaryUnit: selectedProduct.secondaryUnit || 'کارتن',
+            unitCostOverride: selectedProduct.buyPrice,
+            isCostedInbound: isSurplus,
+          });
         });
       });
 
@@ -528,9 +582,15 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
         avgUnitCost = runningQty > 0 ? Math.round(runningValue / runningQty) : avgUnitCost;
       } else if (m.outQty > 0) {
         outRate = m.unitCostOverride ?? avgUnitCost;
-        outTotal = Math.round(m.outQty * outRate);
+        outTotal =
+          m.outQty >= runningQty - 0.0001
+            ? runningValue
+            : Math.min(runningValue, Math.round(m.outQty * outRate));
         runningQty = Math.max(0, Number((runningQty - m.outQty).toFixed(2)));
-        runningValue = Math.max(0, Math.round(runningQty * avgUnitCost));
+        runningValue = runningQty <= 0 ? 0 : Math.max(0, runningValue - outTotal);
+        if (runningQty > 0) {
+          avgUnitCost = Math.round(runningValue / runningQty);
+        }
       }
 
       ledger.push({
@@ -1294,7 +1354,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filtered.map((p) => {
+                {filtered.slice(0, visibleProductCount).map((p) => {
                   const isBelowMin = p.stock < p.reorderPoint;
                   const low = p.stock <= p.reorderPoint;
                   const counted = bulkCounts[p.id] ?? p.stock;
@@ -1509,6 +1569,30 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
               </tbody>
             </table>
           </div>
+          {filtered.length > visibleProductCount && (
+            <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="text-slate-600 dark:text-slate-400">
+                نمایش <strong className="font-code">{toPersianDigits(visibleProductCount)}</strong> از{' '}
+                <strong className="font-code">{toPersianDigits(filtered.length)}</strong> قلم کالا
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibleProductCount((c) => c + 60)}
+                  className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold"
+                >
+                  نمایش ۶۰ کالای بعدی
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisibleProductCount(filtered.length)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  نمایش همه
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Side Operations Panel: Multi-Unit Stocktaking, Warehouse Transfer & Kardex */}
@@ -1745,7 +1829,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
                     </p>
                   ) : (
                     <div className="divide-y divide-slate-100 dark:divide-slate-800 border-t border-slate-100 dark:border-slate-800">
-                      {kardexRows.map((kr, idx) => (
+                      {kardexRows.slice(0, visibleKardexCount).map((kr, idx) => (
                         <div
                           key={idx}
                           className="py-2.5 text-xs flex items-center justify-between gap-2"
@@ -1777,6 +1861,20 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
                           </div>
                         </div>
                       ))}
+                      {kardexRows.length > visibleKardexCount && (
+                        <div className="pt-2.5 flex items-center justify-between gap-2 text-[11px]">
+                          <span className="text-slate-500">
+                            {toPersianDigits(visibleKardexCount)} از {toPersianDigits(kardexRows.length)} ردیف کاردکس
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setVisibleKardexCount((c) => c + 60)}
+                            className="px-2.5 py-1 rounded-md bg-teal-700 hover:bg-teal-800 text-white font-semibold"
+                          >
+                            بارگذاری بیشتر
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

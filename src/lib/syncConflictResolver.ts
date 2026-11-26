@@ -180,12 +180,17 @@ function describeAccountingRecord(
   const id = String(item.id || item.uuid || 'بدون‌شناسه');
 
   if (collection === 'vouchers') {
-    const num = item.number != null ? `#${toPersianDigits(String(item.number))}` : id.slice(0, 8);
+    const rawNum = item.voucherNumber ?? item.number;
+    const num = rawNum != null ? `#${toPersianDigits(String(rawNum))}` : id.slice(0, 8);
     const desc = typeof item.description === 'string' && item.description.trim()
       ? item.description.trim().slice(0, 42)
       : 'سند حسابداری';
     const statusLabel =
-      item.status === 'final' ? 'قطعی' : item.status === 'draft' ? 'موقت' : String(item.status || 'ثبت‌شده');
+      item.status === 'permanent' || item.status === 'final'
+        ? 'قطعی'
+        : item.status === 'draft'
+          ? 'موقت'
+          : String(item.status || 'ثبت‌شده');
     const lines = Array.isArray(item.lines) ? item.lines : [];
     const totalDebit = lines.reduce((sum, ln) => {
       if (ln && typeof ln === 'object') {
@@ -200,15 +205,21 @@ function describeAccountingRecord(
   }
 
   if (collection === 'invoices') {
-    const num = item.number != null ? `#${toPersianDigits(String(item.number))}` : id.slice(0, 8);
+    const rawNum = item.invoiceNumber ?? item.number;
+    const num = rawNum != null ? `#${toPersianDigits(String(rawNum))}` : id.slice(0, 8);
+    const invType = item.invoiceType ?? item.type;
     const kind =
-      item.type === 'sale'
+      invType === 'sale'
         ? 'فروش'
-        : item.type === 'purchase'
+        : invType === 'purchase'
           ? 'خرید'
-          : item.type === 'proforma'
+          : invType === 'proforma'
             ? 'پیش‌فاکتور'
-            : 'فاکتور';
+            : invType === 'sale_return'
+              ? 'برگشت از فروش'
+              : invType === 'purchase_return'
+                ? 'برگشت از خرید'
+                : 'فاکتور';
     const partyName = typeof item.partyName === 'string' ? item.partyName.trim() : '';
     const total = item.grandTotal ?? item.totalAmount ?? item.netTotal;
     return {
@@ -230,7 +241,7 @@ function describeAccountingRecord(
   if (collection === 'products') {
     const name = typeof item.name === 'string' ? item.name.trim() : id;
     const stock = item.stock ?? item.quantity ?? 0;
-    const price = item.salePrice ?? item.unitPrice ?? 0;
+    const price = item.sellPrice ?? item.salePrice ?? item.unitPrice ?? 0;
     return {
       title: `کالا: ${name.slice(0, 38)}`,
       summary: `موجودی ${toPersianDigits(String(stock))} · قیمت ${formatMoneyMini(price)}`,

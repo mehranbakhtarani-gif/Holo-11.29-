@@ -104,6 +104,57 @@ export const RBAC_ROLE_PRESETS: Record<RbacRoleKey, RbacPermissions> = {
   },
 };
 
+export const RBAC_PERMISSION_LABELS: Record<keyof RbacPermissions, string> = {
+  canCreateVoucher: 'ثبت و ویرایش سند حسابداری',
+  canFinalizeVoucher: 'قطعی‌سازی (دائم کردن) اسناد',
+  canIssueInvoice: 'صدور، تبدیل و ابطال فاکتور',
+  canEditInventory: 'مدیریت انبار، کالا و انبارگردانی',
+  canManageTreasury: 'مدیریت خزانه‌داری و چک صیادی',
+  canManageCurrencies: 'مدیریت ارزها و نرخ برابری',
+  canManageSettings: 'تغییر تنظیمات شرکتی، سال مالی و کاربران',
+  canDeleteRecords: 'حذف رکوردها و اسناد موقت',
+};
+
+/**
+ * Pure RBAC enforcement guard used by AccountingContext mutations and audited in security tests.
+ * Ensures inactive operators, read-only auditors, and under-privileged roles cannot invoke protected writes.
+ */
+export function checkOperatorPermission(
+  operator:
+    | {
+        fullName?: string;
+        active?: boolean;
+        role?: RbacRoleKey;
+        permissions?: Partial<RbacPermissions>;
+      }
+    | null
+    | undefined,
+  permission: keyof RbacPermissions
+): { allowed: boolean; reason?: string } {
+  if (!operator) {
+    return { allowed: false, reason: 'اپراتور فعال شناسایی نشد؛ دسترسی انجام عملیات مسدود شد.' };
+  }
+  if (operator.active === false) {
+    return {
+      allowed: false,
+      reason: `حساب کاربری «${operator.fullName || 'اپراتور'}» غیرفعال است و اجازه تغییر اطلاعات مالی را ندارد.`,
+    };
+  }
+  if (operator.role === 'auditor_readonly') {
+    return {
+      allowed: false,
+      reason: `نقش «حسابرس (فقط مشاهده)» مجاز به «${RBAC_PERMISSION_LABELS[permission]}» نیست.`,
+    };
+  }
+  if (!operator.permissions || operator.permissions[permission] !== true) {
+    return {
+      allowed: false,
+      reason: `عدم دسترسی (RBAC): اپراتور «${operator.fullName || 'فعلی'}» مجوز «${RBAC_PERMISSION_LABELS[permission]}» ندارد.`,
+    };
+  }
+  return { allowed: true };
+}
+
 /**
  * Exact integer Rial Landed Cost allocation across yarn import items by weight (kg) or foreign value.
  * Guarantees sum(item.allocatedLandedCostIrr) === totalLandedCostsIrr with zero rounding drift.

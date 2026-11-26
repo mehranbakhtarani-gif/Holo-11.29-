@@ -27,32 +27,87 @@ interface LiveFxResponse {
 }
 
 const DISPLAY_ORDER: ('USD' | 'CNY' | 'AED' | 'EUR')[] = ['USD', 'CNY', 'AED', 'EUR'];
+const CACHED_FX_STORAGE_KEY = 'holoo_apex_cached_live_fx_v1';
+
+interface CachedLiveFxPayload extends LiveFxResponse {
+  savedShamsiDate?: string;
+}
+
+function loadCachedFx(): CachedLiveFxPayload | null {
+  try {
+    const raw = localStorage.getItem(CACHED_FX_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedLiveFxPayload;
+    return Array.isArray(parsed?.items) && parsed.items.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedFx(payload: LiveFxResponse): CachedLiveFxPayload {
+  const enriched: CachedLiveFxPayload = {
+    ...payload,
+    savedShamsiDate: getTodayShamsi(),
+  };
+  try {
+    localStorage.setItem(CACHED_FX_STORAGE_KEY, JSON.stringify(enriched));
+  } catch {
+    // ignore storage quota issue
+  }
+  return enriched;
+}
 
 export const LiveFxTickerCard: React.FC<{
   onNavigate: (mod: ActiveModule, intent?: string, subKey?: string) => void;
 }> = ({ onNavigate }) => {
   const { profile, upsertExchangeRate, showToast, logActivity } = useAccounting();
-  const [data, setData] = useState<LiveFxResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<CachedLiveFxPayload | null>(() => loadCachedFx());
+  const [loading, setLoading] = useState(() => !loadCachedFx());
   const [refreshing, setRefreshing] = useState(false);
   const [syncingToErp, setSyncingToErp] = useState(false);
+  const [isOfflineFallback, setIsOfflineFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchRates = useCallback(async (force = false) => {
+    const cached = loadCachedFx();
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (cached) {
+        setData(cached);
+        setIsOfflineFallback(true);
+        setError(null);
+      } else {
+        setIsOfflineFallback(true);
+        setError('در حالت آفلاین هستید؛ نرخ ذخیره\u200cشده قبلی موجود نیست.');
+      }
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
       if (force) setRefreshing(true);
-      else setLoading(true);
+      else if (!cached) setLoading(true);
       setError(null);
       const res = await fetch(force ? '/api/live-fx?refresh=1' : '/api/live-fx');
       if (!res.ok) throw new Error('دریافت نرخ زنده ناموفق بود.');
       const json = (await res.json()) as LiveFxResponse;
       if (Array.isArray(json.items) && json.items.length > 0) {
-        setData(json);
+        setData(saveCachedFx(json));
+        setIsOfflineFallback(false);
+      } else if (cached) {
+        setData(cached);
+        setIsOfflineFallback(true);
       } else {
-        setError('نرخ لحظه‌ای از منبع دریافت نشد.');
+        setError('نرخ لحظه\u200cای از منبع دریافت نشد.');
       }
     } catch {
-      setError('اتصال به سرور نرخ زنده ارز برقرار نشد.');
+      if (cached) {
+        setData(cached);
+        setIsOfflineFallback(true);
+        setError(null);
+      } else {
+        setError('اتصال به سرور نرخ زنده ارز برقرار نشد.');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -131,6 +186,14 @@ export const LiveFxTickerCard: React.FC<{
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
             <span>{data?.source || 'بازار آزاد تهران (همگام با chand.app)'}</span>
+            {isOfflineFallback && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-semibold text-amber-700 dark:text-amber-400">
+                  حالت آفلاین — آخرین نرخ معتبر{data?.savedShamsiDate ? ` (${toPersianDigits(data.savedShamsiDate)})` : ''}
+                </span>
+              </>
+            )}
             {fetchedTimeLabel && (
               <>
                 <span aria-hidden="true">·</span>

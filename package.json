@@ -11,13 +11,14 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "lint:rules": "eslint firestore.rules",
-    "test": "tsx tests/accounting-security-recovery.test.ts && tsx tests/erp-integrity-audit.test.ts && tsx tests/independent-supabase-pwa.test.ts && tsx tests/local-mesh-lww-outbox.test.ts && tsx tests/sync-conflict-resolution.test.ts && tsx tests/money-input-formatting.test.ts && tsx tests/lifecycle-audit-and-offline-ai.test.ts && tsx tests/report-pdf-print-columns.test.ts && tsx tests/billion-upgrades.test.ts && tsx tests/fuzzy-search-and-audit.test.ts"
+    "test": "tsx tests/accounting-security-recovery.test.ts && tsx tests/erp-integrity-audit.test.ts && tsx tests/independent-supabase-pwa.test.ts && tsx tests/local-mesh-lww-outbox.test.ts && tsx tests/sync-conflict-resolution.test.ts && tsx tests/money-input-formatting.test.ts && tsx tests/lifecycle-audit-and-offline-ai.test.ts && tsx tests/report-pdf-print-columns.test.ts && tsx tests/billion-upgrades.test.ts && tsx tests/fuzzy-search-and-audit.test.ts && tsx tests/pending-approvals-summary.test.ts && tsx tests/smart-intelligence-upgrades.test.ts && tsx tests/qa-stress-security-inventory.test.ts && tsx tests/enterprise-mesh-atomicity-audit.test.ts && tsx tests/offline-first-pwa-25-scenarios.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@fontsource/vazirmatn": "^5.3.0",
     "@google/genai": "^3.6.1",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",

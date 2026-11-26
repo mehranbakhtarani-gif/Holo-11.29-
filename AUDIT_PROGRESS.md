@@ -1,0 +1,73 @@
+# گزارش ممیزی جامع مهندسی، امنیت و تضمین کیفیت — هلو شرکتی Apex
+
+**تاریخ به‌روزرسانی:** ۱۴۰۵/۰۹/۰۵ (2026-11-26)  
+**وضعیت کلی پروژه:** تمام ۱۴ مجموعه تست خودکار (14/14)، قوانین Firestore (`eslint` + Deploy)، بررسی تایپ (`tsc --noEmit`) و بیلد تولیدی PWA با موفقیت کامل انجام شد.
+
+---
+
+## ۱. جدول وضعیت مراحل ۲۰گانه ممیزی
+
+| مرحله | حوزه ممیزی | وضعیت | شواهد و آزمون‌های تأییدشده |
+| --- | --- | --- | --- |
+| ۱ | شناسایی معماری مخزن، مسیرهای داده و وابستگی‌ها | تکمیل و تأییدشده | بررسی کل درخت `src/`، `server.ts`، `firestore.rules`، `vite.config.ts` و ۱۴ مجموعه تست |
+| ۲ | صحت هسته حسابداری، تراز دوطرفه و قفل سال مالی | تکمیل و تأییدشده | `tests/erp-integrity-audit.test.ts` (15/15)، `tests/accounting-security-recovery.test.ts` |
+| ۳ | دقت ریالی BigInt و محاسبات مالیات ۱۰٪ ارزش افزوده | تکمیل و تأییدشده | `tests/enterprise-mesh-atomicity-audit.test.ts` (تست ۱)، `tests/qa-stress-security-inventory.test.ts` (500/500 جمع دقیق بدون خطا) |
+| ۴ | انبارداری (FIFO / میانگین موزون)، انبارگردانی، پیش‌فاکتور و کاردکس | تکمیل و تأییدشده | رفع باگ `AUD-004` در `accountingEngine.ts`؛ `tests/lifecycle-audit-and-offline-ai.test.ts` (5/5)؛ مغایرت ۰ ریال بین کل `10501` و معین انبار |
+| ۵ | اتمیک بودن تراکنش‌های ابری و محلی | تکمیل و تأییدشده | رفع باگ `AUD-002` در `AccountingContext.tsx` (تبدیل ۴ عملیات حساس به `runTransaction` / `writeBatch` و تراکنش اتمیک IndexedDB) |
+| ۶ | ممیزی، لینت و استقرار قوانین امنیتی Firestore | تکمیل و تأییدشده | رفع باگ `AUD-001` در `firestore.rules`؛ `npx eslint firestore.rules` (0 خطا) و استقرار موفق با `DeployRules` |
+| ۷ | کنترل دسترسی مبتنی بر نقش (RBAC) در سطح Context | تکمیل و تأییدشده | اعمال `assertPermission(...)` بر تمام عملیات نوشتن مالی؛ `tests/qa-stress-security-inventory.test.ts` (۶ نقش + کاربر غیرفعال) |
+| ۸ | امنیت رمزنگاری همگام‌سازی همتابه‌همتا (P2P Mesh) | تکمیل و تأییدشده | رفع باگ `AUD-003` در `p2pMeshSync.ts` (Nonce ۱۲۸ بیتی، پنجره زمانی ±۵ دقیقه، کش ضدتکرار محدود ۲۰۴۸ تایی، MAC ۲۵۶ بیتی دوکلیدی، سقف ۱۶ مگابایت) |
+| ۹ | صف همگام‌سازی آفلاین، `syncInbox`، بک‌آف نمایی و حل تعارض | تکمیل و تأییدشده | رفع باگ `AUD-005` و `AUD-008` در `syncConflictResolver.ts` و `operationalDb.ts`؛ `tests/sync-conflict-resolution.test.ts` (4/4) |
+| ۱۰ | شبیه‌سازی همگرایی ۳ دستگاه آفلاین (لپ‌تاپ + ۲ گوشی) | تکمیل و تأییدشده | `tests/enterprise-mesh-atomicity-audit.test.ts` (تست ۵) و `tests/local-mesh-lww-outbox.test.ts` (9/9) |
+| ۱۱ | پشتیبان‌گیری آفلاین رمزنگاری‌شده (AES-256-GCM + SHA-256) | تکمیل و تأییدشده | پیاده‌سازی در `src/lib/offlineFirstCore.ts`؛ تست رمزگشایی، رمز اشتباه، دستکاری ۱ بایتی، مغایرت SHA-256 و نسخه ناسازگار (تست ۹) |
+| ۱۲ | حالت‌های کاری (`local` / `online` / `hybrid`)، احراز محلی PBKDF2 و ایزوله‌سازی فضا | تکمیل و تأییدشده | `src/lib/offlineFirstCore.ts`؛ تست‌های ۱۰ و ۱۱ در `enterprise-mesh-atomicity-audit.test.ts` |
+| ۱۳ | پایش سهمیه حافظه و مهاجرت غیرمخرب IndexedDB نسخه ۲ | تکمیل و تأییدشده | ارتقای `OP_DB_VERSION = 2` در `operationalDb.ts` با حفظ داده‌های نسخه ۱، ایندکس‌های ثانویه و `evaluateStorageHealthSnapshot` (تست ۷ و ۱۲) |
+| ۱۴ | امنیت ورودی/خروجی (اکسل، HTML/XSS گزارش و فونت آفلاین) | تکمیل و تأییدشده | سقف ۱۰ مگابایت/۲۵۰۰۰ ردیف و جلوگیری از آلودگی پروتوتایپ در `universalExcelImport.ts`؛ گارد `navigator.onLine` برای فونت گوگل (`AUD-007`) |
+| ۱۵ | امنیت بک‌اند Express، کوکی نشست و محافظت Login-CSRF | تکمیل و تأییدشده | بررسی `server.ts` و `tests/independent-supabase-pwa.test.ts` (4/4) |
+| ۱۶ | بهینه‌سازی پرفورمنس و تست استرس حجم بالا | تکمیل و تأییدشده | تراز آزمایشی ۲۵,۰۰۱ سند در `11.2 ms` (۰ ریال خطا)، ممیزی کامل `240.9 ms`، صفحه‌بندی ۶۰تایی در جداول اصلی |
+| ۱۷ | یکپارچگی میان‌ماژولی (فروش، انبار، خزانه، پیمانکاری، دفتر کل) | تکمیل و تأییدشده | تطابق دقیق `3,635,298,435` ریال (FIFO) و `3,564,524,365` ریال (میانگین) با کل `10501` و ترازنامه با ۰ ریال اختلاف |
+| ۱۸ | آمادگی PWA مستقل و دارایی‌های نصب اندروید | تأیید خودکار (نیازمند تست روی گوشی فیزیکی) | آیکون‌های maskable/192/512، متاتگ‌های `index.html`، مانیفست `standalone` و Service Worker Workbox تأیید شدند |
+| ۱۹ | اجرای کامل مجموعه رگرسیون و بیلد نهایی | تکمیل و تأییدشده | ۱۴/۱۴ مجموعه تست موفق، `tsc --noEmit` بدون خطا، بیلد Vite + Workbox موفق |
+| ۲۰ | ارزیابی صادقانه آمادگی انتشار و محدودیت‌های محیطی | تکمیل و مستندشده | بخش ۴ این گزارش محدودیت‌های آزمایش سخت‌افزاری را صریحاً تفکیک کرده است |
+
+---
+
+## ۲. فهرست یافته‌های واقعی شناسایی و اصلاح‌شده
+
+| شناسه | شدت | فایل(ها) | شرح ریشه‌ای ایراد | اصلاح اعمال‌شده | تست رگرسیون |
+| --- | --- | --- | --- | --- | --- |
+| `AUD-001` | بحرانی | `firestore.rules` | فیلدهای `costLayers`، `inventoryValueIrr`، `costingMethod` در کالاها، `fiscalYear`/`reversalOfVoucherId`/`integrityHash` در اسناد و `date` در تبدیل پیش‌فاکتور در لیست مجاز قوانین نبودند و باعث خطای `PERMISSION_DENIED` می‌شدند. | افزودن فیلدها با اعتبارسنجی دقیق نوع و سقف اندازه (`costLayers.size() <= 200`)، لینت و استقرار مستقیم قوانین. | `npx eslint firestore.rules` + تست ۷ |
+| `AUD-002` | بحرانی | `src/context/AccountingContext.tsx` | عملیات `adjustProductStockWithVoucher`، `bulkStocktakingWithVoucher`، `cancelInvoice` و `convertProformaToSale` نوشتن کالا، سند، چک و فاکتور را در تماس‌های جداگانه انجام می‌دادند و فیلد `id` چک به Firestore ارسال می‌شد. | تبدیل هر ۴ عملیات به تراکنش واحد اتمیک Firestore (`runTransaction` / `writeBatch` آفلاین) + اعتبارسنجی کامل پیش از هر نوشتن + حذف `id` از بدنه سند چک + ثبت اتمیک محلی. | تست‌های ۱ و ۲ + `lifecycle-audit-and-offline-ai.test.ts` |
+| `AUD-003` | بحرانی | `src/lib/p2pMeshSync.ts` | پیام‌های P2P Mesh فقط یک `authTag` ایستا ۶۴ بیتی داشتند و فاقد Nonce، پنجره زمانی، کش ضدتکرار و MAC برای محتوای پیام و ساعت برداری بودند. | افزودن Nonce ۱۲۸ بیتی، پنجره زمانی ±۵ دقیقه (`MAX_MESH_CLOCK_SKEW_MS`)، `MeshReplayGuard` با سقف حافظه ۲۰۴۸، MAC دوکلیدی ۲۵۶ بیتی و سقف ۱۶ مگابایت + ثبت رویداد `auth_rejected` و قطع اتصال. | تست‌های ۳، ۴ و ۵ در `enterprise-mesh-atomicity-audit.test.ts` |
+| `AUD-004` | بالا | `src/lib/accountingEngine.ts` | تابع `planStockAdjustmentWithCostLayers` موجودی شمارش‌شده منفی (مثلاً `-5`) را بی‌سروصدا به `0` تبدیل می‌کرد که خطر ثبت کسری کل موجودی انبار را داشت. | افزودن اعتبارسنجی صریح `Number.isFinite` و پرتاب خطای فارسی هنگام ورود مقدار منفی بدون مجوز موجودی منفی. | تست ۲ در `enterprise-mesh-atomicity-audit.test.ts` |
+| `AUD-005` | متوسط | `src/lib/syncConflictResolver.ts` | نمایشگر تعارض فیلدهای قدیمی (`number`, `final`, `type`, `salePrice`) را می‌خواند و در اسناد واقعی هلو (`voucherNumber`, `permanent`, `invoiceNumber`, `invoiceType`, `sellPrice`) اطلاعات ناقص نشان می‌داد. | اصلاح خوانش با اولویت فیلدهای اصلی هلو Apex و حفظ سازگاری با فرمت قدیمی. | تست ۶ + `sync-conflict-resolution.test.ts` |
+| `AUD-006` | متوسط | `src/lib/offlineFirstCore.ts`, `src/hooks/useDualCloudSync.ts`, `src/hooks/useLocalFirstMeshSync.ts` | تشخیص تغییر اسنپ‌شات از هش ۳۲ بیتی FNV-1a با احتمال برخورد بالا استفاده می‌کرد. | ارتقا به هش قطعی ۲۵۶ بیتی (`computeSnapshotDigest256Sync`) و SHA-256 استاندارد (`computeSnapshotSha256Hex`) با حذف زمان‌های ناپایدار. | تست ۸ در `enterprise-mesh-atomicity-audit.test.ts` |
+| `AUD-007` | متوسط | `src/lib/accountingReportExport.ts` | خروجی چاپ HTML گزارش‌ها در حالت آفلاین تگ `<link>` فونت گوگل را بدون بررسی آنلاین بودن تزریق می‌کرد. | محدودکردن تزریق لینک فونت خارجی به `navigator.onLine` برای جلوگیری از تاخیر چاپ در حالت قطع اینترنت. | تست ۷ در `enterprise-mesh-atomicity-audit.test.ts` |
+| `AUD-008` | متوسط | `src/lib/operationalDb.ts` | پایگاه‌داده IndexedDB نسخه ۱ فاقد مخزن یکتا‌سازی `syncInbox`، ایندکس‌های ثانویه جستجو و تراکنش اتمیک انبارگردانی بود. | مهاجرت غیرمخرب به نسخه ۲ (`OP_DB_VERSION = 2`) با حفظ تمام رکوردهای نسخه ۱، افزودن `syncInbox`، ایندکس‌های `date`/`status`/`warehouse`/`sku`/`dueDate`/`nextRetryAt` و `commitStockAdjustmentOperationalTx`. | تست ۷ در `enterprise-mesh-atomicity-audit.test.ts` |
+
+---
+
+## ۳. نتایج اجرای کل مجموعه‌های تست خودکار (۱۴ از ۱۴ موفق)
+
+تمامی مجموعه‌های زیر در محیط Node.js (`tsx`) بدون هیچ خطا یا تست غیرفعال اجرا شدند:
+1. `tests/accounting-security-recovery.test.ts` — موفق
+2. `tests/billion-upgrades.test.ts` — موفق
+3. `tests/enterprise-mesh-atomicity-audit.test.ts` — **12/12 موفق**
+4. `tests/erp-integrity-audit.test.ts` — **15/15 موفق**
+5. `tests/fuzzy-search-and-audit.test.ts` — **18/18 موفق**
+6. `tests/independent-supabase-pwa.test.ts` — **4/4 موفق**
+7. `tests/lifecycle-audit-and-offline-ai.test.ts` — **5/5 موفق**
+8. `tests/local-mesh-lww-outbox.test.ts` — **9/9 موفق**
+9. `tests/money-input-formatting.test.ts` — **6/6 موفق**
+10. `tests/pending-approvals-summary.test.ts` — **3/3 موفق**
+11. `tests/qa-stress-security-inventory.test.ts` — **12/12 موفق** (شامل بنچمارک ۲۵,۰۰۱ سند)
+12. `tests/report-pdf-print-columns.test.ts` — **4/4 موفق**
+13. `tests/smart-intelligence-upgrades.test.ts` — **5/5 موفق**
+14. `tests/sync-conflict-resolution.test.ts` — **4/4 موفق**
+
+---
+
+## ۴. محدودیت‌های واقعی محیط اجرا و مرز صداقت فنی
+
+- **موارد تأییدشده در این محیط:** صحت محاسبات مالی و انبارداری، اتمیک بودن منطق تراکنش‌ها، رمزنگاری P2P Mesh و AES-256-GCM و PBKDF2-SHA-256، لینت و استقرار قوانین واقعی Firestore، کامپایل TypeScript (`tsc --noEmit`) و بیلد تولیدی Vite + Workbox Service Worker.
+- **موارد خارج از دسترس محیط کانتینر لینوکس (نیازمند آزمون میدانی روی سخت‌افزار واقعی):** نصب PWA روی گوشی اندروید فیزیکی، خاموش/روشن کردن واقعی گوشی در حالت Airplane Mode، بررسی رفتار کش Service Worker در Chrome Android، و تست عبور WebRTC P2P از NAT شبکه‌های مخابراتی واقعی. این موارد در گزارش `OFFLINE_PWA_AUDIT.md` به‌صورت شفاف تفکیک شده‌اند.

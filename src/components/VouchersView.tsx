@@ -127,6 +127,11 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
   }, [showForm, editingVoucherId, currentVoucherLockKey, setEditingLock, vouchers]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'permanent'>('all');
+  const [visibleVoucherCount, setVisibleVoucherCount] = useState(60);
+
+  useEffect(() => {
+    setVisibleVoucherCount(60);
+  }, [search, statusFilter]);
 
   // Holoo Apex 9.6 Voucher Composer State
   const [date, setDate] = useState(getTodayShamsi());
@@ -1505,7 +1510,7 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
             </div>
 
             <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-[540px] overflow-y-auto">
-              {sortedVouchers.map((v) => {
+              {sortedVouchers.slice(0, visibleVoucherCount).map((v) => {
                 const active = selectedVoucher?.id === v.id;
                 return (
                   <button
@@ -1558,6 +1563,21 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
                   </button>
                 );
               })}
+              {sortedVouchers.length > visibleVoucherCount && (
+                <div className="p-3 bg-slate-50/80 dark:bg-slate-950/60 flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-500">
+                    نمایش <strong className="font-code">{toPersianDigits(visibleVoucherCount)}</strong> از{' '}
+                    <strong className="font-code">{toPersianDigits(sortedVouchers.length)}</strong> سند
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleVoucherCount((c) => c + 60)}
+                    className="px-3 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold"
+                  >
+                    نمایش ۶۰ سند بعدی
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

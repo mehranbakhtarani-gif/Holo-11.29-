@@ -663,7 +663,7 @@ export function buildStandardAccountingReportBodyHtml(
           ${subtitleText ? `<p class="acc-report-subtitle">${escapeHtml(subtitleText)}</p>` : ''}
         </div>
         <div class="acc-stamp-box">
-          <div>تاریخ تهیه: <strong>${printDate}</strong></div>
+          <div>تاریخ تهیه: <strong>${escapeHtml(printDate)}</strong></div>
           <div>سال مالی: <strong>${escapeHtml(toPersianDigits(profile.fiscalYear))}</strong></div>
           <div>ستون‌ها: <strong>${escapeHtml(toPersianDigits(visibleColumns.length))} از ${escapeHtml(toPersianDigits(spec.columns.length))}</strong></div>
         </div>
@@ -707,17 +707,22 @@ export function buildStandardAccountingReportHtml(
   const styles = getPrintDocumentStyles(options);
   const bodyHtml = buildStandardAccountingReportBodyHtml(spec, visibleColumns, profile, options);
 
+  const isOnlineRuntime = typeof navigator === 'undefined' ? true : navigator.onLine;
+  const externalFontLinks = isOnlineRuntime
+    ? `    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Vazirmatn:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />`
+    : '';
+
   return `<!doctype html>
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="UTF-8" />
     <title>${escapeHtml(spec.title)} — ${escapeHtml(profile.companyName)}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Vazirmatn:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+${externalFontLinks}
     <style>${styles}</style>
   </head>
   <body>
