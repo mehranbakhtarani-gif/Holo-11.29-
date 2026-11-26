@@ -83,7 +83,25 @@ import { QuickActionsAndAlertsBentoCard } from './dashboard/QuickActionsAndAlert
 import { SortableDashboardCard } from './dashboard/SortableDashboardCard';
 import { FinancialVoiceSearchPanel } from './dashboard/FinancialVoiceSearchPanel';
 import { SmartDashboardSearchBox } from './SmartGlobalSearch';
-import { computePendingApprovalsSummary } from '../lib/pendingApprovalsSummary';
+import {
+  buildPendingApprovalItems,
+  computePendingApprovalsSummary,
+} from '../lib/pendingApprovalsSummary';
+import {
+  auditPendingApprovalItems,
+  buildDebtorReminderMessages,
+  computeExecutiveBriefing,
+  evaluateSmartRules,
+  loadSmartRules,
+  saveSmartRules,
+  type SmartAutomationRule,
+  type SmartRuleTrigger,
+} from '../lib/smartAutomationEngine';
+import { SmartVisionScannerModal } from './dashboard/SmartVisionScannerModal';
+import {
+  ExecutiveBriefingStrip,
+  SmartIntelligenceHubPanel,
+} from './dashboard/SmartIntelligenceHubPanel';
 import {
   DashboardCardExpandModal,
   type DashboardExpandableCardId,
@@ -121,7 +139,7 @@ const INVOICE_TYPE_SEARCH_LABELS: Record<string, string> = {
   waste: 'ضایعات کسری انبار',
 };
 
-type DashboardWorkspaceTab = 'executive' | 'analytics' | 'operations' | 'sync_health';
+type DashboardWorkspaceTab = 'executive' | 'intelligence' | 'analytics' | 'operations' | 'sync_health';
 
 const WORKSPACE_TABS: {
   id: DashboardWorkspaceTab;
@@ -130,6 +148,7 @@ const WORKSPACE_TABS: {
   icon: React.ComponentType<{ className?: string }>;
 }[] = [
   { id: 'executive', label: 'نمای اجرایی', sublabel: 'اولویت‌های امروز', icon: LayoutDashboard },
+  { id: 'intelligence', label: 'هوشمندی و شبیه‌ساز', sublabel: 'What-If و قوانین خودکار', icon: Sparkles },
   { id: 'analytics', label: 'تحلیل و نمودارها', sublabel: 'نقدینگی و سود و زیان', icon: BarChart3 },
   { id: 'operations', label: 'عملیات سریع هلو', sublabel: 'فست‌مد و کلاسیک ۹.۶', icon: Zap },
   { id: 'sync_health', label: 'سلامت آفلاین و سینک', sublabel: 'IndexedDB و Supabase', icon: Activity },
@@ -179,6 +198,8 @@ export const DashboardView: React.FC<{
   localMesh?: LocalFirstMeshController;
   onOpenQueueMonitor?: () => void;
   onOpenSystemHealth?: () => void;
+  initialIntent?: string;
+  clearIntent?: () => void;
 }> = ({
   onNavigate,
   onOpenCopilot,
@@ -186,6 +207,8 @@ export const DashboardView: React.FC<{
   localMesh,
   onOpenQueueMonitor,
   onOpenSystemHealth,
+  initialIntent,
+  clearIntent,
 }) => {
   const {
     profile,
@@ -204,6 +227,7 @@ export const DashboardView: React.FC<{
     salesOrders,
     subcontractJobs,
     activeOperator,
+    createVoucher,
     finalizeVoucher,
     finalizeAllDraftVouchers,
     convertProformaToSale,
@@ -230,6 +254,21 @@ export const DashboardView: React.FC<{
   const [isBrowserOnline, setIsBrowserOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
+
+  // Vision OCR Scanner Modal & Smart Automation Rules State
+  const [visionScannerOpen, setVisionScannerOpen] = useState(false);
+  const [smartRules, setSmartRules] = useState<SmartAutomationRule[]>(() => loadSmartRules());
+
+  useEffect(() => {
+    if (!initialIntent) return;
+    if (initialIntent === 'vision-scan') {
+      setVisionScannerOpen(true);
+      clearIntent?.();
+    } else if (initialIntent === 'intelligence' || initialIntent === 'whatif') {
+      setActiveWorkspaceTab('intelligence');
+      clearIntent?.();
+    }
+  }, [initialIntent, clearIntent]);
 
   // Persistent Drag-and-Drop Dashboard Layout State
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayoutConfig>(() =>
@@ -419,6 +458,176 @@ export const DashboardView: React.FC<{
       warehouseSlips,
       pettyCashItems,
     ]
+  );
+
+  const pendingApprovalItems = useMemo(
+    () => buildPendingApprovalItems(pendingApprovalsSummary),
+    [pendingApprovalsSummary]
+  );
+
+  const riskAuditMap = useMemo(
+    () =>
+      auditPendingApprovalItems(pendingApprovalItems, {
+        vouchers,
+        invoices,
+        parties,
+        partyBalances,
+        products,
+      }),
+    [pendingApprovalItems, vouchers, invoices, parties, partyBalances, products]
+  );
+
+  const smartRuleTriggers = useMemo(
+    () =>
+      evaluateSmartRules({
+        rules: smartRules,
+        companyName: profile.companyName,
+        unit,
+        pendingItems: pendingApprovalItems,
+        riskAuditMap,
+        trialBalance,
+        cheques,
+        products,
+        parties,
+        partyBalances,
+      }),
+    [
+      smartRules,
+      profile.companyName,
+      unit,
+      pendingApprovalItems,
+      riskAuditMap,
+      trialBalance,
+      cheques,
+      products,
+      parties,
+      partyBalances,
+    ]
+  );
+
+  const debtorReminders = useMemo(
+    () =>
+      buildDebtorReminderMessages({
+        parties,
+        partyBalances,
+        companyName: profile.companyName,
+        unit,
+        limit: 3,
+      }),
+    [parties, partyBalances, profile.companyName, unit]
+  );
+
+  const executiveBriefing = useMemo(
+    () =>
+      computeExecutiveBriefing({
+        liquidity,
+        liquidityRadar,
+        pendingSummary: pendingApprovalsSummary,
+        riskAuditMap,
+        parties,
+        partyBalances,
+        products,
+        unit,
+      }),
+    [
+      liquidity,
+      liquidityRadar,
+      pendingApprovalsSummary,
+      riskAuditMap,
+      parties,
+      partyBalances,
+      products,
+      unit,
+    ]
+  );
+
+  const handleBatchApproveSafeDrafts = useCallback(
+    async (voucherIds: string[]) => {
+      if (!activeOperator.permissions.canFinalizeVoucher) {
+        showToast('کاربر فعلی مجوز دائم‌سازی سند حسابداری ندارد.', 'warning');
+        return 0;
+      }
+      let approved = 0;
+      for (const vid of voucherIds) {
+        await finalizeVoucher(vid);
+        approved += 1;
+      }
+      if (approved > 0) {
+        showToast(`${toPersianDigits(approved)} سند موقت بدون خطا با موفقیت دائم‌سازی شد.`, 'success');
+      }
+      return approved;
+    },
+    [activeOperator.permissions.canFinalizeVoucher, finalizeVoucher, showToast]
+  );
+
+  const updateSmartRules = useCallback((updater: (prev: SmartAutomationRule[]) => SmartAutomationRule[]) => {
+    setSmartRules((prev) => {
+      const next = updater(prev);
+      saveSmartRules(next);
+      return next;
+    });
+  }, []);
+
+  const handleExecuteSmartTrigger = useCallback(
+    async (trigger: SmartRuleTrigger) => {
+      if (trigger.kind === 'safe_draft_batch_approve' && trigger.payload?.safeDraftVoucherIds) {
+        await handleBatchApproveSafeDrafts(trigger.payload.safeDraftVoucherIds);
+        return;
+      }
+      if (
+        trigger.kind === 'cheque_bank_shortfall' &&
+        trigger.payload?.amountIrr &&
+        trigger.payload.fromAccountCode &&
+        trigger.payload.toAccountCode
+      ) {
+        const today = new Date().toLocaleDateString('fa-IR-u-nu-latn', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        });
+        const created = await createVoucher({
+          date: today,
+          description: `پیش‌نویس هوشمند انتقال وجه جهت پوشش چک‌های پرداختی (${trigger.payload.fromAccountTitle} به ${trigger.payload.toAccountTitle})`,
+          voucherType: 'treasury',
+          status: 'draft',
+          lines: [
+            {
+              accountCode: trigger.payload.toAccountCode,
+              accountTitle: trigger.payload.toAccountTitle || 'حساب بانکی مقصد',
+              description: 'تأمین موجودی بانکی پوشش چک‌های پرداختی نزدیک',
+              debit: Math.round(trigger.payload.amountIrr),
+              credit: 0,
+            },
+            {
+              accountCode: trigger.payload.fromAccountCode,
+              accountTitle: trigger.payload.fromAccountTitle || 'حساب مبدأ دارای مازاد',
+              description: 'انتقال وجه جهت پوشش سررسید چک',
+              debit: 0,
+              credit: Math.round(trigger.payload.amountIrr),
+            },
+          ],
+        });
+        showToast(
+          `پیش‌نویس سند انتقال وجه #${toPersianDigits(created.voucherNumber)} در کارتابل تأیید ثبت شد.`,
+          'success'
+        );
+        setActiveWorkspaceTab('executive');
+        return;
+      }
+      if (trigger.kind === 'over_credit_reminder' && trigger.payload?.reminderText) {
+        try {
+          await navigator.clipboard.writeText(trigger.payload.reminderText);
+          showToast(`پیام یادآوری پرداخت «${trigger.payload.partyName}» کپی شد.`, 'success');
+        } catch {
+          showToast('پیام یادآوری در بخش زیر آماده کپی است.');
+        }
+        return;
+      }
+      if (trigger.targetModule) {
+        onNavigate(trigger.targetModule, trigger.targetIntent);
+      }
+    },
+    [createVoucher, handleBatchApproveSafeDrafts, onNavigate, showToast]
   );
 
   const draftVoucherCount = pendingApprovalsSummary.draftVouchersCount;
@@ -1175,15 +1384,27 @@ export const DashboardView: React.FC<{
             onExpand={(kpiId) => setExpandedCardId(`kpi:${kpiId}`)}
           />
 
-          {/* Zone 1.5: Pending Approval Documents Summary Cards & Interactive One-Click Approval Viewer */}
+          {/* Zone 1.25: Executive Smart Briefing Strip (Top 3 Actionable Priorities + Quick Jumps) */}
+          <ExecutiveBriefingStrip
+            priorities={executiveBriefing}
+            activeTriggersCount={smartRuleTriggers.length}
+            onNavigate={onNavigate}
+            onOpenIntelligenceTab={() => setActiveWorkspaceTab('intelligence')}
+            onOpenVisionScanner={() => setVisionScannerOpen(true)}
+          />
+
+          {/* Zone 1.5: Pending Approval Documents Summary Cards, Pre-Approval Risk Audit & Interactive One-Click Approval Viewer */}
           <PendingApprovalSummaryCards
             summary={pendingApprovalsSummary}
+            riskAuditMap={riskAuditMap}
             unit={unit}
             canFinalizeVoucher={activeOperator.permissions.canFinalizeVoucher}
             canIssueInvoice={activeOperator.permissions.canIssueInvoice}
             canEditInventory={activeOperator.permissions.canEditInventory}
             onFinalizeVoucher={finalizeVoucher}
             onFinalizeAllDraftVouchers={finalizeAllDraftVouchers}
+            onBatchApproveSafeDrafts={handleBatchApproveSafeDrafts}
+            onOpenVisionScanner={() => setVisionScannerOpen(true)}
             onConvertProforma={convertProformaToSale}
             onClearImportDossier={clearImportDossier}
             onInvoiceSalesOrder={invoiceSalesOrder}
@@ -1489,6 +1710,39 @@ export const DashboardView: React.FC<{
         </div>
       )}
 
+      {/* TAB 1.5: SMART INTELLIGENCE HUB (WHAT-IF SIMULATOR + SMART AUTOMATION RULES ENGINE) */}
+      {activeWorkspaceTab === 'intelligence' && (
+        <SmartIntelligenceHubPanel
+          unit={unit}
+          unitLabel={unitLabel}
+          currentLiquidity={liquidity}
+          cheques={cheques}
+          importDossiers={importDossiers}
+          netSales={incomeStatement.netSales}
+          grossProfit={incomeStatement.grossProfit}
+          netProfit={incomeStatement.netProfit}
+          rules={smartRules}
+          triggers={smartRuleTriggers}
+          debtorReminders={debtorReminders}
+          onToggleRule={(ruleId) =>
+            updateSmartRules((prev) =>
+              prev.map((r) => (r.id === ruleId ? { ...r, enabled: !r.enabled } : r))
+            )
+          }
+          onUpdateRuleThreshold={(ruleId, nextThreshold) =>
+            updateSmartRules((prev) =>
+              prev.map((r) => (r.id === ruleId ? { ...r, thresholdValue: nextThreshold } : r))
+            )
+          }
+          onAddCustomRule={(rule) => updateSmartRules((prev) => [...prev, rule])}
+          onDeleteRule={(ruleId) =>
+            updateSmartRules((prev) => prev.filter((r) => r.id !== ruleId))
+          }
+          onExecuteTrigger={handleExecuteSmartTrigger}
+          onOpenVisionScanner={() => setVisionScannerOpen(true)}
+        />
+      )}
+
       {/* TAB 2: FULL ANALYTICS, FX TICKER, 30-DAY RADAR & RECHARTS SUITE */}
       {activeWorkspaceTab === 'analytics' && (
         <AnalyticsSuitePanel
@@ -1597,6 +1851,11 @@ export const DashboardView: React.FC<{
         onClearImportDossier={clearImportDossier}
         onInvoiceSalesOrder={invoiceSalesOrder}
         onNavigate={onNavigate}
+      />
+      {/* Multimodal Vision OCR Scanner Modal */}
+      <SmartVisionScannerModal
+        open={visionScannerOpen}
+        onClose={() => setVisionScannerOpen(false)}
       />
     </div>
   );

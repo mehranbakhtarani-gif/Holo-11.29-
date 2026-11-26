@@ -5,6 +5,7 @@ import http from 'http';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -295,15 +296,289 @@ async function startServer() {
     }
   });
 
-  // ---------------- 100% LOCAL ON-DEVICE AI POLICY ----------------
-  // All AI features run strictly via the embedded Local-SLM inside the client application.
-  // Zero prompts, vouchers, invoices, or images are transmitted to external cloud AI services.
-  app.all('/api/ai/*', (_req: Request, res: Response) => {
-    res.status(410).json({
-      error:
-        'تمامی قابلیت‌های هوش مصنوعی به صورت ۱۰۰٪ محلی توسط موتور بومی Local-SLM داخل برنامه پردازش می‌شوند و هیچ داده‌ای به سرویس‌های ابری خارجی ارسال نمی‌گردد.',
-      mode: 'local_slm_only',
+  // ---------------- SERVER-SIDE GEMINI INTELLIGENCE ENDPOINTS ----------------
+  // Keeps GEMINI_API_KEY strictly on the server. Supports Vision OCR scanning
+  // of receipts/invoices/Sayadi cheques and Actionable Executive Copilot.
+  const ALLOWED_VISION_MIME_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/heic',
+  ]);
+  const MAX_VISION_BASE64_CHARS = 8_000_000; // ~6MB raw image cap
+
+  function getGeminiClient(): GoogleGenAI | null {
+    const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') return null;
+    return new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
+  }
+
+  function mapGeminiError(err: unknown): { status: number; message: string } {
+    const rawMsg = err instanceof Error ? err.message : String(err || '');
+    const lower = rawMsg.toLowerCase();
+    if (lower.includes('api_key') || lower.includes('api key') || lower.includes('permission_denied') || lower.includes('403')) {
+      return {
+        status: 503,
+        message: 'کلید سرویس هوش مصنوعی روی سرور معتبر نیست یا دسترسی آن فعال نشده است. می‌توانید از حالت آفلاین (Local-SLM) استفاده کنید.',
+      };
+    }
+    if (lower.includes('429') || lower.includes('quota') || lower.includes('resource_exhausted')) {
+      return {
+        status: 429,
+        message: 'سهمیه درخواست هوش مصنوعی موقتاً تکمیل شده است. لطفاً کمی بعد دوباره تلاش کنید یا به حالت آفلاین بروید.',
+      };
+    }
+    if (lower.includes('400') || lower.includes('invalid_argument')) {
+      return {
+        status: 400,
+        message: 'فرمت تصویر یا ورودی ارسالی قابل پردازش نیست. لطفاً تصویر واضح‌تری انتخاب کنید.',
+      };
+    }
+    return {
+      status: 502,
+      message: 'ارتباط با سرویس هوش مصنوعی با خطا مواجه شد. لطفاً مجدداً تلاش کنید یا از موتور آفلاین استفاده نمایید.',
+    };
+  }
+
+  app.post('/api/ai/vision-scan', async (req: Request, res: Response) => {
+    const ai = getGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'کلید GEMINI_API_KEY در محیط سرور تنظیم نشده است. برای اسکن تصویری آنلاین، کلید را در Secrets تنظیم کنید یا از اسکن متنی آفلاین استفاده نمایید.',
+        code: 'AI_KEY_MISSING',
+      });
+      return;
+    }
+
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const rawBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.trim() : '';
+    const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim().toLowerCase() : '';
+    const documentHint =
+      typeof body.documentHint === 'string' &&
+      ['auto', 'receipt', 'invoice', 'cheque', 'voucher'].includes(body.documentHint)
+        ? body.documentHint
+        : 'auto';
+
+    if (!ALLOWED_VISION_MIME_TYPES.has(mimeType)) {
+      res.status(400).json({
+        error: 'فرمت تصویر پشتیبانی نمی‌شود. فقط تصاویر JPG، PNG، WEBP یا HEIC مجاز هستند.',
+      });
+      return;
+    }
+
+    const cleanBase64 = rawBase64.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+    if (!cleanBase64 || cleanBase64.length > MAX_VISION_BASE64_CHARS || !/^[A-Za-z0-9+/=\r\n]+$/.test(cleanBase64)) {
+      res.status(400).json({
+        error: 'داده تصویر نامعتبر است یا حجم آن بیش از ۶ مگابایت است.',
+      });
+      return;
+    }
+
+    const accountHints = Array.isArray(body.accountsHint)
+      ? body.accountsHint
+          .slice(0, 30)
+          .map((a) => String(a || '').slice(0, 80))
+          .join(' | ')
+      : '';
+
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: cleanBase64,
+              },
+            },
+            {
+              text: [
+                'این تصویر یک سند مالی ایرانی است (فاکتور خرید/فروش، فیش بانکی/کارتخوان یا چک صیادی).',
+                `راهنمای نوع سند انتخابی کاربر: ${documentHint}.`,
+                accountHints ? `کدهای حساب موجود در سیستم: ${accountHints}` : '',
+                'لطفاً تمامی فیلدها را با دقت استخراج کرده و فقط JSON معتبر مطابق اسکیما برگردان.',
+                'اگر مبلغ به تومان نوشته شده است، حتماً آن را به ریال (ضرب در ۱۰) تبدیل کن و در warnings ذکر کن.',
+                'تاریخ را به فرمت شمسی YYYY/MM/DD برگردان. اگر کد صیادی ۱۶ رقمی روی چک وجود دارد دقیقاً استخراج کن.',
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            },
+          ],
+        },
+        config: {
+          systemInstruction:
+            'تو یک حسابدار خبره ایرانی و متخصص OCR اسناد مالی (چک صیادی، فیش بانکی، فاکتور رسمی مودیان) هستی. اعداد فارسی و لاتین را دقیق بخوان، مبالغ را به ریال (عدد صحیح) نرمال کن و کدینگ پیشنهادی حسابداری ایران (مانند 10201 بانک، 10301 مشتریان، 10501 موجودی کالا، 30101 حساب‌های پرداختنی، 60101 هزینه‌های عمومی) ارائه بده.',
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              documentType: {
+                type: Type.STRING,
+                description: 'One of: receipt, invoice, cheque, voucher',
+              },
+              confidencePct: { type: Type.NUMBER },
+              dateShamsi: { type: Type.STRING },
+              dueDateShamsi: { type: Type.STRING },
+              amountIrr: { type: Type.NUMBER },
+              partyName: { type: Type.STRING },
+              bankName: { type: Type.STRING },
+              sayadiId: { type: Type.STRING },
+              serial: { type: Type.STRING },
+              chequeDirection: {
+                type: Type.STRING,
+                description: 'receivable or payable',
+              },
+              invoiceType: {
+                type: Type.STRING,
+                description: 'purchase or sale or proforma',
+              },
+              description: { type: Type.STRING },
+              suggestedDebitAccountCode: { type: Type.STRING },
+              suggestedCreditAccountCode: { type: Type.STRING },
+              items: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    quantity: { type: Type.NUMBER },
+                    unitPriceIrr: { type: Type.NUMBER },
+                  },
+                },
+              },
+              warnings: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+            },
+            required: ['documentType', 'amountIrr', 'description'],
+          },
+        },
+      });
+
+      const rawText = response.text || '';
+      const parsed = JSON.parse(rawText) as Record<string, unknown>;
+      res.json({
+        ok: true,
+        model: 'gemini-4-hydrogen',
+        extracted: parsed,
+      });
+    } catch (err) {
+      const mapped = mapGeminiError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.post('/api/ai/copilot', async (req: Request, res: Response) => {
+    const ai = getGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'کلید GEMINI_API_KEY در محیط سرور تنظیم نشده است. می‌توانید در بالای پنجره به «موتور بومی (آفلاین)» سوئیچ کنید.',
+        code: 'AI_KEY_MISSING',
+      });
+      return;
+    }
+
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (!message || message.length > 4000) {
+      res.status(400).json({ error: 'متن پرسش نامعتبر یا بیش از حد طولانی است.' });
+      return;
+    }
+
+    const rawHistory = Array.isArray(body.history) ? body.history.slice(-8) : [];
+    const safeHistory = rawHistory
+      .filter(
+        (m): m is { role: string; text: string } =>
+          Boolean(m && typeof m === 'object' && typeof (m as { text?: unknown }).text === 'string')
+      )
+      .map((m) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        text: String(m.text).slice(0, 1200),
+      }));
+
+    const snapshotJson = JSON.stringify(body.snapshot ?? {}).slice(0, 28_000);
+
+    try {
+      const promptParts = [
+        'خلاصه زنده دفاتر مالی و کارتابل شرکت (JSON):',
+        snapshotJson,
+        safeHistory.length > 0
+          ? `تاریخچه کوتاه گفتگو:\n${safeHistory.map((h) => `${h.role === 'user' ? 'کاربر' : 'دستیار'}: ${h.text}`).join('\n')}`
+          : '',
+        `درخواست فعلی کاربر:\n${message}`,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: promptParts,
+        config: {
+          systemInstruction: [
+            'تو مدیر مالی و دستیار اجرایی هوشمند نرم‌افزار حسابداری «هلو شرکتی Apex» هستی.',
+            'به زبان فارسی شفاف، حرفه‌ای، مختصر و مستند به اعداد دقیق موجود در JSON پاسخ بده.',
+            'اگر کاربر درخواست اقدام اجرایی کرد (مثل بررسی و دائم‌سازی اسناد موقت سالم، آماده‌سازی پیام یادآوری پرداخت برای بدهکاران، اسکن سند یا شبیه‌سازی چه می‌شود اگر)، حتماً در آرایه actions اکشن‌های اجرایی مناسب را برگردان.',
+            'انواع مجاز type در actions دقیقاً یکی از این موارد است:',
+            '- finalize_clean_drafts (بررسی و دائم‌سازی یکجای اسناد موقت بدون خطا)',
+            '- generate_debtor_reminders (تولید متن آماده یادآوری پرداخت برای ۳ مشتری با بیشترین بدهی)',
+            '- open_vision_scanner (باز کردن اسکنر هوشمند OCR سند)',
+            '- open_whatif_simulator (باز کردن شبیه‌ساز چه می‌شود اگر و موتور قوانین)',
+            '- navigate (هدایت به یکی از ماژول‌های vouchers, invoices, treasury, inventory, parties, reports, audit, commercial, finance-ops)',
+          ].join('\n'),
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              reply: { type: Type.STRING },
+              actions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    type: { type: Type.STRING },
+                    label: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    module: { type: Type.STRING },
+                    intent: { type: Type.STRING },
+                  },
+                  required: ['type', 'label'],
+                },
+              },
+            },
+            required: ['reply'],
+          },
+        },
+      });
+
+      const rawText = response.text || '';
+      const parsed = JSON.parse(rawText) as {
+        reply?: string;
+        actions?: Array<{
+          type?: string;
+          label?: string;
+          description?: string;
+          module?: string;
+          intent?: string;
+        }>;
+      };
+
+      res.json({
+        ok: true,
+        model: 'gemini-4-hydrogen',
+        reply: typeof parsed.reply === 'string' && parsed.reply.trim() ? parsed.reply : 'پاسخی تولید نشد.',
+        actions: Array.isArray(parsed.actions) ? parsed.actions.slice(0, 5) : [],
+      });
+    } catch (err) {
+      const mapped = mapGeminiError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
   });
 
   app.post('/api/images/generate', (_req: Request, res: Response) => {

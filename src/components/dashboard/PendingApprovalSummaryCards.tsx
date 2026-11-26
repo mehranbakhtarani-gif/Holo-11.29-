@@ -18,7 +18,10 @@ import {
   Maximize2,
   Plus,
   Scale,
+  ScanLine,
   Search,
+  ShieldAlert,
+  ShieldCheck,
   Ship,
   X,
 } from 'lucide-react';
@@ -34,6 +37,7 @@ import {
 } from '../../lib/pendingApprovalsSummary';
 import { formatCompactMoney, formatMoney, toPersianDigits } from '../../lib/format';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import type { PreApprovalRiskAudit } from '../../lib/smartAutomationEngine';
 
 const snappyTransition = {
   duration: 0.18,
@@ -42,12 +46,15 @@ const snappyTransition = {
 
 interface PendingApprovalSummaryCardsProps {
   summary: PendingApprovalsSummary;
+  riskAuditMap?: Map<string, PreApprovalRiskAudit>;
   unit: CurrencyUnit;
   canFinalizeVoucher: boolean;
   canIssueInvoice: boolean;
   canEditInventory: boolean;
   onFinalizeVoucher: (voucherId: string) => Promise<void>;
   onFinalizeAllDraftVouchers: () => Promise<number>;
+  onBatchApproveSafeDrafts?: (voucherIds: string[]) => Promise<number>;
+  onOpenVisionScanner?: () => void;
   onConvertProforma: (invoiceId: string) => Promise<void>;
   onClearImportDossier: (dossierId: string) => Promise<void>;
   onInvoiceSalesOrder: (orderId: string) => Promise<void>;
@@ -80,12 +87,15 @@ const DOC_TYPE_ICONS: Record<PendingApprovalDocType, React.ComponentType<{ class
 
 export const PendingApprovalSummaryCards: React.FC<PendingApprovalSummaryCardsProps> = ({
   summary,
+  riskAuditMap,
   unit,
   canFinalizeVoucher,
   canIssueInvoice,
   canEditInventory,
   onFinalizeVoucher,
   onFinalizeAllDraftVouchers,
+  onBatchApproveSafeDrafts,
+  onOpenVisionScanner,
   onConvertProforma,
   onClearImportDossier,
   onInvoiceSalesOrder,
@@ -98,9 +108,26 @@ export const PendingApprovalSummaryCards: React.FC<PendingApprovalSummaryCardsPr
   const [isViewerOpen, setIsViewerOpen] = useState<boolean>(true);
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [isFinalizingAll, setIsFinalizingAll] = useState(false);
+  const [isBatchApprovingSafe, setIsBatchApprovingSafe] = useState(false);
   const [recentApprovedNote, setRecentApprovedNote] = useState<string | null>(null);
 
   const allPendingItems = useMemo(() => buildPendingApprovalItems(summary), [summary]);
+
+  const safeDraftVoucherIds = useMemo(() => {
+    if (!riskAuditMap) return [];
+    return allPendingItems
+      .filter((item) => riskAuditMap.get(item.id)?.eligibleForBatchAutoApprove)
+      .map((item) => item.id);
+  }, [allPendingItems, riskAuditMap]);
+
+  const riskyPendingCount = useMemo(() => {
+    if (!riskAuditMap) return 0;
+    let count = 0;
+    riskAuditMap.forEach((audit) => {
+      if (audit.riskLevel !== 'safe') count += 1;
+    });
+    return count;
+  }, [riskAuditMap]);
 
   const filteredItems = useMemo(
     () => filterPendingApprovalItems(allPendingItems, docTypeFilter, debouncedSearch),
@@ -345,6 +372,24 @@ export const PendingApprovalSummaryCards: React.FC<PendingApprovalSummaryCardsPr
     }
   };
 
+  const handleBatchApproveSafe = async () => {
+    if (safeDraftVoucherIds.length === 0 || !canFinalizeVoucher || !onBatchApproveSafeDrafts) return;
+    setIsBatchApprovingSafe(true);
+    try {
+      const count = await onBatchApproveSafeDrafts(safeDraftVoucherIds);
+      const skipped = summary.draftVouchersCount - count;
+      if (count > 0) {
+        setRecentApprovedNote(
+          skipped > 0
+            ? `${toPersianDigits(count)} سند موقت بدون خطا دائم‌سازی شد و ${toPersianDigits(skipped)} سند دارای هشدار ممیزی برای بررسی دستی باقی ماند.`
+            : `${toPersianDigits(count)} سند موقت بدون خطا با موفقیت دائم‌سازی شد.`
+        );
+      }
+    } finally {
+      setIsBatchApprovingSafe(false);
+    }
+  };
+
   const visibleCards = filteredItems.slice(0, 6);
 
   return (
@@ -391,28 +436,76 @@ export const PendingApprovalSummaryCards: React.FC<PendingApprovalSummaryCardsPr
                 {toPersianDigits(summary.voucherApprovalRatePct)}٪
               </strong>
             </span>
+            {riskAuditMap && summary.totalPendingCount > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  className={
+                    riskyPendingCount > 0
+                      ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                      : 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                  }
+                >
+                  {riskyPendingCount > 0
+                    ? `${toPersianDigits(riskyPendingCount)} سند دارای هشدار ممیزی`
+                    : 'ممیزی پیش از تأیید: بدون خطا'}
+                </span>
+              </>
+            )}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {summary.draftVouchersCount > 0 && canFinalizeVoucher && (
+          {onOpenVisionScanner && (
             <button
               type="button"
-              disabled={isFinalizingAll}
-              onClick={handleFinalizeAll}
+              onClick={onOpenVisionScanner}
+              className="h-9 px-3 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+            >
+              <ScanLine className="w-3.5 h-3.5 shrink-0" />
+              <span>اسکن هوشمند (OCR)</span>
+            </button>
+          )}
+
+          {onBatchApproveSafeDrafts && safeDraftVoucherIds.length > 0 && canFinalizeVoucher ? (
+            <button
+              type="button"
+              disabled={isBatchApprovingSafe}
+              onClick={handleBatchApproveSafe}
               className="h-9 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
-              {isFinalizingAll ? (
+              {isBatchApprovingSafe ? (
                 <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
               ) : (
-                <Lock className="w-3.5 h-3.5 shrink-0" />
+                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
               )}
               <span>
-                {isFinalizingAll
-                  ? 'در حال دائم‌سازی...'
-                  : `تأیید همه اسناد موقت (${toPersianDigits(summary.draftVouchersCount)})`}
+                {isBatchApprovingSafe
+                  ? 'در حال تأیید اسناد سالم...'
+                  : `تأیید گروهی اسناد بدون خطا (${toPersianDigits(safeDraftVoucherIds.length)})`}
               </span>
             </button>
+          ) : (
+            summary.draftVouchersCount > 0 &&
+            canFinalizeVoucher && (
+              <button
+                type="button"
+                disabled={isFinalizingAll}
+                onClick={handleFinalizeAll}
+                className="h-9 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              >
+                {isFinalizingAll ? (
+                  <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span>
+                  {isFinalizingAll
+                    ? 'در حال دائم‌سازی...'
+                    : `تأیید همه اسناد موقت (${toPersianDigits(summary.draftVouchersCount)})`}
+                </span>
+              </button>
+            )
           )}
 
           <button
@@ -793,6 +886,54 @@ export const PendingApprovalSummaryCards: React.FC<PendingApprovalSummaryCardsPr
                                 {item.amountIrr > 0 ? formatMoney(item.amountIrr, unit) : '—'}
                               </span>
                             </div>
+
+                            {/* Pre-Approval Smart Risk Audit Line (Unboxed, High-Clarity) */}
+                            {(() => {
+                              const audit = riskAuditMap?.get(item.id);
+                              if (!audit) return null;
+                              if (audit.riskLevel === 'safe') {
+                                return (
+                                  <div className="flex items-center justify-between gap-2 text-[11px] text-emerald-700 dark:text-emerald-400 pt-1">
+                                    <span className="inline-flex items-center gap-1 font-semibold">
+                                      <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                                      <span>ممیزی هوشمند: بدون خطا · آماده تأیید</span>
+                                    </span>
+                                    <span className="font-code tabular-nums font-semibold">
+                                      {toPersianDigits(audit.score)}٪
+                                    </span>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div
+                                  className={`rounded-lg px-2.5 py-2 text-[11px] space-y-1 ${
+                                    audit.riskLevel === 'critical'
+                                      ? 'bg-rose-50/85 dark:bg-rose-950/35 text-rose-700 dark:text-rose-300'
+                                      : 'bg-amber-50/85 dark:bg-amber-950/35 text-amber-800 dark:text-amber-300'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2 font-semibold">
+                                    <span className="inline-flex items-center gap-1">
+                                      <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+                                      <span>
+                                        {audit.riskLevel === 'critical'
+                                          ? 'هشدار ریسک بالا پیش از تأیید'
+                                          : 'نکته ممیزی پیش از تأیید'}
+                                      </span>
+                                    </span>
+                                    <span className="font-code tabular-nums">
+                                      امتیاز {toPersianDigits(audit.score)}٪
+                                    </span>
+                                  </div>
+                                  <div className="text-[10.5px] leading-relaxed">
+                                    {audit.flags
+                                      .slice(0, 2)
+                                      .map((f) => f.message)
+                                      .join(' · ')}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Card Footer: One-Click Quick Approve & Details Action Buttons */}

@@ -1895,6 +1895,8 @@ export default function App() {
                   localMesh={localMesh}
                   onOpenQueueMonitor={() => setShowQueueMonitor(true)}
                   onOpenSystemHealth={() => setShowHealthDrawer(true)}
+                  initialIntent={moduleIntent}
+                  clearIntent={() => setModuleIntent(undefined)}
                 />
               )}
               {activeModule === 'invoices' && (
