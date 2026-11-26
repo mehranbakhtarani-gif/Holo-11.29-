@@ -83,6 +83,7 @@ import { QuickActionsAndAlertsBentoCard } from './dashboard/QuickActionsAndAlert
 import { SortableDashboardCard } from './dashboard/SortableDashboardCard';
 import { FinancialVoiceSearchPanel } from './dashboard/FinancialVoiceSearchPanel';
 import { SmartDashboardSearchBox } from './SmartGlobalSearch';
+import { LiveFxTickerCard } from './LiveFxTickerCard';
 import {
   buildPendingApprovalItems,
   computePendingApprovalsSummary,
@@ -1179,7 +1180,8 @@ export const DashboardView: React.FC<{
           </div>
         </div>
 
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+        <div className="grid grid-cols-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2.5 min-w-0 w-full xl:max-w-[760px]">
+          <div className="col-span-2 sm:col-span-1 min-w-0">
           <SmartDashboardSearchBox
             value={quickSearch}
             onChange={(next) => {
@@ -1189,6 +1191,7 @@ export const DashboardView: React.FC<{
             onNavigate={onNavigate}
             onOpenVoiceSearch={() => handleOpenVoiceSearch(true)}
           />
+          </div>
 
           <motion.button
             type="button"
@@ -1230,9 +1233,9 @@ export const DashboardView: React.FC<{
       {/* Priority Workspace Tab Switcher (Declutters Dashboard into 4 Calm Focused Zones) */}
       <nav
         aria-label="بخش‌های اولویت‌بندی‌شده داشبورد"
-        className="bg-white/85 dark:bg-slate-900/80 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2"
+        className="bg-white/85 dark:bg-slate-900/80 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-2 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5"
       >
-        <div className="flex flex-wrap items-center gap-1" role="tablist">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1" role="tablist">
           {WORKSPACE_TABS.map((tab) => {
             const Icon = tab.icon;
             const active = activeWorkspaceTab === tab.id;
@@ -1244,7 +1247,7 @@ export const DashboardView: React.FC<{
                 role="tab"
                 aria-selected={active}
                 onClick={() => setActiveWorkspaceTab(tab.id)}
-                className={`relative inline-flex items-center gap-2 px-3.5 min-h-[44px] sm:min-h-[40px] rounded-xl text-xs transition-colors whitespace-nowrap cursor-pointer ${
+                className={`relative inline-flex items-center gap-2 px-2.5 sm:px-3.5 min-h-[38px] sm:min-h-[38px] rounded-xl text-xs transition-colors whitespace-nowrap cursor-pointer ${
                   active
                     ? 'text-white font-semibold'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium'
@@ -1321,7 +1324,8 @@ export const DashboardView: React.FC<{
 
       {/* TAB 1: EXECUTIVE FOCUS VIEW (Customizable Drag-and-Drop Bento Grid powered by dnd-kit) */}
       {activeWorkspaceTab === 'executive' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
+          <LiveFxTickerCard onNavigate={onNavigate} />
           {/* Calm Personalization Toolbar when Customizing Mode is Active */}
           <AnimatePresence initial={false}>
             {isCustomizingLayout && (
