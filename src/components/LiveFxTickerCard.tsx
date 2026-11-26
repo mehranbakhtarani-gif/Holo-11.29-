@@ -28,6 +28,7 @@ interface LiveFxResponse {
 
 const DISPLAY_ORDER: ('USD' | 'CNY' | 'AED' | 'EUR')[] = ['USD', 'CNY', 'AED', 'EUR'];
 const CACHED_FX_STORAGE_KEY = 'holoo_apex_cached_live_fx_v1';
+const LIVE_FX_API_BASE = 'https://holoo-apex-api.mehranbakhtarani.workers.dev';
 
 interface CachedLiveFxPayload extends LiveFxResponse {
   savedShamsiDate?: string;
@@ -88,7 +89,7 @@ export const LiveFxTickerCard: React.FC<{
       if (force) setRefreshing(true);
       else if (!cached) setLoading(true);
       setError(null);
-      const res = await fetch(force ? '/api/live-fx?refresh=1' : '/api/live-fx');
+      const res = await fetch(`${LIVE_FX_API_BASE}/api/live-fx${force ? '?refresh=1' : ''}`);
       if (!res.ok) throw new Error('دریافت نرخ زنده ناموفق بود.');
       const json = (await res.json()) as LiveFxResponse;
       if (Array.isArray(json.items) && json.items.length > 0) {
@@ -118,7 +119,7 @@ export const LiveFxTickerCard: React.FC<{
     fetchRates(false);
     const timer = window.setInterval(() => {
       fetchRates(false);
-    }, 180_000);
+    }, 300_000);
     return () => window.clearInterval(timer);
   }, [fetchRates]);
 
