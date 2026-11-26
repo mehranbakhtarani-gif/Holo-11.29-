@@ -852,7 +852,7 @@ export const DashboardActionSearch: React.FC<{
 
       {/* Main Fuzzy Input */}
       <div className="relative">
-        <Search className="w-4 h-4 text-teal-700 dark:text-teal-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <Search className="w-5 h-5 text-teal-700 dark:text-teal-400 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
         <input
           ref={inputRef}
           type="text"
@@ -864,7 +864,7 @@ export const DashboardActionSearch: React.FC<{
           }}
           onKeyDown={handleKeyDown}
           placeholder="جستجوی فازی عملکردها... (مثلاً: فاکتور ارزی، راسگیری چک، نرخ دلار، کاردکس نخ، ماده ۱۶۹، انبارگردانی، F2)"
-          className="w-full pr-10 pl-24 py-2.5 text-sm bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600/30 focus:border-teal-600 dark:focus:border-teal-500 transition-colors"
+          className="w-full h-14 pr-12 pl-24 text-base sm:text-lg font-medium bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600/30 focus:border-teal-600 dark:focus:border-teal-500 transition-colors"
         />
         <div className="absolute left-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
           {query && (
@@ -884,6 +884,34 @@ export const DashboardActionSearch: React.FC<{
             ↑ ↓ Enter
           </span>
         </div>
+      </div>
+
+      {/* Primary accounting shortcuts */}
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const action = DASHBOARD_ACTIONS.find((item) => item.id === 'inv-sale');
+            if (action) executeAction(action);
+          }}
+          className="min-h-12 inline-flex items-center justify-center gap-2.5 rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50 dark:bg-teal-950/40 px-4 py-3 text-sm sm:text-base font-bold text-teal-800 dark:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-950/70 focus:outline-none focus:ring-2 focus:ring-teal-600/40 transition-colors"
+        >
+          <FileText className="w-5 h-5 shrink-0" />
+          <span>ثبت فاکتور فروش</span>
+          <span className="text-xs font-code opacity-70">F2</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const action = DASHBOARD_ACTIONS.find((item) => item.id === 'voucher-new');
+            if (action) executeAction(action);
+          }}
+          className="min-h-12 inline-flex items-center justify-center gap-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 px-4 py-3 text-sm sm:text-base font-bold text-indigo-800 dark:text-indigo-200 hover:bg-indigo-100 dark:hover:bg-indigo-950/70 focus:outline-none focus:ring-2 focus:ring-indigo-600/40 transition-colors"
+        >
+          <BookOpen className="w-5 h-5 shrink-0" />
+          <span>ثبت سند حسابداری</span>
+          <span className="text-xs font-code opacity-70">F3</span>
+        </button>
       </div>
 
       {/* Interactive Category Filter Tabs */}
