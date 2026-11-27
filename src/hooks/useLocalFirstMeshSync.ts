@@ -398,13 +398,13 @@ export function useLocalFirstMeshSync() {
         return buildRelayEnvelopesFromOutbox(items, built.snapshotJson);
       },
       onRemoteStateReceived: async ({
-        if (restoreBarrierActive) return [];
         fromPeerId,
         snapshotJson,
         vectorClock: remoteClock,
         relayEnvelopes,
         batchedOperationIds,
       }) => {
+        if (restoreBarrierActive) return [];
         setIsP2PSyncing(true);
         try {
           const localBuilt = buildTaggedSnapshot();
