@@ -6069,140 +6069,21 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
 
   const invoiceSalesOrder = useCallback(
-    async (orderId: string) => {
+    async (_orderId: string) => {
       if (!activeOperator.permissions.canIssueInvoice) {
         showToast('نقش فعال مجوز صدور فاکتور فروش را ندارد.');
         return;
       }
-      // SAFETY GATE: order status and invoice creation are currently separate commits.
-      // Keep this workflow closed until invoice + order linkage share one atomic,
-      // idempotent Firestore/IndexedDB transaction.
-      const safetyMessage = 'تبدیل سفارش به فاکتور تا زمان اتمیک‌شدن ثبت فاکتور و پیوند سفارش متوقف است؛ هیچ تغییری اعمال نشد.';
+
+      // SAFETY GATE: order status, invoice creation, and invoiceId linkage
+      // must commit atomically with deterministic idempotency before this
+      // workflow can be enabled for cloud or local workspaces.
+      const safetyMessage =
+        'تبدیل سفارش به فاکتور تا زمان اتمیک‌شدن ثبت فاکتور و پیوند سفارش متوقف است؛ هیچ تغییری اعمال نشد.';
       showToast(safetyMessage, 'error');
       throw new Error(safetyMessage);
-      const order = salesOrders.find((o) => o.id === orderId);
-      if (!order || order.status === 'invoiced') {
-        showToast('این سفارش قبلاً به فاکتور فروش تبدیل شده است.');
-        return;
-      }
-
-      if (user) {
-        try {
-          await runTransaction(db, async (tx) => {
-            const oRef = doc(db, 'salesOrders', orderId);
-            const oSnap = await tx.get(oRef);
-            if (!oSnap.exists()) throw new Error('ORDER_NOT_FOUND');
-            const liveOrder = oSnap.data() as SalesOrder;
-            if (liveOrder.status === 'invoiced') throw new Error('ALREADY_INVOICED');
-            tx.update(oRef, {
-              status: 'invoiced',
-              _version: (liveOrder._version ?? 1) + 1,
-              updatedByDevice: deviceId,
-              updatedAt: serverTimestamp(),
-            });
-          });
-        } catch (err) {
-          if (err instanceof Error && err.message === 'ALREADY_INVOICED') {
-            showToast('این سفارش همزمان توسط دستگاه دیگری به فاکتور تبدیل شده است.');
-            return;
-          }
-          handleFirestoreError(err, OperationType.UPDATE, `salesOrders/${orderId}`);
-          return;
-        }
-      }
-
-      const invItems = order.items.map((it) => {
-        const prod = products.find((p) => p.id === it.productId);
-        const qty = it.actualWeighedKg > 0 ? it.actualWeighedKg : it.orderedWeightKg;
-        const gross = Math.round(qty * it.unitPriceIrr);
-        const vat = prod?.vatExempt ? 0 : Math.round(gross * 0.1);
-        return {
-          productId: it.productId,
-          sku: it.sku,
-          productName: it.productName,
-          unit: 'کیلوگرم',
-          quantity: qty,
-          secondaryUnit: prod?.secondaryUnit || 'کارتن',
-          kgPerCarton: prod?.kgPerCarton,
-          cartonCount: it.actualCartons || it.orderedCartons,
-          lotNumber: it.lotNumber || prod?.lotNumber,
-          unitPrice: it.unitPriceIrr,
-          unitCostSnapshot: prod?.buyPrice,
-          discount: 0,
-          vatAmount: vat,
-          lineTotal: gross + vat,
-        };
-      });
-
-      const subtotal = invItems.reduce((s, i) => s + Math.round(i.quantity * i.unitPrice), 0);
-      const vatAmount = invItems.reduce((s, i) => s + i.vatAmount, 0);
-      const grandTotal = subtotal + vatAmount;
-      const nextNum = `F-${profile.fiscalYear}-${String(invoices.length + 101)}`;
-
-      let created: Invoice;
-      try {
-        created = await createInvoice({
-          invoiceNumber: nextNum,
-          invoiceType: 'sale',
-          date: order.dispatchDate || getTodayShamsi(),
-          partyId: order.partyId,
-          partyName: order.partyName,
-          warehouse: order.warehouse,
-          items: invItems,
-          subtotal,
-          discount: 0,
-          vatAmount,
-          grandTotal,
-          paidCash: 0,
-          paidBank: 0,
-          paidCheque: 0,
-          creditAmount: grandTotal,
-          status: 'issued',
-        });
-      } catch (err) {
-        if (user) {
-          await updateDoc(doc(db, 'salesOrders', orderId), {
-            status: order.status,
-            updatedAt: serverTimestamp(),
-          }).catch(() => {});
-        }
-        throw err;
-      }
-
-      if (user) {
-        try {
-          await updateDoc(doc(db, 'salesOrders', orderId), {
-            invoiceId: created.id,
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `salesOrders/${orderId}`);
-        }
-      } else {
-        setSalesOrders((prev) =>
-          prev.map((o) =>
-            o.id === orderId ? { ...o, status: 'invoiced', invoiceId: created.id } : o
-          )
-        );
-      }
-      logActivity(
-        'سفارش و فاکتور',
-        `تبدیل حواله ${order.dispatchNumber || order.orderNumber} به فاکتور ${created.invoiceNumber}`,
-        `فاکتور فروش نهایی بر اساس وزن واقعی باسکول به مبلغ ${grandTotal.toLocaleString('en-US')} ریال صادر شد.`
-      );
     },
-    [
-      user,
-      deviceId,
-      activeOperator,
-      salesOrders,
-      products,
-      profile.fiscalYear,
-      invoices.length,
-      createInvoice,
-      logActivity,
-      showToast,
-    ]
+    [activeOperator.permissions.canIssueInvoice, showToast]
   );
 
   // ---------------- DYEING / WEAVING SUBCONTRACTING ----------------
