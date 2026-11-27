@@ -1021,58 +1021,153 @@ export async function isInboxOperationProcessed(operationId: string): Promise<bo
 }
 
 /** Atomic Stocktaking Adjustment commit in Operational IndexedDB (products + permanent voucher) */
-export async function commitStockAdjustmentOperationalTx(payload: {
-  updatedProducts: Product[];
-  voucher?: Voucher | null;
-}): Promise<boolean> {
-  if (!isIndexedDbAvailable()) return false;
-  const db = await openOperationalDb();
+export async function commitStockAdjustmentOperationalTx(
+  payload: {
+    updatedProducts: Product[];
+    voucher?: Voucher | null;
+  },
+  options?: { dbOverride?: IDBDatabase }
+): Promise<boolean> {
+  const usingOverride = Boolean(options?.dbOverride);
+  if (!usingOverride && !isIndexedDbAvailable()) return false;
+  if (!Array.isArray(payload.updatedProducts)) {
+    throw new Error('ATOMIC_STOCK_INVALID_PRODUCTS: فهرست کالاهای اصلاح‌شده معتبر نیست.');
+  }
+
+  const seenProductIds = new Set<string>();
+  for (const product of payload.updatedProducts) {
+    if (
+      !product ||
+      typeof product.id !== 'string' ||
+      !product.id.trim() ||
+      !Number.isFinite(product.stock) ||
+      product.stock < 0 ||
+      seenProductIds.has(product.id)
+    ) {
+      throw new Error('ATOMIC_STOCK_INVALID_PRODUCT: شناسه، موجودی یا تکرار کالای اصلاح‌شده نامعتبر است.');
+    }
+    seenProductIds.add(product.id);
+  }
+
+  if (payload.voucher) {
+    const voucher = payload.voucher;
+    if (!voucher.id || !Array.isArray(voucher.lines) || voucher.lines.length < 2) {
+      throw new Error('ATOMIC_STOCK_INVALID_VOUCHER: سند تعدیل باید حداقل دو ردیف معتبر داشته باشد.');
+    }
+    let totalDebit = 0;
+    let totalCredit = 0;
+    for (const line of voucher.lines) {
+      const debit = line?.debit;
+      const credit = line?.credit;
+      if (
+        !Number.isSafeInteger(debit) || Number(debit) < 0 ||
+        !Number.isSafeInteger(credit) || Number(credit) < 0 ||
+        (Number(debit) > 0 && Number(credit) > 0)
+      ) {
+        throw new Error('ATOMIC_STOCK_INVALID_VOUCHER_LINE: مبلغ بدهکار یا بستانکار سند تعدیل نامعتبر است.');
+      }
+      totalDebit += Number(debit);
+      totalCredit += Number(credit);
+      if (!Number.isSafeInteger(totalDebit) || !Number.isSafeInteger(totalCredit)) {
+        throw new Error('ATOMIC_STOCK_INVALID_VOUCHER_TOTAL: جمع مبالغ سند تعدیل خارج از محدوده امن است.');
+      }
+    }
+    if (totalDebit <= 0 || totalDebit !== totalCredit) {
+      throw new Error('ATOMIC_STOCK_UNBALANCED_VOUCHER: سند تعدیل انبار تراز نیست.');
+    }
+  }
+
+  const db = options?.dbOverride ?? (await openOperationalDb());
   const committedAt = new Date().toISOString();
+  const closeIfOwned = () => {
+    if (!usingOverride) {
+      try { db.close(); } catch { /* ignore close errors */ }
+    }
+  };
 
   return new Promise((resolve, reject) => {
     let tx: IDBTransaction | null = null;
+    let settled = false;
+    const abortAndReject = (error: unknown) => {
+      if (tx) {
+        try { tx.abort(); } catch { /* transaction may already be inactive */ }
+      }
+      if (!settled) {
+        settled = true;
+        closeIfOwned();
+        reject(error instanceof Error ? error : new Error(String(error || 'Atomic stock adjustment rollback')));
+      }
+    };
+
     try {
       tx = db.transaction(['meta', 'products', 'vouchers'], 'readwrite');
-      const prodStore = tx.objectStore('products');
-      for (const p of payload.updatedProducts) {
-        prodStore.put(p);
+      const productStore = tx.objectStore('products');
+      for (const product of payload.updatedProducts) {
+        const req = productStore.put(product);
+        req.onerror = () => abortAndReject(req.error ?? new Error('Atomic stock product write failed'));
       }
+
       if (payload.voucher) {
-        tx.objectStore('vouchers').put(payload.voucher);
+        const voucherReq = tx.objectStore('vouchers').put(payload.voucher);
+        voucherReq.onerror = () => abortAndReject(voucherReq.error ?? new Error('Atomic stock voucher write failed'));
       }
+
       const metaStore = tx.objectStore('meta');
-      const revReq = metaStore.get('workspace_meta');
-      revReq.onsuccess = () => {
-        const existing = revReq.result as { localRevision?: number } | undefined;
-        metaStore.put({
-          key: 'workspace_meta',
-          localRevision: (existing?.localRevision ?? 0) + 1,
-          updatedAt: committedAt,
-          schemaVersion: OP_DB_VERSION,
-        });
+      const revisionReq = metaStore.get('workspace_meta');
+      revisionReq.onsuccess = () => {
+        try {
+          const existing = revisionReq.result as { localRevision?: number } | undefined;
+          const currentRevision = Number(existing?.localRevision ?? 0);
+          if (!Number.isSafeInteger(currentRevision) || currentRevision < 0 || currentRevision >= Number.MAX_SAFE_INTEGER) {
+            throw new Error('ATOMIC_STOCK_INVALID_REVISION: شماره بازبینی فضای کاری معتبر نیست.');
+          }
+          const metaReq = metaStore.put({
+            key: 'workspace_meta',
+            localRevision: currentRevision + 1,
+            updatedAt: committedAt,
+            schemaVersion: OP_DB_VERSION,
+          });
+          metaReq.onerror = () => abortAndReject(metaReq.error ?? new Error('Atomic stock revision write failed'));
+        } catch (error) {
+          abortAndReject(error);
+        }
       };
+      revisionReq.onerror = () => abortAndReject(revisionReq.error ?? new Error('Atomic stock revision read failed'));
+
       tx.oncomplete = () => {
-        db.close();
-        resolve(true);
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          resolve(true);
+        }
       };
       tx.onerror = () => {
-        db.close();
-        reject(tx?.error ?? new Error('Atomic stock adjustment IndexedDB commit failed'));
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic stock adjustment IndexedDB commit failed'));
+        }
       };
       tx.onabort = () => {
-        db.close();
-        reject(tx?.error ?? new Error('Atomic stock adjustment IndexedDB transaction aborted'));
-      };
-    } catch (err) {
-      if (tx) {
-        try {
-          tx.abort();
-        } catch {
-          // ignore
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic stock adjustment IndexedDB transaction aborted'));
         }
+      };
+    } catch (error) {
+      resetOperationalDiffCache();
+      if (tx) {
+        try { tx.abort(); } catch { /* ignore abort race */ }
       }
-      db.close();
-      reject(err);
+      closeIfOwned();
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
     }
   });
 }
