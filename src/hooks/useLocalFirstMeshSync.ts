@@ -154,7 +154,7 @@ export function useLocalFirstMeshSync() {
     }));
   });
   const [isP2PSyncing, setIsP2PSyncing] = useState(false);
-  const [restoreBarrierActive, setRestoreBarrierActive] = useState(false);
+  const [restoreBarrierActive, setRestoreBarrierActive] = useState(true);
 
   useEffect(() => {
     let mounted = true;
