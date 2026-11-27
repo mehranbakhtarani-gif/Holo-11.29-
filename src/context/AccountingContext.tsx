@@ -875,8 +875,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             if (!cancelledLocal) setOperationalDbStats(st);
           });
         })
-        .catch(() => {
-          if (!cancelledLocal) hydrateFallbackLocal();
+        .catch((error) => {
+          // Never replace an unreadable operational database with fallback/demo state.
+          if (!cancelledLocal) console.error('Operational workspace hydration failed; fallback hydration was blocked.', error);
         });
 
       return () => {
