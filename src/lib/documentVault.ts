@@ -690,7 +690,8 @@ function validateRestoreId(restoreId: string): void {
 export async function stageEncryptedDocumentAttachmentBundle(
   restoreId: string,
   bundleJson: string,
-  packageDigest: string
+  packageDigest: string,
+  allowLegacyUnboundMetadata = false
 ): Promise<StagedDocumentRestoreManifest> {
   validateRestoreId(restoreId);
   if (!/^[a-f0-9]{64}$/i.test(packageDigest)) throw new Error('اثر انگشت بسته پشتیبان معتبر نیست.');
@@ -699,8 +700,12 @@ export async function stageEncryptedDocumentAttachmentBundle(
   let bundle: EncryptedDocumentAttachmentBundle;
   try { bundle = JSON.parse(bundleJson) as EncryptedDocumentAttachmentBundle; }
   catch { throw new Error('ساختار بسته پیوست‌های رمزگذاری‌شده معتبر نیست.'); }
-  if (!bundle || bundle.format !== 'holoo-apex-encrypted-document-vault' || bundle.schemaVersion !== 1 ||
+  if (!bundle || bundle.format !== 'holoo-apex-encrypted-document-vault' ||
+      (bundle.schemaVersion !== 1 && bundle.schemaVersion !== 2) ||
       !Array.isArray(bundle.attachments)) throw new Error('نسخه یا ساختار بسته پیوست‌ها پشتیبانی نمی‌شود.');
+  if (bundle.schemaVersion === 1 && !allowLegacyUnboundMetadata) {
+    throw new Error('بسته پیوست نسخه قدیمی است و فراداده آن به محتوای رمزگذاری‌شده متصل نیست؛ تأیید صریح مسیر سازگاری لازم است.');
+  }
 
   const seen = new Set<string>();
   const validated: StoredDocumentAttachmentRecord[] = [];
@@ -733,8 +738,25 @@ export async function stageEncryptedDocumentAttachmentBundle(
         await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
       throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
     }
+    const expectedMetadataSha256 = await computeAttachmentMetadataSha256(candidate);
+    if (payload.metadataSha256 !== undefined && payload.metadataSha256 !== expectedMetadataSha256) {
+      throw new Error('اصالت فراداده یکی از پیوست‌ها معتبر نیست.');
+    }
+    if (bundle.schemaVersion === 2 && payload.metadataSha256 !== expectedMetadataSha256) {
+      throw new Error('بسته پیوست نسخه ۲ فاقد مهر اصالت فراداده معتبر است.');
+    }
+    let normalizedEnvelope = candidate.encryptedEnvelope;
+    if (payload.metadataSha256 === undefined) {
+      const upgradedEnvelope = await encryptBackupEnvelope(JSON.stringify({
+        dataUrl: payload.dataUrl,
+        mimeType: candidate.mimeType,
+        sha256: candidate.sha256,
+        metadataSha256: expectedMetadataSha256,
+      }), passphrase);
+      normalizedEnvelope = JSON.stringify(upgradedEnvelope);
+    }
     const { dataUrl: _plaintext, ...encryptedRecord } = candidate;
-    validated.push(encryptedRecord);
+    validated.push({ ...encryptedRecord, encryptedEnvelope: normalizedEnvelope });
   }
 
   validated.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
