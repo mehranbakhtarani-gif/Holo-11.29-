@@ -318,7 +318,7 @@ async function runTests() {
   const subcontractCompletionGuard = accountingCtxSrc.slice(subcontractCompletionIdx, subcontractCompletionIdx + 1800);
   assert.match(
     subcontractCompletionGuard,
-    /SAFETY GATE[\\s\\S]*showToast[\\s\\S]*return;/,
+    /SAFETY GATE[\s\\S]*showToast[\s\\S]*return;/,
     'Non-atomic subcontract completion must fail closed before any inventory or voucher mutation'
   );
   console.log('✓ Subcontract completion fails closed until its multi-entity posting is atomic');
@@ -328,7 +328,7 @@ async function runTests() {
   const finalizeVoucherGuard = accountingCtxSrc.slice(finalizeVoucherIdx, finalizeVoucherIdx + 3600);
   assert.match(
     finalizeVoucherGuard,
-    /isOfflineNow[\\s\\S]*قطعی‌سازی سند به تأیید تراکنش ابری نیاز دارد[\\s\\S]*هیچ تغییری اعمال نشد/,
+    /isOfflineNow[\s\\S]*قطعی‌سازی سند به تأیید تراکنش ابری نیاز دارد[\s\\S]*هیچ تغییری اعمال نشد/,
     'Cloud voucher finalization must fail closed while offline instead of reporting a queued local write as committed'
   );
   console.log('✓ Cloud voucher finalization fails closed while offline');
@@ -336,14 +336,14 @@ async function runTests() {
   const batchFinalizeIdx = accountingCtxSrc.indexOf('const finalizeAllDraftVouchers = useCallback');
   assert.ok(batchFinalizeIdx !== -1, 'finalizeAllDraftVouchers must exist');
   const batchFinalizeBody = accountingCtxSrc.slice(batchFinalizeIdx, batchFinalizeIdx + 2200);
-  assert.match(batchFinalizeBody, /catch[\\s\\S]*failed\\s*\+=\s*1/);
-  assert.match(batchFinalizeBody, /دائم‌سازی گروهی:[\\s\\S]*ناموفق/);
+  assert.match(batchFinalizeBody, /catch[\s\\S]*failed\s*\+=\s*1/);
+  assert.match(batchFinalizeBody, /دائم‌سازی گروهی:[\s\\S]*ناموفق/);
   console.log('✓ Batch voucher finalization reports partial failures accurately');
 
   const renumberIdx = accountingCtxSrc.indexOf('const renumberVouchersChronologically');
   assert.ok(renumberIdx !== -1, 'renumberVouchersChronologically must exist');
   const renumberBody = accountingCtxSrc.slice(renumberIdx, renumberIdx + 3400);
-  assert.match(renumberBody, /changedVouchers\\.length > 450[\\s\\S]*هیچ تغییری اعمال نشد/);
+  assert.match(renumberBody, /changedVouchers\.length > 450[\s\\S]*هیچ تغییری اعمال نشد/);
   console.log('✓ Cloud voucher renumbering refuses multi-commit partial updates');
 
 
