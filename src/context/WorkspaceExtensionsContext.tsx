@@ -210,15 +210,13 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   // Persist local mirror whenever state changes
   const persistLocalMirror = useCallback((next: WorkspaceExtensionsState) => {
     if (isOperationalRestoreBarrierActive()) return;
-    try {
-      localStorage.setItem(LOCAL_EXT_STORAGE_KEY, JSON.stringify(next));
-      saveReservedInvoices(next.reservedInvoices);
-      saveFavoriteMenus(next.favoriteMenus);
-      for (const [k, v] of Object.entries(next.productMetaMap)) {
-        saveProductApexMeta(k, v);
-      }
-    } catch {
-      // ignore quota errors
+    // Persist the complete extension state before publishing it to React state.
+    // Storage/quota failures must reach the caller instead of creating a false-success UI.
+    localStorage.setItem(LOCAL_EXT_STORAGE_KEY, JSON.stringify(next));
+    saveReservedInvoices(next.reservedInvoices);
+    saveFavoriteMenus(next.favoriteMenus);
+    for (const [k, v] of Object.entries(next.productMetaMap)) {
+      saveProductApexMeta(k, v);
     }
   }, []);
 
@@ -466,13 +464,14 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   const updateExtensions = useCallback(
     (updater: (prev: WorkspaceExtensionsState) => WorkspaceExtensionsState) => {
-      setState((prev) => {
-        if (isOperationalRestoreBarrierActive()) return prev;
-        const next = updater(prev);
-        persistLocalMirror(next);
-        void pushToCloud(next);
-        return next;
-      });
+      if (isOperationalRestoreBarrierActive()) return;
+      // Avoid side effects inside a React state updater: React may replay updater
+      // functions. Keep the ref in sync so rapid consecutive actions compose safely.
+      const next = updater(stateRef.current);
+      persistLocalMirror(next);
+      stateRef.current = next;
+      setState(next);
+      void pushToCloud(next);
     },
     [persistLocalMirror, pushToCloud]
   );
