@@ -103,6 +103,9 @@ import {
   loadOperationalWorkspace,
   OperationalDbStats,
   saveOperationalWorkspaceTx,
+  prepareEncryptedOperationalWorkspaceMigration as prepareEncryptedOperationalWorkspaceMigrationInDb,
+  getPreparedEncryptedOperationalWorkspaceMeta,
+  type EncryptedOperationalWorkspaceMeta,
 } from '../lib/operationalDb';
 import {
   deleteLocalSnapshot,
@@ -143,6 +146,8 @@ interface AccountingContextValue {
   localSnapshots: LocalBackupSnapshotMeta[];
   lastLocalBackupAt: string | null;
   backupSessionUnlocked: boolean;
+  encryptedOperationalWorkspaceMeta: EncryptedOperationalWorkspaceMeta | null;
+  prepareEncryptedOperationalWorkspaceMigration: () => Promise<boolean>;
   unlockBackupSession: (passphrase: string) => boolean;
   lockBackupSession: () => void;
   triggerLocalBackupNow: (alsoDownload?: boolean) => Promise<void>;
@@ -403,6 +408,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [audioEnabled, setAudioEnabledState] = useState<boolean>(() => isAudioFeedbackEnabled());
   const [includeDraftsInReports, setIncludeDraftsInReports] = useState<boolean>(false);
   const [operationalDbStats, setOperationalDbStats] = useState<OperationalDbStats | null>(null);
+  const [encryptedOperationalWorkspaceMeta, setEncryptedOperationalWorkspaceMeta] = useState<EncryptedOperationalWorkspaceMeta | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
   const isValidProfilePhotoData = (val: unknown): val is string =>
@@ -7252,6 +7258,23 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     showToast('قفل پشتیبان بسته شد.');
   }, [showToast]);
 
+  const prepareEncryptedOperationalWorkspaceMigration = useCallback(async (): Promise<boolean> => {
+    if (!backupSessionUnlocked) {
+      showToast('ابتدا قفل رمزنگاری پشتیبان را باز کنید.', 'warning');
+      return false;
+    }
+    try {
+      const workspaceId = String(profile.uid || DEMO_OWNER).trim();
+      const meta = await prepareEncryptedOperationalWorkspaceMigrationInDb(workspaceId);
+      setEncryptedOperationalWorkspaceMeta(meta);
+      showToast('نسخه رمزگذاری‌شده فضای کاری آماده و صحت‌سنجی شد. داده اصلی هنوز حذف یا جایگزین نشده است.');
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'آماده‌سازی مهاجرت رمزگذاری‌شده ناموفق بود.', 'error');
+      return false;
+    }
+  }, [backupSessionUnlocked, profile.uid, showToast]);
+
   const triggerLocalBackupNow = useCallback(
     async (alsoDownload = false) => {
       if (!backupSessionUnlocked) {
@@ -7323,6 +7346,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         localSnapshots,
         lastLocalBackupAt,
         backupSessionUnlocked,
+        encryptedOperationalWorkspaceMeta,
+        prepareEncryptedOperationalWorkspaceMigration,
         unlockBackupSession,
         lockBackupSession,
         triggerLocalBackupNow,
