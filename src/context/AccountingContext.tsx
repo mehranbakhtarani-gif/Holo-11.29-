@@ -7231,6 +7231,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     subcontractJobs,
     rbacOperators,
     auditLogs,
+    backupSessionUnlocked,
   ]);
 
   const unlockBackupSession = useCallback((passphrase: string): boolean => {
