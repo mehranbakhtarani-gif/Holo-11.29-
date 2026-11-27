@@ -4451,6 +4451,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const postMonthlyPayrollVoucher = useCallback(
     async (monthName: string) => {
+      if (
+        typeof monthName !== 'string' ||
+        !monthName.trim() ||
+        monthName.trim().length > 32 ||
+        /[\\u0000-\\u001f\\u007f]/.test(monthName)
+      ) {
+        throw new Error('ماه حقوق باید یک عنوان معتبر حداکثر ۳۲ نویسه‌ای باشد.');
+      }
       if (!assertPermission('canCreateVoucher') || !assertPermission('canFinalizeVoucher')) {
         throw new Error('عدم دسترسی (RBAC) برای ثبت سند حقوق.');
       }
@@ -4489,6 +4497,23 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         0
       );
       const totalTax = calcs.reduce((sum, calc) => sum + calc.incomeTax, 0);
+      const payrollAmounts = calcs.flatMap((calc) => [
+        calc.totalEmployerCost,
+        calc.netPay,
+        calc.employeeInsurance,
+        calc.employerInsurance,
+        calc.incomeTax,
+      ]);
+      if (
+        payrollAmounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0) ||
+        !Number.isSafeInteger(totalExpense) ||
+        !Number.isSafeInteger(totalNet) ||
+        !Number.isSafeInteger(totalInsurance) ||
+        !Number.isSafeInteger(totalTax) ||
+        totalExpense !== totalNet + totalInsurance + totalTax
+      ) {
+        throw new Error('مبالغ محاسبه حقوق معتبر یا متوازن نیستند؛ هیچ سندی ثبت نشد.');
+      }
 
       const lines: VoucherLine[] = [
         {
