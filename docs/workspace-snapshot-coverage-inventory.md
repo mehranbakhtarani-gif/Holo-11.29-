@@ -125,3 +125,15 @@ Critical reliability finding: save/delete operations in this vault catch Indexed
 ### Credential and device secrets — explicitly excluded
 
 Do not include authentication secrets in workspace snapshots. The repository also has device/PIN-related local state, including mesh passphrase and RBAC PIN hash keys. These require a separate security audit and migration to an appropriate secret lifecycle; they must not be copied into backups or cloud snapshots as ordinary business data.
+
+## Document attachment encryption implementation status
+
+The Document Vault now encrypts newly saved attachment content before IndexedDB persistence using the existing backup envelope contract (PBKDF2-SHA256 + AES-256-GCM, per-envelope random salt and IV). The backup-session passphrase is required for new writes and reads. Listing returns metadata only and strips the ciphertext envelope from the UI result.
+
+Legacy plaintext attachment records remain readable only after the backup vault is unlocked. On authorized retrieval, the SHA-256 digest is checked before encrypting and replacing the legacy record; a failed migration is surfaced and does not report success. Browser IndexedDB read/write/delete failures fail closed; the in-memory map is restricted to non-browser test runtimes.
+
+Remaining controls before phase-4 exit:
+- Add browser IndexedDB integration tests for encrypted-at-rest bytes, legacy migration, wrong-passphrase/tamper rejection, and failed atomic replacement.
+- Include attachment envelopes in the unified encrypted workspace backup/export/restore contract; the separate Document Vault database is not yet covered by the operational workspace shadow.
+- Evaluate whether attachment metadata (file names, entity labels, notes, uploader identity) needs field-level encryption; these fields remain queryable in plaintext to support listing and RBAC.
+- Document shared passphrase/key recovery requirements across devices. A device that lacks the passphrase cannot decrypt attachment content.
