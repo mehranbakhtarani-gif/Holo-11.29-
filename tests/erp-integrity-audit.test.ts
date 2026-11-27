@@ -1282,6 +1282,19 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
     /رمزگشایی|خراب|معتبر/
   );
 
+  const postExportAttachment = await saveDocumentAttachment({
+    entityType: 'invoice',
+    entityId: 'inv_after_export',
+    entityLabel: 'پیوست ایجادشده پس از تهیه پشتیبان',
+    fileName: 'later.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+    uploadedBy: 'مدیر مالی',
+    uploadedByRole: 'finance_manager',
+  });
+  assert.equal(postExportAttachment.ok, true, 'A second attachment should be persisted before testing full restore replacement');
+  if (!postExportAttachment.ok) return;
+
   const removed = await deleteDocumentAttachment(saved.meta.id, 'finance_manager');
   assert.equal(removed.ok, true);
   const restored = await restoreEncryptedDocumentAttachmentBundle(encryptedBundleJson);
@@ -1289,6 +1302,8 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
   const afterRestore = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
   assert.equal(afterRestore.ok, true);
   if (afterRestore.ok) assert.equal(afterRestore.integrityValid, true);
+  const staleAfterRestore = await retrieveVerifiedAttachment(postExportAttachment.meta.id, 'finance_manager');
+  assert.equal(staleAfterRestore.ok, false, 'Full backup restore must remove attachments absent from the backup snapshot');
   lockBackupSession();
 });
 
