@@ -51,11 +51,11 @@ import { SystemResetCenter } from './SystemResetCenter';
 import { useInvoiceSettings } from '../lib/invoiceSettings';
 import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
-import { exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
+import { cleanupOrphanedStagedDocumentAttachmentBundles, exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
 import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
 import { requireBackupSessionPassphrase } from '../lib/backupSession';
 import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
-import { getActiveOperationalRestoreJournal, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
+import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -137,7 +137,15 @@ export const SettingsView: React.FC<{
   useEffect(() => {
     let active = true;
     getActiveOperationalRestoreJournal()
-      .then((journal) => { if (active) { setPendingRestoreJournal(journal); setRestoreJournalReadError(null); } })
+      .then(async (journal) => {
+        if (!active) return;
+        setPendingRestoreJournal(journal);
+        setRestoreJournalReadError(null);
+        if (!journal && !isOperationalRestoreBarrierActive()) {
+          try { await cleanupOrphanedStagedDocumentAttachmentBundles(); }
+          catch (error) { console.warn('Orphaned pre-commit attachment staging cleanup was deferred.', error); }
+        }
+      })
       .catch((error) => { if (active) setRestoreJournalReadError(error instanceof Error ? error.message : 'وضعیت بازیابی قابل بررسی نیست.'); });
     return () => { active = false; };
   }, []);
