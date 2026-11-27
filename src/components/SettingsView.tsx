@@ -1475,11 +1475,18 @@ export const SettingsView: React.FC<{
                       <div className="inline-flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => void restoreFromLocalSnapshot(snap.id)}
+                          onClick={() => {
+                            const isLegacyPlaintext = snap.encryptionStatus === 'legacy-plaintext';
+                            if (
+                              isLegacyPlaintext &&
+                              !window.confirm('این نسخه پشتیبان قدیمی و بدون رمزنگاری است. فقط در صورت اعتماد به این داده و پذیرش ریسک، آن را به‌صورت دستی بازیابی کنید. پس از بازیابی، فوراً یک نسخه پشتیبان رمزگذاری‌شده بسازید. ادامه می‌دهید؟')
+                            ) return;
+                            void restoreFromLocalSnapshot(snap.id, isLegacyPlaintext);
+                          }}
                           className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-teal-700 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/50 rounded-md"
                         >
                           <RefreshCw className="w-3 h-3" />
-                          <span>بازیابی</span>
+                          <span>{snap.encryptionStatus === 'legacy-plaintext' ? 'مهاجرت امن' : 'بازیابی'}</span>
                         </button>
                         <button
                           type="button"
