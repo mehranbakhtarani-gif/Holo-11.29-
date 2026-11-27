@@ -218,6 +218,51 @@ function allocateLayerCostIrr(layer: InventoryCostLayer, takeQty: number): numbe
 }
 
 /**
+ * Allocate successive partial FIFO returns from the unreturned tail of the
+ * original sale's consumed layers. Integer-Rial boundaries are differenced so
+ * repeated partial returns conserve the original layer cost without rounding drift.
+ */
+function sliceFifoReturnAllocations(
+  original: ConsumedCostLayerAllocation[],
+  alreadyReturnedQty: number,
+  returnQty: number
+): ConsumedCostLayerAllocation[] {
+  let skip = roundQty(alreadyReturnedQty);
+  let remaining = roundQty(returnQty);
+  const selected: Array<ConsumedCostLayerAllocation | undefined> = new Array(original.length);
+
+  for (let index = original.length - 1; index >= 0 && remaining > 0.00005; index -= 1) {
+    const allocation = original[index];
+    const allocationQty = roundQty(allocation.qty);
+    if (!Number.isFinite(allocationQty) || allocationQty <= 0 ||
+        !Number.isFinite(allocation.totalCostIrr) || allocation.totalCostIrr < 0) {
+      throw new Error('ریز لایه‌های بهای فروش اصلی برای برگشت معتبر نیست.');
+    }
+
+    const skippedHere = Math.min(skip, allocationQty);
+    skip = roundQty(Math.max(0, skip - skippedHere));
+    const availableHere = roundQty(Math.max(0, allocationQty - skippedHere));
+    const take = roundQty(Math.min(availableHere, remaining));
+    if (take <= 0.00005) continue;
+
+    const costAtStart = Math.round((allocation.totalCostIrr * skippedHere) / allocationQty);
+    const costAtEnd = Math.round((allocation.totalCostIrr * (skippedHere + take)) / allocationQty);
+    selected[index] = {
+      ...allocation,
+      qty: take,
+      totalCostIrr: Math.max(0, costAtEnd - costAtStart),
+      unitCostIrr: take > 0 ? Math.round((costAtEnd - costAtStart) / take) : allocation.unitCostIrr,
+    };
+    remaining = roundQty(Math.max(0, remaining - take));
+  }
+
+  if (skip > 0.00005 || remaining > 0.00005) {
+    throw new Error('مقدار برگشت تجمعی از تخصیص لایه‌های فروش اصلی بیشتر است.');
+  }
+  return selected.filter((allocation): allocation is ConsumedCostLayerAllocation => Boolean(allocation));
+}
+
+/**
  * Applies a single chronological inventory movement against a ProductInventoryState
  * using either FIFO or Moving Weighted Average (and maintains exact FIFO layers in parallel
  * so switching methods or auditing layers is always mathematically traceable).
@@ -1010,8 +1055,27 @@ export function recalculateInventoryLedger(input: {
   let netInflowsIrr = Math.round(openingValueIrr);
   let netOutflowsIrr = 0;
 
+  const fifoReturnedQtyBySaleRef = new Map<string, number>();
+
   for (const m of sorted) {
-    const step = applyInventoryMovementStep(state, m, saleHistoryByRef);
+    let movementForStep = m;
+    if (costingMethod === 'fifo' && m.kind === 'sale_return' && m.sourceRefId) {
+      const originalAllocations =
+        m.originalConsumedLayers || saleHistoryByRef.get(m.sourceRefId)?.consumedLayers;
+      if (originalAllocations?.length) {
+        const alreadyReturned = fifoReturnedQtyBySaleRef.get(m.sourceRefId) || 0;
+        movementForStep = {
+          ...m,
+          originalConsumedLayers: sliceFifoReturnAllocations(
+            originalAllocations,
+            alreadyReturned,
+            m.qty
+          ),
+        };
+        fifoReturnedQtyBySaleRef.set(m.sourceRefId, roundQty(alreadyReturned + m.qty));
+      }
+    }
+    const step = applyInventoryMovementStep(state, movementForStep, saleHistoryByRef);
     state = step.nextState;
 
     if (m.kind === 'sale') {
