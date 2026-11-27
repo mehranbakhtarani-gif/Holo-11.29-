@@ -14,6 +14,7 @@ import {
   discardStagedDocumentAttachmentBundle,
   stageEncryptedDocumentAttachmentBundle,
   verifyStagedDocumentAttachmentBundle,
+  setDocumentVaultRestoreBarrier,
 } from './documentVault';
 import {
   computeSnapshotSha256Hex,
@@ -38,6 +39,7 @@ export interface CompleteBackupRestoreResult {
 function announceRestoreBarrier(active: boolean, reload = false): void {
   const effectiveActive = reload ? true : active;
   setOperationalRestoreBarrier(effectiveActive);
+  setDocumentVaultRestoreBarrier(effectiveActive);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('holoo:restore-barrier', {
       detail: { active: effectiveActive, reload },
