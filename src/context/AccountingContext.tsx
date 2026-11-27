@@ -120,6 +120,7 @@ import {
   setAutoBackupOnClosePref,
 } from '../lib/localBackup';
 import { planPeriodReopening } from '../lib/accountingIntegrityEngine';
+import { getStatutoryParamsForYear, validateStatutoryParams } from '../lib/iranStatutoryParams';
 import {
   Holo203SourcePayload,
   HoloMigrationResult,
@@ -4092,10 +4093,23 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const postMonthlyPayrollVoucher = useCallback(
     async (monthName: string) => {
+      const fiscalYear = profile.fiscalYear;
+      const statutoryParams = getStatutoryParamsForYear(fiscalYear, profile.statutoryParamsByYear);
+      const statutoryErrors = validateStatutoryParams(statutoryParams);
+      if (statutoryErrors.length > 0) {
+        const message = `پارامترهای قانونی حقوق سال ${fiscalYear} معتبر نیستند: ${statutoryErrors.join('؛ ')}`;
+        showToast(message, 'error');
+        throw new Error(message);
+      }
+      if (statutoryParams.requiresUserVerification && statutoryParams.verifiedByUser !== true) {
+        const message = `قبل از صدور سند حقوق سال ${fiscalYear}، پارامترهای قانونی باید توسط کاربر مجاز تأیید شوند.`;
+        showToast(message, 'error');
+        throw new Error(message);
+      }
       const activeEmps = employees.filter((e) => e.active);
       if (activeEmps.length === 0) return;
       const calcs = activeEmps.map((emp) =>
-        calculateEmployeePayroll(emp, profile.fiscalYear, profile.statutoryParamsByYear)
+        calculateEmployeePayroll(emp, fiscalYear, profile.statutoryParamsByYear)
       );
       const totalExpense = calcs.reduce((s, c) => s + c.totalEmployerCost, 0);
       const totalNet = calcs.reduce((s, c) => s + c.netPay, 0);
@@ -4147,7 +4161,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         lines,
       });
     },
-    [employees, profile.fiscalYear, profile.statutoryParamsByYear, createVoucher]
+    [employees, profile.fiscalYear, profile.statutoryParamsByYear, createVoucher, showToast]
   );
 
   const paySalariesVoucher = useCallback(
