@@ -616,6 +616,7 @@ export async function stageEncryptedDocumentAttachmentBundle(
     validated.push(encryptedRecord);
   }
 
+  validated.sort((a, b) => a.id.localeCompare(b.id));
   const manifestDigest = await computeSha256Hex(JSON.stringify(validated));
   const manifest: StagedDocumentRestoreManifest = {
     restoreId, packageDigest, manifestDigest, rowCount: validated.length,
@@ -672,7 +673,7 @@ export async function verifyStagedDocumentAttachmentBundle(
           reject(new Error('manifest staging پیوست‌ها با بسته بازیابی مطابقت ندارد.'));
           return;
         }
-        const digest = await computeSha256Hex(JSON.stringify(rows.map((row) => row.record)));
+        const digest = await computeSha256Hex(JSON.stringify(rows.map((row) => row.record).sort((a, b) => a.id.localeCompare(b.id))));
         if (digest !== manifest.manifestDigest) {
           reject(new Error('اثر انگشت staging پیوست‌ها معتبر نیست.'));
           return;
