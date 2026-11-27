@@ -127,7 +127,11 @@ export class IndexedDbLocalRepository implements LocalRepositoryAdapter {
       workspaceId: op.workspaceId,
       deviceId: op.deviceId,
       clientRevision: op.clientRevision,
+      baseRevision: op.baseRevision,
+      entityKind: op.entityKind,
+      entityId: op.entityId,
       payloadHash: op.payloadHashSha256,
+      payload: op.payload,
       createdAt: op.createdAt,
       retryCount: op.retryCount,
       nextRetryAt: new Date(op.nextRetryAtMs).toISOString(),
@@ -142,16 +146,26 @@ export class IndexedDbLocalRepository implements LocalRepositoryAdapter {
     return idbOps.map((row) => {
       const cached = this.payloadCache.get(row.operationId);
       if (cached) return cached;
+      if (
+        !row.payload ||
+        typeof row.entityKind !== 'string' ||
+        typeof row.entityId !== 'string' ||
+        typeof row.baseRevision !== 'number'
+      ) {
+        throw new Error(
+          `Outbox operation ${row.operationId} predates durable payload storage or is corrupt; automatic replay is blocked to prevent data loss.`
+        );
+      }
       return {
         operationId: row.operationId,
         workspaceId: row.workspaceId,
         deviceId: row.deviceId,
-        entityKind: 'vouchers',
-        entityId: row.operationId,
-        baseRevision: Math.max(0, row.clientRevision - 1),
+        entityKind: row.entityKind,
+        entityId: row.entityId,
+        baseRevision: row.baseRevision,
         clientRevision: row.clientRevision,
         payloadHashSha256: row.payloadHash,
-        payload: {},
+        payload: row.payload,
         createdAt: row.createdAt,
         retryCount: row.retryCount,
         nextRetryAtMs: row.nextRetryAt ? Date.parse(row.nextRetryAt) || 0 : 0,
