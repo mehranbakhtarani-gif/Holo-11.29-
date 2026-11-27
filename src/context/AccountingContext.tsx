@@ -4980,6 +4980,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const assetUpdates: {
           id: string;
           expectedAccumulatedDepreciation: number;
+          expectedPurchaseCost: number;
+          expectedSalvageValue: number;
+          expectedUsefulLifeYears: number;
+          expectedPurchaseDate: string;
           depreciationAmount: number;
           accumulatedDepreciation: number;
         }[] = [];
