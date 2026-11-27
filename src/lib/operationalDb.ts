@@ -453,6 +453,10 @@ export async function commitInvoiceOperationalTx(
     try {
       tx = db.transaction(['meta', 'products', 'vouchers', 'cheques', 'invoices'], 'readwrite');
 
+      if (!Array.isArray(payload.updatedProducts)) {
+        throw new Error('ATOMIC_ROLLBACK_INVALID_PRODUCTS: فهرست تغییرات انبار معتبر نیست.');
+      }
+
       // 1. Inventory (Products & FIFO/MWA layers)
       const prodStore = tx.objectStore('products');
       const seenProductIds = new Set<string>();
@@ -475,7 +479,7 @@ export async function commitInvoiceOperationalTx(
       // 2. General Ledger (Double-Entry Voucher) — enforce strict Debit === Credit balance
       if (payload.voucher) {
         const v = payload.voucher;
-        if (!v.id || !Array.isArray(v.lines) || v.lines.length < 2) {
+        if (typeof v.id !== 'string' || !v.id.trim() || !Array.isArray(v.lines) || v.lines.length < 2) {
           throw new Error('ATOMIC_ROLLBACK_INVALID_VOUCHER: سند حسابداری باید حداقل ۲ ردیف معتبر داشته باشد.');
         }
         let totalDebit = 0;
@@ -514,16 +518,19 @@ export async function commitInvoiceOperationalTx(
       ];
       if (allCheques.length > 0) {
         const chequeStore = tx.objectStore('cheques');
+        const seenChequeIds = new Set<string>();
         for (const chq of allCheques) {
           if (
             !chq ||
             typeof chq.id !== 'string' ||
             !chq.id.trim() ||
             !Number.isSafeInteger(chq.amount) ||
-            chq.amount <= 0
+            chq.amount <= 0 ||
+            seenChequeIds.has(chq.id)
           ) {
-            throw new Error('ATOMIC_ROLLBACK_INVALID_CHEQUE: شناسه یا مبلغ چک خزانه نامعتبر است.');
+            throw new Error('ATOMIC_ROLLBACK_INVALID_CHEQUE: شناسه تکراری یا مبلغ نامعتبر چک خزانه است.');
           }
+          seenChequeIds.add(chq.id);
           const req = chequeStore.put(chq);
           req.onerror = () => abortAndReject(req.error ?? new Error('Cheque store write failed'));
         }
