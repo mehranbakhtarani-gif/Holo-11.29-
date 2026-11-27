@@ -312,6 +312,15 @@ async function runTests() {
   const meshSyncSrc = fs.readFileSync(path.join(root, 'src/hooks/useLocalFirstMeshSync.ts'), 'utf8');
   const viteConfigSrc = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
   const accountingCtxSrc = fs.readFileSync(path.join(root, 'src/context/AccountingContext.tsx'), 'utf8');
+  const operationalDbSrc = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
+
+  // Operational DB read failures must not be mistaken for an empty workspace,
+  // otherwise fallback/demo hydration could mask or overwrite inaccessible data.
+  const operationalHydrationStart = operationalDbSrc.indexOf('export async function loadOperationalWorkspace()');
+  const operationalHydrationEnd = operationalDbSrc.indexOf('export function countOperationalWorkspaceRecords', operationalHydrationStart);
+  const operationalHydration = operationalDbSrc.slice(operationalHydrationStart, operationalHydrationEnd);
+  assert.match(operationalHydration, /catch \(error\)[\s\S]*throw error/);
+  assert.match(accountingCtxSrc, /Operational workspace hydration failed; fallback hydration was blocked/);
 
   // Subcontract completion must remain blocked until raw stock, finished product,
   // permanent voucher and job status share one atomic transaction.
