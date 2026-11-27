@@ -34,9 +34,13 @@ async function run() {
     localProfiles: [{ workspaceId: 'workspace-1', profileId: 'local-1' }],
     syncOutbox: [{ operationId: 'op-1', target: 'firebase' as const, workspaceId: 'workspace-1', deviceId: 'dev-1', clientRevision: 7, payloadHash: 'abc', createdAt: '2026-11-27T00:00:00.000Z', retryCount: 0, status: 'pending' as const }],
     syncInbox: [{ operationId: 'in-1', sourceDeviceId: 'dev-2', payloadHash: 'def', receivedAt: '2026-11-27T00:00:00.000Z' }],
-    workspaceExtensions: {
-      warehouseTransfers: [{ id: 'trf-1', transferNumber: 'TRF-1', status: 'in_transit' }],
+    businessLocalState: {
+      schemaVersion: 1,
+      capturedAt: '2026-11-27T00:00:00.000Z',
+      stores: { holoo_apex96_workspace_extensions_v2: JSON.stringify({
+      warehouseTransfers: [{ id: 'trf-1', transferNumber: 'TRF-1', productId: 'p-1', fromWarehouse: 'Main', toWarehouse: 'Branch', qty: 2, status: 'in_transit' }],
       bankLoans: [{ id: 'loan-1', amountIrr: 5000 }],
+    }) },
     },
     localRevision: 7,
     updatedAt: '2026-11-27T00:00:00.000Z',
@@ -50,9 +54,12 @@ async function run() {
   assert.equal(restored.snapshotJson, json);
   assert.equal(restored.sha256, envelope.plaintextSha256);
   assert.deepEqual(parseOperationalWorkspaceSnapshot(restored.snapshotJson!), workspace);
-  assert.equal(countOperationalWorkspaceRecords(workspace), 8);
-  assert.deepEqual(parseOperationalWorkspaceSnapshot(restored.snapshotJson!).workspaceExtensions, workspace.workspaceExtensions,
-    'business-critical workspace extensions must be included in the authenticated encrypted snapshot');
+  assert.equal(countOperationalWorkspaceRecords(workspace), 16);
+  assert.equal(
+    parseOperationalWorkspaceSnapshot(restored.snapshotJson!).businessLocalState?.stores.holoo_apex96_workspace_extensions_v2,
+    workspace.businessLocalState.stores.holoo_apex96_workspace_extensions_v2,
+    'business-critical workspace extensions must be included in the authenticated encrypted snapshot'
+  );
   assert.deepEqual(parseOperationalWorkspaceSnapshot(json).warehouses, workspace.warehouses);
   assert.deepEqual(parseOperationalWorkspaceSnapshot(json).taxReports, workspace.taxReports);
   assert.deepEqual(parseOperationalWorkspaceSnapshot(json).localProfiles, workspace.localProfiles);
@@ -78,14 +85,6 @@ async function run() {
   assert.throws(
     () => parseOperationalWorkspaceSnapshot(JSON.stringify({ ...workspace, taxReports: null })),
     /ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار/
-  );
-  assert.throws(
-    () => parseOperationalWorkspaceSnapshot(JSON.stringify({ ...workspace, workspaceExtensions: [] })),
-    /ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار/
-  );
-  assert.throws(
-    () => countOperationalWorkspaceRecords({ ...workspace, workspaceExtensions: [] as unknown as Record<string, unknown> }),
-    /ساختار داده‌های تکمیلی فضای کاری معتبر نیست/
   );
 
   const validMetadata = {
