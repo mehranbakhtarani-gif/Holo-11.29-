@@ -269,9 +269,10 @@ service cloud.firestore {
         && isNonEmptyString(data.title, 160)
         && isNonEmptyString(data.purchaseDate, 20)
         && data.purchaseCost is number && data.purchaseCost > 0
-        && data.salvageValue is number && data.salvageValue >= 0
+        && data.salvageValue is number && data.salvageValue >= 0 && data.salvageValue <= data.purchaseCost
         && data.usefulLifeYears is number && data.usefulLifeYears > 0 && data.usefulLifeYears <= 100
         && data.accumulatedDepreciation is number && data.accumulatedDepreciation >= 0
+        && data.accumulatedDepreciation <= (data.purchaseCost - data.salvageValue)
         && isOptionalString(data, 'costCenterId', 128)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
