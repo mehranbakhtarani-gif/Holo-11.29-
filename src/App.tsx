@@ -8,6 +8,7 @@ import {
   BellOff,
   BellRing,
   Calculator,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -1873,42 +1874,46 @@ export default function App() {
               aria-label="انتخاب عکس پروفایل"
               onChange={handleAvatarFileChange}
             />
-            <button
-              type="button"
-              onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
-              title="پروفایل کاربر و مدیریت دسترسی‌ها"
-              className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
-            >
-              {profile.profilePhotoData && !avatarError ? (
-                <img
-                  src={profile.profilePhotoData}
-                  alt={`عکس پروفایل ${profile.displayName || activeOperator.fullName}`}
-                  onError={() => setAvatarError(true)}
-                  className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-white/15"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
-                  {(profile.displayName || activeOperator.fullName).slice(0, 1)}
-                </div>
-              )}
-              <div className="hidden xl:flex flex-col text-right leading-tight">
-                <span className="text-xs font-semibold text-[#0F172A] dark:text-white whitespace-nowrap">
-                  {activeOperator.fullName}
+            <div className="relative flex items-center">
+              <button
+                type="button"
+                onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
+                title="پروفایل کاربر و مدیریت دسترسی‌ها"
+                className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+              >
+                <span className="relative block w-8 h-8 shrink-0">
+                  {profile.profilePhotoData && !avatarError ? (
+                    <img
+                      src={profile.profilePhotoData}
+                      alt={`عکس پروفایل ${profile.displayName || activeOperator.fullName}`}
+                      onError={() => setAvatarError(true)}
+                      className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-white/15"
+                    />
+                  ) : (
+                    <span className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
+                      {(profile.displayName || activeOperator.fullName).slice(0, 1)}
+                    </span>
+                  )}
                 </span>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                  {RBAC_ROLE_LABELS[activeOperator.role].split('(')[0].trim()}
+                <span className="hidden xl:flex flex-col text-right leading-tight">
+                  <span className="text-xs font-semibold text-[#0F172A] dark:text-white whitespace-nowrap">
+                    {activeOperator.fullName}
+                  </span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    {RBAC_ROLE_LABELS[activeOperator.role].split('(')[0].trim()}
+                  </span>
                 </span>
-              </div>
-            </button>
-            <button
-              type="button"
-              onClick={() => avatarInputRef.current?.click()}
-              title="انتخاب یا تغییر عکس پروفایل"
-              aria-label="تغییر عکس پروفایل"
-              className="inline-flex items-center px-2 py-1.5 rounded-lg text-xs font-medium text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-400/20 whitespace-nowrap"
-            >
-              تغییر عکس
-            </button>
+              </button>
+              <button
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+                title="انتخاب یا تغییر عکس پروفایل"
+                aria-label="تغییر عکس پروفایل"
+                className="absolute -bottom-0.5 left-0 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 dark:border-[#161B26] dark:bg-indigo-500 dark:hover:bg-indigo-400"
+              >
+                <Camera className="h-2.5 w-2.5" />
+              </button>
+            </div>
 
             {/* Logout / Cloud Sign-In Action */}
             {isCloudMode ? (
