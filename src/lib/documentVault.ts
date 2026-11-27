@@ -503,7 +503,7 @@ export async function deleteDocumentAttachment(
 
 export interface EncryptedDocumentAttachmentBundle {
   format: 'holoo-apex-encrypted-document-vault';
-  schemaVersion: 2;
+  schemaVersion: 1 | 2;
   exportedAt: string;
   attachments: StoredDocumentAttachmentRecord[];
 }
@@ -603,8 +603,8 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
   let bundle: EncryptedDocumentAttachmentBundle;
   try { bundle = JSON.parse(bundleJson) as EncryptedDocumentAttachmentBundle; }
   catch { throw new Error('ساختار بسته پیوست‌های رمزگذاری‌شده معتبر نیست.'); }
-  if (!bundle || bundle.format !== 'holoo-apex-encrypted-document-vault' || bundle.schemaVersion !== 1 ||
-      !Array.isArray(bundle.attachments)) {
+  if (!bundle || bundle.format !== 'holoo-apex-encrypted-document-vault' ||
+      (bundle.schemaVersion !== 1 && bundle.schemaVersion !== 2) || !Array.isArray(bundle.attachments)) {
     throw new Error('نسخه یا ساختار بسته پیوست‌های رمزگذاری‌شده پشتیبانی نمی‌شود.');
   }
 
@@ -631,15 +631,32 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
     seen.add(candidate.id);
     const verified = await decryptAndVerifyBackupEnvelope(candidate.encryptedEnvelope, passphrase);
     if (!verified.ok || !verified.snapshotJson) throw new Error(verified.error || 'رمزگشایی یکی از پیوست‌ها ناموفق بود.');
-    let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
+    let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown; metadataSha256?: unknown };
     try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
     catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
     if (typeof payload.dataUrl !== 'string' || getBase64DataUrlByteLength(payload.dataUrl, candidate.mimeType) === null || payload.mimeType !== candidate.mimeType ||
         payload.sha256 !== candidate.sha256 || await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
       throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
     }
+    const expectedMetadataSha256 = await computeAttachmentMetadataSha256(candidate);
+    if (payload.metadataSha256 !== undefined && payload.metadataSha256 !== expectedMetadataSha256) {
+      throw new Error('اصالت فراداده یکی از پیوست‌ها معتبر نیست.');
+    }
+    if (bundle.schemaVersion === 2 && payload.metadataSha256 !== expectedMetadataSha256) {
+      throw new Error('بسته پیوست نسخه ۲ فاقد مهر اصالت فراداده معتبر است.');
+    }
+    let normalizedEnvelope = candidate.encryptedEnvelope;
+    if (payload.metadataSha256 === undefined) {
+      const upgradedEnvelope = await encryptBackupEnvelope(JSON.stringify({
+        dataUrl: payload.dataUrl,
+        mimeType: candidate.mimeType,
+        sha256: candidate.sha256,
+        metadataSha256: expectedMetadataSha256,
+      }), passphrase);
+      normalizedEnvelope = JSON.stringify(upgradedEnvelope);
+    }
     const { dataUrl: _plaintext, ...encryptedRecord } = candidate;
-    validated.push(encryptedRecord);
+    validated.push({ ...encryptedRecord, encryptedEnvelope: normalizedEnvelope });
   }
 
   if (isIdbAvailable()) {
