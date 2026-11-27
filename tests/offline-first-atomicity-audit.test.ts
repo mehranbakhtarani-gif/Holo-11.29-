@@ -830,6 +830,30 @@ async function runTests() {
   assert.equal(depreciationSim.stores.assets.get(asset.id).accumulatedDepreciation, 11_800_000);
   assert.equal(depreciationSim.stores.vouchers.get(depreciationVoucher.id).referenceId, depreciationVoucher.referenceId);
   assert.equal(depreciationSim.stores.meta.get('workspace_meta').localRevision, 13);
+  const mismatchDepreciationSim = createTransactionalIdbSimulator({
+    assets: [asset],
+    meta: [{ key: 'workspace_meta', localRevision: 14 }],
+  });
+  await assert.rejects(
+    () => commitDepreciationOperationalTx({
+      assetUpdates: [{
+        id: asset.id,
+        expectedAccumulatedDepreciation: 10_000_000,
+        expectedPurchaseCost: 120_000_000,
+        expectedSalvageValue: 12_000_000,
+        expectedUsefulLifeYears: 5,
+        expectedPurchaseDate: '1404/01/01',
+        depreciationAmount: 1_800_000,
+        accumulatedDepreciation: 11_800_000,
+      }],
+      voucher: { ...depreciationVoucher, id: 'vch_dep_mismatch', totalDebit: 1_900_000, totalCredit: 1_900_000 },
+    }, { dbOverride: mismatchDepreciationSim.db }),
+    /ATOMIC_DEPRECIATION_ASSET_VOUCHER_MISMATCH/
+  );
+  assert.equal(mismatchDepreciationSim.stores.assets.get(asset.id).accumulatedDepreciation, 10_000_000);
+  assert.equal(mismatchDepreciationSim.stores.vouchers.size, 0);
+  assert.equal(mismatchDepreciationSim.stores.meta.get('workspace_meta').localRevision, 14);
+  console.log('✓ 7c. Asset depreciation total must equal the permanent voucher amount');
   console.log('✓ 7. Depreciation asset balances, permanent voucher and workspace revision commit atomically');
 
   const depreciationRollbackSim = createTransactionalIdbSimulator({
