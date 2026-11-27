@@ -73,6 +73,10 @@ Do not store a passphrase or encryption key in localStorage, ordinary IndexedDB,
 - Automated verification must pass after the latest changes before this rollout can be considered validated.
 
 
+### Operational database cutover gate
+
+A separate technical gate plan now documents the store inventory, encrypted repository contract, atomic transaction requirements, revision fencing, restore/rollback design, cross-tab coordination, and mandatory release checklist: [operational-db-cutover-plan.md](./operational-db-cutover-plan.md). This is a design and audit artifact only; it does not authorize or enable cutover.
+
 ### Encrypted operational shadow mirror (2026-11-27)
 
 - When the session backup vault is unlocked, the application now schedules a debounced encrypted shadow snapshot after operational workspace changes.
