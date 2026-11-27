@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ClipboardList,
   CreditCard,
+  ArrowLeftRight,
   Factory,
   Layers,
   Loader2,
@@ -43,7 +44,7 @@ import {
 } from '../lib/inventoryCostingEngine';
 import { MoneyInput } from './ui/MoneyInput';
 
-type WarehouseCrmTab = 'dye-lots' | 'slips' | 'bom' | 'installments';
+type WarehouseCrmTab = 'dye-lots' | 'slips' | 'bom' | 'installments' | 'transfers';
 
 export const WarehouseCrmOpsView: React.FC<{
   initialIntent?: string;
@@ -67,6 +68,9 @@ export const WarehouseCrmOpsView: React.FC<{
     bomFormulas,
     installmentPlans,
     volumeDiscountRules,
+    warehouseTransfers,
+    createTrackedWarehouseTransfer,
+    receiveTrackedWarehouseTransfer,
     updateExtensions,
   } = useWorkspaceExtensions();
 
@@ -81,12 +85,63 @@ export const WarehouseCrmOpsView: React.FC<{
       initialIntent === 'dye-lots' ||
       initialIntent === 'slips' ||
       initialIntent === 'bom' ||
-      initialIntent === 'installments'
+      initialIntent === 'installments' ||
+      initialIntent === 'transfers'
     ) {
       setActiveTab(initialIntent);
       clearIntent?.();
     }
   }, [initialIntent, clearIntent]);
+
+  const [transferProductId, setTransferProductId] = useState(products[0]?.id || '');
+  const [transferDestination, setTransferDestination] = useState('');
+  const [transferQty, setTransferQty] = useState('');
+  const [transferNumber, setTransferNumber] = useState('');
+  const [transferMode, setTransferMode] = useState<'immediate' | 'in_transit'>('in_transit');
+  const [savingTransfer, setSavingTransfer] = useState(false);
+
+  const handleCreateTrackedTransfer = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const product = products.find((item) => item.id === transferProductId);
+    const qty = Number(transferQty);
+    if (!product || !product.warehouse.trim() || !transferDestination.trim() ||
+      transferDestination.trim() === product.warehouse || !Number.isFinite(qty) || qty <= 0 ||
+      !transferNumber.trim()) {
+      showToast('کالا، انبار مبدا و مقصد متفاوت، مقدار و شماره انتقال معتبر الزامی است.');
+      return;
+    }
+    setSavingTransfer(true);
+    try {
+      const record = await createTrackedWarehouseTransfer({
+        productId: product.id,
+        fromWarehouse: product.warehouse,
+        toWarehouse: transferDestination.trim(),
+        qty,
+        transferNumber: transferNumber.trim(),
+        mode: transferMode,
+        date: getTodayShamsi(),
+      });
+      setTransferQty('');
+      setTransferNumber('');
+      showToast(`انتقال ${record.transferNumber} با موفقیت ثبت شد؛ ارزش انتقال ${formatMoney(record.transferredCostIrr, unitName === 'تومان' ? 'IRT' : 'IRR')}.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ثبت انتقال ناموفق بود.');
+    } finally {
+      setSavingTransfer(false);
+    }
+  };
+
+  const handleReceiveTrackedTransfer = async (transferId: string) => {
+    setSavingTransfer(true);
+    try {
+      const record = await receiveTrackedWarehouseTransfer(transferId, getTodayShamsi());
+      showToast(`انتقال ${record.transferNumber} در انبار مقصد دریافت شد.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'دریافت انتقال ناموفق بود.');
+    } finally {
+      setSavingTransfer(false);
+    }
+  };
 
   // ==================== TAB 1: DYE-LOT / BATCH TRACKING ====================
   const [lotProductId, setLotProductId] = useState(products[0]?.id || '');
@@ -743,6 +798,7 @@ export const WarehouseCrmOpsView: React.FC<{
           { id: 'slips' as const, label: 'رسید/حواله مستقل و امانی', icon: ClipboardList },
           { id: 'bom' as const, label: 'فرمول تولید (BOM)', icon: Factory },
           { id: 'installments' as const, label: 'فروش اقساطی و تخفیف پلکانی', icon: CreditCard },
+          { id: 'transfers' as const, label: 'انتقال بین انبارها', icon: ArrowLeftRight },
         ].map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
@@ -763,6 +819,75 @@ export const WarehouseCrmOpsView: React.FC<{
           );
         })}
       </div>
+
+      {activeTab === 'transfers' && (
+        <div className="space-y-5 text-xs">
+          <form onSubmit={handleCreateTrackedTransfer} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">ثبت انتقال ردیابی‌شده با حفظ لایه‌های بهای تمام‌شده</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <label className="space-y-1">
+                <span className="block text-slate-500">کالا / انبار مبدا</span>
+                <select value={transferProductId} onChange={(e) => setTransferProductId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950">
+                  {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name} ({product.warehouse})</option>)}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="block text-slate-500">انبار مقصد</span>
+                <input value={transferDestination} onChange={(e) => setTransferDestination(e.target.value)} maxLength={80} placeholder="نام انبار مقصد" className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950" />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-slate-500">مقدار انتقال</span>
+                <MoneyInput allowDecimal value={transferQty} onValueChange={(_n, raw) => setTransferQty(raw)} placeholder="مقدار" unitLabel="واحد" className="py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950" />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-slate-500">شماره سند انتقال</span>
+                <input value={transferNumber} onChange={(e) => setTransferNumber(e.target.value)} maxLength={80} placeholder="TRF-1405-001" className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 font-code" />
+              </label>
+              <label className="space-y-1">
+                <span className="block text-slate-500">نحوه انتقال</span>
+                <select value={transferMode} onChange={(e) => setTransferMode(e.target.value as 'immediate' | 'in_transit')} className="w-full px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950">
+                  <option value="in_transit">ثبت در راه؛ دریافت جداگانه</option>
+                  <option value="immediate">دریافت فوری در مقصد</option>
+                </select>
+              </label>
+            </div>
+            <button type="submit" disabled={savingTransfer} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold disabled:opacity-50">
+              <ArrowLeftRight className="w-4 h-4" /> {savingTransfer ? 'در حال ثبت...' : 'ثبت انتقال'}
+            </button>
+          </form>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">دفتر انتقالات بین انبارها</h2>
+            {warehouseTransfers.length === 0 ? (
+              <p className="text-slate-500">هنوز سند انتقالی ثبت نشده است.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-right border-collapse">
+                  <thead className="text-slate-500 border-b border-slate-200 dark:border-slate-700">
+                    <tr><th className="py-2 px-2">سند</th><th className="py-2 px-2">کالا</th><th className="py-2 px-2">مسیر</th><th className="py-2 px-2">مقدار</th><th className="py-2 px-2">ارزش (ریال)</th><th className="py-2 px-2">وضعیت</th><th className="py-2 px-2">عملیات</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {[...warehouseTransfers].sort((a, b) => b.date.localeCompare(a.date)).map((transfer) => (
+                      <tr key={transfer.id}>
+                        <td className="py-2 px-2 font-code">{transfer.transferNumber}</td>
+                        <td className="py-2 px-2">{transfer.productName}</td>
+                        <td className="py-2 px-2">{transfer.fromWarehouse} ← {transfer.toWarehouse}</td>
+                        <td className="py-2 px-2 font-code">{formatNumber(transfer.qty)}</td>
+                        <td className="py-2 px-2 font-code">{formatCompactMoney(transfer.transferredCostIrr, 'IRR')}</td>
+                        <td className="py-2 px-2">{transfer.status === 'in_transit' ? 'در راه' : transfer.status === 'received' ? 'دریافت‌شده' : 'لغوشده'}</td>
+                        <td className="py-2 px-2">
+                          {transfer.status === 'in_transit' && (
+                            <button type="button" disabled={savingTransfer} onClick={() => void handleReceiveTrackedTransfer(transfer.id)} className="px-2.5 py-1 rounded bg-teal-700 text-white disabled:opacity-50">ثبت دریافت</button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ==================== TAB 1: DYE-LOT / BATCH ==================== */}
       {activeTab === 'dye-lots' && (
