@@ -2061,6 +2061,51 @@ export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicIn
     throw new Error('برای این فاکتور قبلاً سند حسابداری صادر شده است.');
   }
 
+  // 0b. Validate cumulative sale returns independently of inventory availability.
+  // This guard must run even when the product is missing from the local cache.
+  if (payload.invoiceType === 'sale_return') {
+    if (!payload.sourceInvoiceId || !originalInvoice ||
+        originalInvoice.id !== payload.sourceInvoiceId ||
+        originalInvoice.ownerId !== ownerId ||
+        originalInvoice.invoiceType !== 'sale' ||
+        originalInvoice.status === 'cancelled') {
+      throw new Error('فاکتور فروش مرجع برگشت معتبر نیست یا به این شرکت تعلق ندارد.');
+    }
+    const requestedByProduct = new Map<string, number>();
+    for (const item of payload.items) {
+      const qty = roundQty(Number(item.quantity) || 0);
+      requestedByProduct.set(item.productId, roundQty((requestedByProduct.get(item.productId) || 0) + qty));
+    }
+    const previouslyReturnedByProduct = new Map<string, number>();
+    for (const invoice of existingInvoices) {
+      if (invoice.id === invoiceId ||
+          invoice.ownerId !== ownerId ||
+          invoice.invoiceType !== 'sale_return' ||
+          invoice.status === 'cancelled' ||
+          invoice.sourceInvoiceId !== originalInvoice.id) continue;
+      for (const item of invoice.items || []) {
+        previouslyReturnedByProduct.set(
+          item.productId,
+          roundQty((previouslyReturnedByProduct.get(item.productId) || 0) + (Number(item.quantity) || 0))
+        );
+      }
+    }
+    for (const [productId, requestedQty] of requestedByProduct) {
+      const originalQty = roundQty(
+        originalInvoice.items
+          .filter((item) => item.productId === productId)
+          .reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)
+      );
+      const previouslyReturnedQty = previouslyReturnedByProduct.get(productId) || 0;
+      const remainingReturnable = roundQty(originalQty - previouslyReturnedQty);
+      if (originalQty <= 0 || requestedQty > remainingReturnable + 0.00005) {
+        throw new Error(
+          `مقدار برگشت کالا از مقدار فروش اولیه بیشتر است؛ مقدار فروش: ${originalQty}، برگشت‌های قبلی: ${previouslyReturnedQty}، مانده مجاز: ${Math.max(0, remainingReturnable)}.`
+        );
+      }
+    }
+  }
+
   // 1. Validate arithmetic & settlement totals strictly before any mutation
   if (payload.invoiceType !== 'proforma' && payload.invoiceType !== 'waste') {
     const expectedGrand = Math.max(
