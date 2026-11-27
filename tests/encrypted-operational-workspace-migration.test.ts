@@ -4,6 +4,7 @@ import {
   encryptBackupEnvelope,
 } from '../src/lib/offlineFirstCore';
 import {
+  countOperationalWorkspaceRecords,
   parseOperationalWorkspaceSnapshot,
   queryOperationalStorePaginated,
   validateEncryptedOperationalWorkspaceRecordMetadata,
@@ -40,6 +41,11 @@ async function run() {
   assert.equal(restored.snapshotJson, json);
   assert.equal(restored.sha256, envelope.plaintextSha256);
   assert.deepEqual(parseOperationalWorkspaceSnapshot(restored.snapshotJson!), workspace);
+  assert.equal(countOperationalWorkspaceRecords(workspace), 1);
+  assert.throws(
+    () => countOperationalWorkspaceRecords({ ...workspace, accounts: null as unknown as typeof workspace.accounts }),
+    /مجموعه رکوردهای فضای کاری/
+  );
 
   assert.throws(
     () => parseOperationalWorkspaceSnapshot(JSON.stringify({ profile: {}, accounts: [] })),
