@@ -1275,7 +1275,8 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
     format: string; schemaVersion: number; exportedAt: string;
     attachments: Array<{ encryptedEnvelope: string }>;
   };
-  tamperedBundle.attachments[0].encryptedEnvelope = tamperedBundle.attachments[0].encryptedEnvelope.replace(/.$/, 'A');
+  const originalEnvelope = tamperedBundle.attachments[0].encryptedEnvelope;
+  tamperedBundle.attachments[0].encryptedEnvelope = (originalEnvelope[0] === 'A' ? 'B' : 'A') + originalEnvelope.slice(1);
   await assert.rejects(
     () => restoreEncryptedDocumentAttachmentBundle(JSON.stringify(tamperedBundle)),
     /رمزگشایی|خراب|معتبر/
@@ -1287,6 +1288,7 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
   assert.equal(restored.restored, 1);
   const afterRestore = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
   assert.equal(afterRestore.ok, true);
+  if (afterRestore.ok) assert.equal(afterRestore.integrityValid, true);
   lockBackupSession();
 });
 
