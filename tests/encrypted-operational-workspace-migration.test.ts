@@ -3,7 +3,7 @@ import {
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
 } from '../src/lib/offlineFirstCore';
-import { parseOperationalWorkspaceSnapshot } from '../src/lib/operationalDb';
+import { parseOperationalWorkspaceSnapshot, queryOperationalStorePaginated } from '../src/lib/operationalDb';
 
 async function run() {
   const workspace = {
@@ -46,6 +46,10 @@ async function run() {
     /JSON معتبر نیست/
   );
 
+  const genericSecureStoreRead = await queryOperationalStorePaginated('secureWorkspace');
+  assert.deepEqual(genericSecureStoreRead.items, []);
+  assert.equal(genericSecureStoreRead.total, 0);
+
   const tampered = {
     ...envelope,
     ciphertextB64: envelope.ciphertextB64.slice(0, -4) + 'AAAA',
@@ -53,7 +57,7 @@ async function run() {
   const rejected = await decryptAndVerifyBackupEnvelope(JSON.stringify(tampered), passphrase);
   assert.equal(rejected.ok, false);
 
-  console.log('Encrypted operational workspace migration: 7 assertions passed');
+  console.log('Encrypted operational workspace migration: 9 assertions passed');
 }
 
 run().catch((error) => {
