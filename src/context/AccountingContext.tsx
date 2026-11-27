@@ -127,6 +127,7 @@ import {
   runHolo203Migration,
 } from '../lib/holoMigrationEngine';
 import { emitVoucherNotificationEvent } from '../lib/nativeNotifications';
+import { unlockBackupSession as unlockBackupVault, lockBackupSession as lockBackupVault, isBackupSessionUnlocked } from '../lib/backupSession';
 
 interface AccountingContextValue {
   user: User | null;
@@ -141,6 +142,9 @@ interface AccountingContextValue {
   setAutoBackupOnClose: (enabled: boolean) => void;
   localSnapshots: LocalBackupSnapshotMeta[];
   lastLocalBackupAt: string | null;
+  backupSessionUnlocked: boolean;
+  unlockBackupSession: (passphrase: string) => boolean;
+  lockBackupSession: () => void;
   triggerLocalBackupNow: (alsoDownload?: boolean) => Promise<void>;
   restoreFromLocalSnapshot: (snapshotId: string) => Promise<boolean>;
   removeLocalSnapshot: (snapshotId: string) => Promise<void>;
@@ -389,6 +393,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
   const [localSnapshots, setLocalSnapshots] = useState<LocalBackupSnapshotMeta[]>([]);
   const [lastLocalBackupAt, setLastLocalBackupAt] = useState<string | null>(null);
+  const [backupSessionUnlocked, setBackupSessionUnlocked] = useState<boolean>(() => isBackupSessionUnlocked());
 
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
@@ -7226,6 +7231,24 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     auditLogs,
   ]);
 
+  const unlockBackupSession = useCallback((passphrase: string): boolean => {
+    try {
+      unlockBackupVault(passphrase);
+      setBackupSessionUnlocked(true);
+      showToast('قفل پشتیبان رمزگذاری‌شده باز شد.');
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'بازکردن قفل پشتیبان ناموفق بود.', 'error');
+      return false;
+    }
+  }, [showToast]);
+
+  const lockBackupSession = useCallback(() => {
+    lockBackupVault();
+    setBackupSessionUnlocked(false);
+    showToast('قفل پشتیبان بسته شد.');
+  }, [showToast]);
+
   const triggerLocalBackupNow = useCallback(
     async (alsoDownload = false) => {
       const cur = latestBackupRef.current;
@@ -7292,6 +7315,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setAutoBackupOnClose,
         localSnapshots,
         lastLocalBackupAt,
+        backupSessionUnlocked,
+        unlockBackupSession,
+        lockBackupSession,
         triggerLocalBackupNow,
         restoreFromLocalSnapshot,
         removeLocalSnapshot,
