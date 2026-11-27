@@ -163,6 +163,40 @@ async function run() {
       discount: -1,
     })));
 
+    // Tracked warehouse transfers are tenant-scoped, bounded map records and may be updated by their owner.
+    const transferDoc = doc(ownerA, 'workspaceExtensions', 'company_a');
+    const trackedTransfer = {
+      id: 'trf_001',
+      transferNumber: 'TRF-1405-001',
+      productId: 'product_1',
+      qty: 2.5,
+      transferredCostIrr: 2500,
+      transferredLayers: [{ layerId: 'layer_1', remainingQty: 2.5, totalCostIrr: 2500 }],
+      status: 'in_transit',
+      fromWarehouse: 'Main',
+      toWarehouse: 'Branch',
+    };
+    await assertSucceeds(setDoc(transferDoc, {
+      ownerId: 'company_a',
+      warehouseTransfers: [trackedTransfer],
+      _version: 1,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+    await assertFails(getDoc(doc(ownerB, 'workspaceExtensions', 'company_a')));
+    await assertSucceeds(setDoc(transferDoc, {
+      warehouseTransfers: [{ ...trackedTransfer, status: 'received' }],
+      _version: 2,
+      updatedByDevice: 'device_a',
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
+    await assertFails(setDoc(transferDoc, {
+      warehouseTransfers: Array.from({ length: 251 }, (_, index) => ({ ...trackedTransfer, id: `trf_${index}` })),
+      _version: 3,
+      updatedByDevice: 'device_a',
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
+
     // New cloud backups must contain an encrypted envelope, never a plaintext snapshot map.
     const encryptedCloudBackup = {
       ownerId: 'company_a',
@@ -195,7 +229,7 @@ async function run() {
       ownerId: 'company_a',
     }));
 
-    console.log('Firestore Emulator security tests: 12 passed, 0 failed');
+    console.log('Firestore Emulator security tests: tracked warehouse transfer access covered');
   } finally {
     await testEnv.cleanup();
   }
