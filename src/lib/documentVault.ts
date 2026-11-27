@@ -137,7 +137,7 @@ export async function saveDocumentAttachment(params: {
   if (!params.entityId.trim()) {
     return { ok: false, error: 'شناسه سند یا عملیات مرتبط الزامی است.' };
   }
-  if (!params.dataUrl.startsWith('data:')) {
+  if (!params.dataUrl.toLowerCase().startsWith(`data:${mime};base64,`)) {
     return { ok: false, error: 'قالب محتوای فایل معتبر نیست.' };
   }
 
@@ -424,11 +424,20 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
   const validated: StoredDocumentAttachmentRecord[] = [];
   for (const candidate of bundle.attachments) {
     if (!candidate || typeof candidate.id !== 'string' || !candidate.id.trim() ||
-        seen.has(candidate.id) || typeof candidate.fileName !== 'string' ||
+        seen.has(candidate.id) || 'dataUrl' in candidate ||
+        typeof candidate.fileName !== 'string' || !candidate.fileName.trim() ||
         typeof candidate.mimeType !== 'string' || !ALLOWED_ATTACHMENT_MIMES.has(candidate.mimeType) ||
         typeof candidate.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.sha256) ||
-        typeof candidate.encryptedEnvelope !== 'string' || typeof candidate.entityId !== 'string' ||
-        typeof candidate.entityLabel !== 'string' || typeof candidate.uploadedAt !== 'string') {
+        typeof candidate.encryptedEnvelope !== 'string' || candidate.encryptedEnvelope.length > 15 * 1024 * 1024 ||
+        !['invoice', 'voucher', 'cheque', 'contract', 'operation'].includes(candidate.entityType) ||
+        typeof candidate.entityId !== 'string' || !candidate.entityId.trim() ||
+        typeof candidate.entityLabel !== 'string' ||
+        !['standard', 'confidential', 'restricted'].includes(candidate.sensitivity) ||
+        !Number.isSafeInteger(candidate.sizeBytes) || candidate.sizeBytes <= 0 || candidate.sizeBytes > MAX_ATTACHMENT_BYTES ||
+        typeof candidate.uploadedAt !== 'string' || !Number.isFinite(Date.parse(candidate.uploadedAt)) ||
+        typeof candidate.uploadedBy !== 'string' || !candidate.uploadedBy.trim() ||
+        !['finance_manager', 'accountant', 'warehouse_keeper', 'sales_officer', 'treasurer', 'auditor_readonly'].includes(candidate.uploadedByRole) ||
+        (candidate.notes !== undefined && typeof candidate.notes !== 'string')) {
       throw new Error('فراداده یکی از پیوست‌های بسته نامعتبر یا تکراری است.');
     }
     seen.add(candidate.id);
@@ -437,7 +446,7 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
     let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
     try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
     catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
-    if (typeof payload.dataUrl !== 'string' || payload.mimeType !== candidate.mimeType ||
+    if (typeof payload.dataUrl !== 'string' || !payload.dataUrl.toLowerCase().startsWith(`data:${candidate.mimeType};base64,`) || payload.mimeType !== candidate.mimeType ||
         payload.sha256 !== candidate.sha256 || await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
       throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
     }
