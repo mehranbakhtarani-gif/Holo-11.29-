@@ -98,6 +98,7 @@ import {
   setAudioFeedbackEnabled,
 } from '../lib/audioFeedback';
 import {
+  commitChequeStatusOperationalTx,
   commitInvoiceOperationalTx,
   getOperationalDbStats,
   loadOperationalWorkspace,
@@ -3053,9 +3054,38 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         });
       } else {
-        setCheques((prev) =>
-          prev.map((c) => (c.id === chequeId ? { ...c, status: newStatus } : c))
-        );
+        const localVoucher: Voucher | null = transitionVoucher
+          ? (() => {
+              const sameYearMax = vouchers
+                .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === transitionVoucher!.fiscalYear)
+                .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
+              const voucherBase: Voucher = {
+                ...transitionVoucher!,
+                id: transitionVoucherId,
+                voucherNumber: sameYearMax + 1,
+              };
+              return {
+                ...voucherBase,
+                integrityHash: computeVoucherIntegrityHash(voucherBase),
+              };
+            })()
+          : null;
+        const updatedCheque: Cheque = { ...chq, status: newStatus };
+        try {
+          await commitChequeStatusOperationalTx({
+            cheque: updatedCheque,
+            voucher: localVoucher,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'خطای ناشناخته در ثبت تغییر وضعیت چک';
+          showToast(`تغییر وضعیت چک ثبت نشد و هیچ تغییر ناقصی اعمال نشد: ${message}`, 'error');
+          throw err;
+        }
+        setCheques((prev) => prev.map((c) => (c.id === chequeId ? updatedCheque : c)));
+        if (localVoucher) {
+          setVouchers((prev) => [localVoucher, ...prev.filter((v) => v.id !== localVoucher.id)]);
+        }
+        void getOperationalDbStats().then(setOperationalDbStats).catch(() => {});
       }
 
       showToast(
