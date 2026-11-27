@@ -2572,10 +2572,18 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return 0;
     }
     let finalized = 0;
+    let failed = 0;
+    let ineligible = 0;
     for (const v of drafts) {
-      if (v.totalDebit === v.totalCredit && v.totalDebit > 0 && v.lines.length >= 2) {
+      if (v.totalDebit !== v.totalCredit || v.totalDebit <= 0 || v.lines.length < 2) {
+        ineligible += 1;
+        continue;
+      }
+      try {
         await finalizeVoucher(v.id, true);
         finalized += 1;
+      } catch {
+        failed += 1;
       }
     }
     if (finalized > 0) {
@@ -2585,7 +2593,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         unit: profile.currencyUnit,
       });
     }
-    showToast(`${finalized} سند موقت تراز با موفقیت به دائم تبدیل شد.`);
+    const summary = `دائم‌سازی گروهی: ${finalized} موفق، ${failed} ناموفق، ${ineligible} سند نامعتبر یا نامتوازن.`;
+    showToast(summary, failed > 0 || ineligible > 0 ? 'warning' : 'success');
     return finalized;
   }, [vouchers, finalizeVoucher, profile.currencyUnit, showToast, assertPermission]);
 
