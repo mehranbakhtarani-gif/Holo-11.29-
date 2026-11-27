@@ -352,6 +352,119 @@ export async function deleteDocumentAttachment(
   return { ok: true };
 }
 
+export interface EncryptedDocumentAttachmentBundle {
+  format: 'holoo-apex-encrypted-document-vault';
+  schemaVersion: 1;
+  exportedAt: string;
+  attachments: StoredDocumentAttachmentRecord[];
+}
+
+/**
+ * Exports only already-encrypted attachment records. Legacy plaintext rows are
+ * rejected rather than copied into a portable backup.
+ */
+export async function exportEncryptedDocumentAttachmentBundle(): Promise<string> {
+  if (!isBackupSessionUnlocked()) throw new Error('برای خروجی امن پیوست‌ها ابتدا قفل پشتیبان را باز کنید.');
+  const passphrase = requireBackupSessionPassphrase();
+  let rows: StoredDocumentAttachmentRecord[];
+  if (isIdbAvailable()) {
+    const db = await openVaultDb();
+    try {
+      rows = await new Promise<StoredDocumentAttachmentRecord[]>((resolve, reject) => {
+        const tx = db.transaction(VAULT_STORE, 'readonly');
+        const req = tx.objectStore(VAULT_STORE).getAll();
+        req.onsuccess = () => resolve((req.result as StoredDocumentAttachmentRecord[]) || []);
+        req.onerror = () => reject(req.error ?? new Error('Document Vault export read failed'));
+      });
+    } finally { db.close(); }
+  } else if (isNonBrowserTestRuntime()) {
+    rows = Array.from(memoryVault.values());
+  } else {
+    throw new Error('بایگانی پایدار اسناد در این مرورگر در دسترس نیست.');
+  }
+
+  for (const row of rows) {
+    if (!row.encryptedEnvelope || typeof row.dataUrl === 'string') {
+      throw new Error(`پیوست قدیمی «${row.fileName}» هنوز رمزگذاری نشده است؛ ابتدا آن را از مسیر مهاجرت امن باز کنید.`);
+    }
+    const verified = await decryptAndVerifyBackupEnvelope(row.encryptedEnvelope, passphrase);
+    if (!verified.ok || !verified.snapshotJson) throw new Error(verified.error || 'اعتبارسنجی رمزگذاری پیوست ناموفق بود.');
+    const payload = JSON.parse(verified.snapshotJson) as { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
+    if (typeof payload.dataUrl !== 'string' || payload.mimeType !== row.mimeType || payload.sha256 !== row.sha256 ||
+        await computeSha256Hex(payload.dataUrl) !== row.sha256) {
+      throw new Error(`اعتبار محتوای پیوست «${row.fileName}» تأیید نشد.`);
+    }
+  }
+
+  const bundle: EncryptedDocumentAttachmentBundle = {
+    format: 'holoo-apex-encrypted-document-vault',
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    attachments: rows,
+  };
+  return JSON.stringify(bundle);
+}
+
+/**
+ * Validates every attachment envelope before writing any row, then commits the
+ * complete bundle in one IndexedDB transaction (or one synchronous test-map pass).
+ */
+export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: string): Promise<{ restored: number }> {
+  if (!isBackupSessionUnlocked()) throw new Error('برای بازیابی امن پیوست‌ها ابتدا قفل پشتیبان را باز کنید.');
+  const passphrase = requireBackupSessionPassphrase();
+  let bundle: EncryptedDocumentAttachmentBundle;
+  try { bundle = JSON.parse(bundleJson) as EncryptedDocumentAttachmentBundle; }
+  catch { throw new Error('ساختار بسته پیوست‌های رمزگذاری‌شده معتبر نیست.'); }
+  if (!bundle || bundle.format !== 'holoo-apex-encrypted-document-vault' || bundle.schemaVersion !== 1 ||
+      !Array.isArray(bundle.attachments)) {
+    throw new Error('نسخه یا ساختار بسته پیوست‌های رمزگذاری‌شده پشتیبانی نمی‌شود.');
+  }
+
+  const seen = new Set<string>();
+  const validated: StoredDocumentAttachmentRecord[] = [];
+  for (const candidate of bundle.attachments) {
+    if (!candidate || typeof candidate.id !== 'string' || !candidate.id.trim() ||
+        seen.has(candidate.id) || typeof candidate.fileName !== 'string' ||
+        typeof candidate.mimeType !== 'string' || !ALLOWED_ATTACHMENT_MIMES.has(candidate.mimeType) ||
+        typeof candidate.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.sha256) ||
+        typeof candidate.encryptedEnvelope !== 'string' || typeof candidate.entityId !== 'string' ||
+        typeof candidate.entityLabel !== 'string' || typeof candidate.uploadedAt !== 'string') {
+      throw new Error('فراداده یکی از پیوست‌های بسته نامعتبر یا تکراری است.');
+    }
+    seen.add(candidate.id);
+    const verified = await decryptAndVerifyBackupEnvelope(candidate.encryptedEnvelope, passphrase);
+    if (!verified.ok || !verified.snapshotJson) throw new Error(verified.error || 'رمزگشایی یکی از پیوست‌ها ناموفق بود.');
+    let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
+    try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
+    catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
+    if (typeof payload.dataUrl !== 'string' || payload.mimeType !== candidate.mimeType ||
+        payload.sha256 !== candidate.sha256 || await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
+      throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
+    }
+    const { dataUrl: _plaintext, ...encryptedRecord } = candidate;
+    validated.push(encryptedRecord);
+  }
+
+  if (isIdbAvailable()) {
+    const db = await openVaultDb();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(VAULT_STORE, 'readwrite');
+        const store = tx.objectStore(VAULT_STORE);
+        validated.forEach((row) => store.put(row));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error ?? new Error('Document Vault restore failed'));
+        tx.onabort = () => reject(tx.error ?? new Error('Document Vault restore transaction aborted'));
+      });
+    } finally { db.close(); }
+  } else if (isNonBrowserTestRuntime()) {
+    validated.forEach((row) => memoryVault.set(row.id, row));
+  } else {
+    throw new Error('بازیابی پایدار اسناد در این مرورگر در دسترس نیست.');
+  }
+  return { restored: validated.length };
+}
+
 /** Test/diagnostics helper to verify tampering detection without altering production DB */
 export async function verifyAttachmentRecordIntegrity(
   record: DocumentAttachmentRecord
