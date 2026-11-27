@@ -186,7 +186,7 @@ if(u.pathname==="/api/supabase/backups"&&req.method==="DELETE"){
  if(!actor||!validWid(actor.workspaceId))return out({error:"برای حذف نسخه پشتیبان ابتدا وارد شوید.",code:"AUTH_REQUIRED"},401,allow);
  const backupId=String(u.searchParams.get("backupId")||"");
  const prefix=actor.uid+"__bak__";
- if(backupId.length>180||!backupId.startsWith(prefix)||!new RegExp("^"+prefix.replace(/[.*+?^${}()|[\]\\]/g,"\\if(u.pathname.startsWith("/api/ai/")||u.pathname.startsWith("/api/supabase/"))")+"[a-zA-Z0-9_-]{8,80}$").test(backupId))return out({error:"شناسه نسخه پشتیبان نامعتبر است یا به این فضای کاری تعلق ندارد.",code:"BACKUP_FORBIDDEN"},403,allow);
+ if(backupId.length>180||!backupId.startsWith(prefix)||!/^[a-zA-Z0-9_-]{8,80}$/.test(backupId.slice(prefix.length)))return out({error:"شناسه نسخه پشتیبان نامعتبر است یا به این فضای کاری تعلق ندارد.",code:"BACKUP_FORBIDDEN"},403,allow);
  const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
  try{
   const url=cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent(backupId);
