@@ -6,6 +6,8 @@
  */
 
 import type { FinancialCollectionKind } from './offlineFirstCore';
+import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
+import { requireBackupSessionPassphrase } from './backupSession';
 import {
   Account,
   AuditActivityLog,
@@ -26,7 +28,7 @@ import {
 } from '../types/accounting';
 
 const OP_DB_NAME = 'holoo_apex_operational_db_v1';
-export const OP_DB_VERSION = 3;
+export const OP_DB_VERSION = 4;
 
 export const OPERATIONAL_STORES = [
   'meta',
@@ -52,6 +54,7 @@ export const OPERATIONAL_STORES = [
   'warehouses',
   'taxReports',
   'preUpdateBackups',
+  'secureWorkspace',
 ] as const;
 
 export type OperationalStoreName = (typeof OPERATIONAL_STORES)[number];
@@ -103,6 +106,25 @@ export interface SyncInboxRecord {
   receivedAt: string;
 }
 
+export interface EncryptedOperationalWorkspaceRecord {
+  workspaceId: string;
+  envelopeJson: string;
+  schemaVersion: number;
+  recordCount: number;
+  plaintextSha256: string;
+  preparedAt: string;
+  migrationState: 'prepared';
+}
+
+export interface EncryptedOperationalWorkspaceMeta {
+  workspaceId: string;
+  schemaVersion: number;
+  recordCount: number;
+  plaintextSha256: string;
+  preparedAt: string;
+  migrationState: 'prepared';
+}
+
 export interface OperationalDbStats {
   supported: boolean;
   ready: boolean;
@@ -135,7 +157,7 @@ function openOperationalDb(): Promise<IDBDatabase> {
             store = db.createObjectStore(storeName, { keyPath: 'key' });
           } else if (storeName === 'syncOutbox' || storeName === 'syncInbox') {
             store = db.createObjectStore(storeName, { keyPath: 'operationId' });
-          } else if (storeName === 'localProfiles') {
+          } else if (storeName === 'localProfiles' || storeName === 'secureWorkspace') {
             store = db.createObjectStore(storeName, { keyPath: 'workspaceId' });
           } else {
             store = db.createObjectStore(storeName, { keyPath: 'id' });
@@ -607,6 +629,146 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
   }
 }
 
+/**
+ * Non-destructive phase-1 migration preparation:
+ * encrypts and verifies a complete workspace snapshot into a dedicated store.
+ * Legacy entity stores are intentionally retained until every writer/reader has
+ * been switched and an explicit cutover procedure is validated.
+ */
+export async function prepareEncryptedOperationalWorkspaceMigration(
+  workspaceId: string
+): Promise<EncryptedOperationalWorkspaceMeta> {
+  const cleanWorkspaceId = workspaceId.trim();
+  if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) {
+    throw new Error('شناسه فضای کاری برای مهاجرت رمزگذاری‌شده معتبر نیست.');
+  }
+  const passphrase = requireBackupSessionPassphrase();
+  const workspace = await loadOperationalWorkspace();
+  if (!workspace) {
+    throw new Error('داده عملیاتی محلی برای آماده‌سازی مهاجرت یافت نشد.');
+  }
+
+  const snapshotJson = JSON.stringify(workspace);
+  const envelope = await encryptBackupEnvelope(snapshotJson, passphrase);
+  const verification = await decryptAndVerifyBackupEnvelope(JSON.stringify(envelope), passphrase);
+  if (!verification.ok || verification.snapshotJson !== snapshotJson) {
+    throw new Error(verification.error || 'اعتبارسنجی نسخه رمزگذاری‌شده فضای کاری ناموفق بود.');
+  }
+
+  const recordCount = [
+    workspace.accounts, workspace.parties, workspace.products, workspace.vouchers,
+    workspace.invoices, workspace.cheques, workspace.employees, workspace.assets,
+    workspace.costCenters, workspace.currencies, workspace.exchangeRates,
+    workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
+    workspace.rbacOperators, workspace.auditLogs,
+  ].reduce((sum, rows) => sum + rows.length, 0);
+  const preparedAt = new Date().toISOString();
+  const record: EncryptedOperationalWorkspaceRecord = {
+    workspaceId: cleanWorkspaceId,
+    envelopeJson: JSON.stringify(envelope),
+    schemaVersion: 1,
+    recordCount,
+    plaintextSha256: envelope.plaintextSha256,
+    preparedAt,
+    migrationState: 'prepared',
+  };
+
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB در این محیط در دسترس نیست.');
+  const db = await openOperationalDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(['secureWorkspace'], 'readwrite');
+      tx.objectStore('secureWorkspace').put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error('Encrypted workspace migration write failed.'));
+      tx.onabort = () => reject(tx.error ?? new Error('Encrypted workspace migration write aborted.'));
+    });
+  } finally {
+    db.close();
+  }
+
+  return {
+    workspaceId: record.workspaceId,
+    schemaVersion: record.schemaVersion,
+    recordCount: record.recordCount,
+    plaintextSha256: record.plaintextSha256,
+    preparedAt: record.preparedAt,
+    migrationState: record.migrationState,
+  };
+}
+
+export async function loadPreparedEncryptedOperationalWorkspace(
+  workspaceId: string
+): Promise<OperationalWorkspaceData | null> {
+  const cleanWorkspaceId = workspaceId.trim();
+  if (!cleanWorkspaceId || !isIndexedDbAvailable()) return null;
+  const db = await openOperationalDb();
+  let record: EncryptedOperationalWorkspaceRecord | undefined;
+  try {
+    const tx = db.transaction(['secureWorkspace'], 'readonly');
+    record = await new Promise((resolve, reject) => {
+      const req = tx.objectStore('secureWorkspace').get(cleanWorkspaceId);
+      req.onsuccess = () => resolve(req.result as EncryptedOperationalWorkspaceRecord | undefined);
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
+    db.close();
+  }
+  if (!record || record.migrationState !== 'prepared' || typeof record.envelopeJson !== 'string') return null;
+
+  const result = await decryptAndVerifyBackupEnvelope(
+    record.envelopeJson,
+    requireBackupSessionPassphrase()
+  );
+  if (!result.ok || !result.snapshotJson) {
+    throw new Error(result.error || 'رمزگشایی فضای کاری مهاجرت‌شده ناموفق بود.');
+  }
+  const parsed = JSON.parse(result.snapshotJson) as Partial<OperationalWorkspaceData>;
+  if (
+    !parsed.profile || !Array.isArray(parsed.accounts) || parsed.accounts.length === 0 ||
+    !Array.isArray(parsed.parties) || !Array.isArray(parsed.products) ||
+    !Array.isArray(parsed.vouchers) || !Array.isArray(parsed.invoices) ||
+    !Array.isArray(parsed.cheques) || !Array.isArray(parsed.employees) ||
+    !Array.isArray(parsed.assets) || !Array.isArray(parsed.costCenters) ||
+    !Array.isArray(parsed.currencies) || !Array.isArray(parsed.exchangeRates) ||
+    !Array.isArray(parsed.importDossiers) || !Array.isArray(parsed.salesOrders) ||
+    !Array.isArray(parsed.subcontractJobs) || !Array.isArray(parsed.rbacOperators) ||
+    !Array.isArray(parsed.auditLogs)
+  ) {
+    throw new Error('ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار است.');
+  }
+  return parsed as OperationalWorkspaceData;
+}
+
+export async function getPreparedEncryptedOperationalWorkspaceMeta(
+  workspaceId: string
+): Promise<EncryptedOperationalWorkspaceMeta | null> {
+  const cleanWorkspaceId = workspaceId.trim();
+  if (!cleanWorkspaceId || !isIndexedDbAvailable()) return null;
+  const db = await openOperationalDb();
+  try {
+    const tx = db.transaction(['secureWorkspace'], 'readonly');
+    return await new Promise((resolve, reject) => {
+      const req = tx.objectStore('secureWorkspace').get(cleanWorkspaceId);
+      req.onsuccess = () => {
+        const row = req.result as EncryptedOperationalWorkspaceRecord | undefined;
+        if (!row || row.migrationState !== 'prepared') return resolve(null);
+        resolve({
+          workspaceId: row.workspaceId,
+          schemaVersion: row.schemaVersion,
+          recordCount: row.recordCount,
+          plaintextSha256: row.plaintextSha256,
+          preparedAt: row.preparedAt,
+          migrationState: row.migrationState,
+        });
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 export async function enqueueSyncOutboxOperation(op: SyncOutboxOperation): Promise<void> {
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: sync outbox was not persisted.');
   try {
@@ -914,6 +1076,7 @@ const OPERATIONAL_STORE_LABELS: Record<OperationalStoreName, string> = {
   warehouses: 'انبارها (warehouses)',
   taxReports: 'گزارش‌های مالیاتی و کش‌شده (taxReports)',
   preUpdateBackups: 'پشتیبان ایمنی پیش از بروزرسانی (preUpdateBackups)',
+  secureWorkspace: 'نسخه رمزگذاری‌شده فضای کاری (secureWorkspace)',
 };
 
 export interface PreUpdateSafetyBackupRecord {
