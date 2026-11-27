@@ -1350,17 +1350,21 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               showToast('تداخل همزمانی! اطلاعات این طرف‌حساب لحظاتی قبل توسط دستگاه دیگری تغییر یافته است. نسخه جدید بارگذاری شد.');
               return;
             }
+            if (outcome === 'missing') {
+              throw new Error('طرف‌حساب موردنظر در فضای ابری پیدا نشد؛ ویرایش انجام نشد.');
+            }
           }
         } catch (err) {
           if (isFirestoreOfflineError(err)) {
-            await updateDoc(doc(db, 'parties', partyId), {
-              ...(patch.name !== undefined ? { name: patch.name.trim().slice(0, 160) } : {}),
-              _version: expectedVersion + 1,
-              updatedByDevice: deviceId.slice(0, 64),
-              updatedAt: serverTimestamp(),
-            }).catch(() => {});
+            try {
+              await updateDoc(ref, payload);
+            } catch (offlineWriteError) {
+              handleFirestoreError(offlineWriteError, OperationType.UPDATE, `parties/${partyId}`);
+              throw offlineWriteError;
+            }
           } else {
             handleFirestoreError(err, OperationType.UPDATE, `parties/${partyId}`);
+            throw err;
           }
         }
       } else {
