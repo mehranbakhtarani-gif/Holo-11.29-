@@ -192,10 +192,11 @@ export async function listDocumentAttachments(filter?: {
 }): Promise<DocumentAttachmentMeta[]> {
   let rows: DocumentAttachmentRecord[] = [];
   if (isIdbAvailable()) {
+    let db: IDBDatabase | null = null;
     try {
-      const db = await openVaultDb();
+      db = await openVaultDb();
       rows = await new Promise<DocumentAttachmentRecord[]>((resolve, reject) => {
-        const tx = db.transaction(VAULT_STORE, 'readonly');
+        const tx = db!.transaction(VAULT_STORE, 'readonly');
         const req = tx.objectStore(VAULT_STORE).getAll();
         req.onsuccess = () => resolve((req.result as DocumentAttachmentRecord[]) || []);
         req.onerror = () => reject(req.error);
