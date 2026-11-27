@@ -3,6 +3,7 @@ import { createHolooSeedData } from '../src/data/holooSeed';
 import { validateVoucherPayload } from '../src/lib/accountingEngine';
 import { applyInventoryMovementStep, recalculateInventoryLedger } from '../src/lib/inventoryCostingEngine';
 import type { ProductInventoryState } from '../src/lib/inventoryCostingEngine';
+import type { Voucher } from '../src/types/accounting';
 
 const fifoState: ProductInventoryState = {
   productId: 'prd_phase1',
@@ -77,4 +78,36 @@ const unsafeVoucher = validateVoucherPayload({
 assert.equal(unsafeVoucher.valid, false, 'Unsafe integer Rial amounts must be rejected');
 assert.ok(unsafeVoucher.errors.some((error) => error.includes('دقت امن')));
 
-console.log('Phase 1 targeted regression tests: 4 passed, 0 failed');
+const payrollReferenceId = 'payroll:1405:فروردین';
+const priorPayrollVoucher: Voucher = {
+  id: 'vch_prior_payroll',
+  ownerId: 'phase1-test',
+  voucherNumber: 7,
+  date: '1405/01/31',
+  fiscalYear: '1405',
+  description: 'Payroll April',
+  voucherType: 'payroll',
+  status: 'permanent',
+  totalDebit: 100,
+  totalCredit: 100,
+  referenceId: payrollReferenceId,
+  lines: [
+    { accountCode: '10101', accountTitle: 'Cash', description: 'debit', debit: 100, credit: 0 },
+    { accountCode: '40101', accountTitle: 'Revenue', description: 'credit', debit: 0, credit: 100 },
+  ],
+};
+const duplicatePayroll = validateVoucherPayload({
+  payload: {
+    date: '1405/01/31',
+    description: 'Duplicate payroll',
+    voucherType: 'payroll',
+    referenceId: payrollReferenceId,
+    lines: priorPayrollVoucher.lines,
+  },
+  accounts: seed.accounts,
+  existingVouchers: [priorPayrollVoucher],
+});
+assert.equal(duplicatePayroll.valid, false, 'A payroll period reference must not be posted twice');
+assert.ok(duplicatePayroll.errors.some((error) => error.includes('قبلاً سند شماره')));
+
+console.log('Phase 2 financial regression tests: 5 passed, 0 failed');
