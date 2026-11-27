@@ -1597,7 +1597,7 @@ export class HolooPeerMeshManager {
 
       if (decision.shouldRequestRemoteState && conn.open) {
         conn.send(
-          signMeshMessageEnvelope(this.passphrase, {
+          await signMeshMessageEnvelopeSecure(this.passphrase, {
             type: 'mesh:request_state',
             fromPeerId: this.myPeerId,
             authTag: this.authTag,
@@ -1633,7 +1633,7 @@ export class HolooPeerMeshManager {
         this.updatePeerState(remotePeerId, { lastSyncedAt: nowIso });
         if (conn.open) {
           conn.send(
-            signMeshMessageEnvelope(this.passphrase, {
+            await signMeshMessageEnvelopeSecure(this.passphrase, {
               type: 'mesh:ack',
               fromPeerId: this.myPeerId,
               authTag: this.authTag,
