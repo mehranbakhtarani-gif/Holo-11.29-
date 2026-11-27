@@ -333,6 +333,14 @@ async function runTests() {
   );
   console.log('✓ Cloud voucher finalization fails closed while offline');
 
+  const batchFinalizeIdx = accountingCtxSrc.indexOf('const finalizeAllDraftVouchers = useCallback');
+  assert.ok(batchFinalizeIdx !== -1, 'finalizeAllDraftVouchers must exist');
+  const batchFinalizeBody = accountingCtxSrc.slice(batchFinalizeIdx, batchFinalizeIdx + 2200);
+  assert.match(batchFinalizeBody, /catch[\\s\\S]*failed\\s*\+=\s*1/);
+  assert.match(batchFinalizeBody, /دائم‌سازی گروهی:[\\s\\S]*ناموفق/);
+  console.log('✓ Batch voucher finalization reports partial failures accurately');
+
+
 
 
   const forbiddenDirectNetworkPatterns: Array<{ label: string; regex: RegExp }> = [
