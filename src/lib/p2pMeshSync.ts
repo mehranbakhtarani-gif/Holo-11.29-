@@ -615,7 +615,7 @@ function buildMeshMessageMacCanonical(msg: UnsignedMeshWireMessage): string {
   }
 
   const envelopeCanonical = [
-    'holoo-mesh-mac-v2',
+    'holoo-mesh-mac-v3',
     msg.type,
     msg.fromPeerId,
     msg.authTag,
