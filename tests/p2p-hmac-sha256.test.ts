@@ -5,11 +5,29 @@ import {
   signMeshMessageEnvelopeSecure,
   verifyMeshMessageEnvelopeSecure,
   computeMeshAuthTag,
+  encryptMeshPayloadAesGcm,
+  decryptMeshPayloadAesGcm,
   type MeshWireMessageBody,
 } from '../src/lib/p2pMeshSync';
 
 async function main() {
   assert.ok(globalThis.crypto?.subtle, 'WebCrypto subtle API is required by the P2P security test');
+  const encryptedPayload = await encryptMeshPayloadAesGcm('test-only-holoo-mesh-secret', '{"ledger":"private"}');
+  assert.ok(encryptedPayload.startsWith('mesh_e2ee_v1:'), 'outbound P2P state must use the E2EE envelope');
+  assert.equal(
+    await decryptMeshPayloadAesGcm('test-only-holoo-mesh-secret', encryptedPayload),
+    '{"ledger":"private"}',
+    'encrypted P2P state must round-trip'
+  );
+  await assert.rejects(
+    () => decryptMeshPayloadAesGcm('test-only-holoo-mesh-secret', '{"ledger":"plaintext"}'),
+    /encryption downgrade/,
+    'legacy plaintext P2P state must be rejected rather than accepted as a downgrade'
+  );
+  await assert.rejects(
+    () => decryptMeshPayloadAesGcm('   ', encryptedPayload),
+    /passphrase is required/
+  );
   const passphrase = 'test-only-holoo-mesh-secret';
   const body: MeshWireMessageBody = {
     type: 'mesh:request_state',
