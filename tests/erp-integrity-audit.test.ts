@@ -759,6 +759,40 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
   assert.equal(trf1.updatedProduct.stock, 100, 'Total physical stock across warehouses stays 100 kg');
   assert.equal(trf1.updatedProduct.inventoryValueIrr, 400_000_000, 'Total inventory value stays 400M IRR');
 
+  const fractionalProduct: Product = {
+    ...prod,
+    id: 'p_mw_fractional',
+    stock: 0.0145,
+    inventoryValueIrr: 14_500,
+    costLayers: [{
+      layerId: 'fractional-source-layer',
+      date: '1405/01/10',
+      sourceRef: 'fractional-opening',
+      warehouse: 'انبار مرکزی',
+      originalQty: 0.0145,
+      remainingQty: 0.0145,
+      unitCostIrr: 1_000_000,
+      totalCostIrr: 14_500,
+    }],
+  };
+  const fractionalTransfer = executeTrackedWarehouseTransfer({
+    product: fractionalProduct,
+    fromWarehouse: 'انبار مرکزی',
+    toWarehouse: 'انبار مقصد',
+    qty: 0.0045,
+    date: '1405/02/06',
+    transferNumber: 'TRF-FRACTIONAL',
+    mode: 'immediate',
+    defaultCostingMethod: 'fifo',
+  });
+  assert.equal(fractionalTransfer.updatedProduct.stock, 0.0145,
+    'warehouse transfers must preserve four-decimal stock precision');
+  assert.equal(
+    fractionalTransfer.updatedProduct.costLayers?.reduce((sum, layer) => sum + layer.remainingQty, 0),
+    0.0145,
+    'transferred and remaining cost layers must reconcile exactly to product stock'
+  );
+
   // Transfer 10 kg in_transit to 'انبار تبریز'
   const trf2 = executeTrackedWarehouseTransfer({
     product: trf1.updatedProduct,
