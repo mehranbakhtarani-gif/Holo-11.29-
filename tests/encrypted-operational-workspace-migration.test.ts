@@ -3,7 +3,11 @@ import {
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
 } from '../src/lib/offlineFirstCore';
-import { parseOperationalWorkspaceSnapshot, queryOperationalStorePaginated } from '../src/lib/operationalDb';
+import {
+  parseOperationalWorkspaceSnapshot,
+  queryOperationalStorePaginated,
+  validateEncryptedOperationalWorkspaceRecordMetadata,
+} from '../src/lib/operationalDb';
 
 async function run() {
   const workspace = {
@@ -46,6 +50,35 @@ async function run() {
     /JSON معتبر نیست/
   );
 
+  const validMetadata = {
+    workspaceId: 'workspace-1',
+    envelopeJson: JSON.stringify(envelope),
+    schemaVersion: 1,
+    recordCount: 1,
+    sourceRevision: 7,
+    plaintextSha256: envelope.plaintextSha256,
+    preparedAt: '2026-11-27T00:00:00.000Z',
+    migrationState: 'prepared' as const,
+  };
+  assert.equal(validateEncryptedOperationalWorkspaceRecordMetadata(validMetadata, 'workspace-1'), true);
+  assert.equal(validateEncryptedOperationalWorkspaceRecordMetadata(validMetadata, 'another-workspace'), false);
+  assert.equal(
+    validateEncryptedOperationalWorkspaceRecordMetadata({ ...validMetadata, recordCount: -1 }, 'workspace-1'),
+    false
+  );
+  assert.equal(
+    validateEncryptedOperationalWorkspaceRecordMetadata({ ...validMetadata, sourceRevision: Number.MAX_SAFE_INTEGER + 1 }, 'workspace-1'),
+    false
+  );
+  assert.equal(
+    validateEncryptedOperationalWorkspaceRecordMetadata({ ...validMetadata, plaintextSha256: 'not-a-hash' }, 'workspace-1'),
+    false
+  );
+  assert.equal(
+    validateEncryptedOperationalWorkspaceRecordMetadata({ ...validMetadata, preparedAt: 'invalid-date' }, 'workspace-1'),
+    false
+  );
+
   const genericSecureStoreRead = await queryOperationalStorePaginated('secureWorkspace');
   assert.deepEqual(genericSecureStoreRead.items, []);
   assert.equal(genericSecureStoreRead.total, 0);
@@ -57,7 +90,7 @@ async function run() {
   const rejected = await decryptAndVerifyBackupEnvelope(JSON.stringify(tampered), passphrase);
   assert.equal(rejected.ok, false);
 
-  console.log('Encrypted operational workspace migration: 9 assertions passed');
+  console.log('Encrypted operational workspace migration: metadata validation covered');
 }
 
 run().catch((error) => {
