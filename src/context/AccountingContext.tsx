@@ -2725,16 +2725,21 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
-      // Atomic order: post & validate GL voucher FIRST (checks closed fiscal year & balance)
-      // before mutating cheque status so a failed voucher never leaves cheque status desynchronized.
-      if (plan.lines.length >= 2) {
+      // Stable transition reference makes retries idempotent: if voucher posting succeeded
+      // but the cheque write failed, a retry reuses the existing transition instead of
+      // creating a second permanent voucher.
+      const transitionReferenceId = `cheque-transition:${chequeId}:${newStatus}`;
+      const transitionVoucherExists = vouchers.some(
+        (voucher) => voucher.referenceId === transitionReferenceId && !voucher.reversalOfVoucherId
+      );
+      if (plan.lines.length >= 2 && !transitionVoucherExists) {
         await createVoucher({
           date: getTodayShamsi(),
           description: plan.description,
           voucherType: 'treasury',
           status: 'permanent',
           lines: plan.lines,
-          referenceId: `${chequeId}_${newStatus}_${Date.now()}`,
+          referenceId: transitionReferenceId,
           allowDuplicate: true,
           internalSystemCall: true,
         });
@@ -2760,7 +2765,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         showToast(plan.description || 'وضعیت چک صیادی به‌روزرسانی شد.');
       }
     },
-    [cheques, accounts, parties, user, createVoucher, showToast, assertPermission]
+    [cheques, vouchers, accounts, parties, user, createVoucher, showToast, assertPermission]
   );
 
   const recordQuickTreasury = useCallback(
@@ -3463,6 +3468,13 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 // Phase 2: ALL writes in ONE atomic commit (products + invoice + counter + reversal voucher + cheques)
                 productEntries.forEach(([pid, delta], idx) => {
                   const ps = productSnaps[idx];
+                  if (!ps.exists()) {
+                    throw new Error(`کالای ${pid} هنگام ابطال فاکتور دیگر وجود ندارد؛ عملیات متوقف شد.`);
+                  }
+                  const liveVersion = Number(ps.data()._version) || 1;
+                  if (liveVersion !== delta.prevVersion) {
+                    throw new Error(`موجودی کالای ${pid} هم‌زمان در دستگاه دیگری تغییر کرده است؛ برای جلوگیری از اعمال محاسبه قدیمی، ابطال را دوباره با اطلاعات تازه انجام دهید.`);
+                  }
                   if (ps.exists()) {
                     tx.update(doc(db, 'products', pid), {
                       stock: delta.stock,
