@@ -139,7 +139,7 @@ async function run() {
   assert.equal(interrupted.state, 'failed_recovery_required');
   assert.equal(isOperationalRestoreBarrierActive(), true, 'normal workspace writes remain blocked');
   await assert.rejects(
-    saveOperationalWorkspaceTx(workspace),
+    saveOperationalWorkspaceTx(workspace as Parameters<typeof saveOperationalWorkspaceTx>[0]),
     /ذخیره‌سازی فضای کاری تا پایان بازیابی پشتیبان متوقف است/,
     'background operational persistence must not overwrite a restore in progress'
   );
