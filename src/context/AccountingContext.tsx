@@ -3074,6 +3074,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         try {
           await commitChequeStatusOperationalTx({
             cheque: updatedCheque,
+            expectedStatus: chq.status,
             voucher: localVoucher,
           });
         } catch (err) {
