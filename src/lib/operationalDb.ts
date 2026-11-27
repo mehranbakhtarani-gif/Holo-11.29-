@@ -993,26 +993,28 @@ export async function recordInboxOperation(rec: SyncInboxRecord): Promise<void> 
       tx.onerror = () => reject(tx.error);
     });
     db.close();
-  } catch {
-    // ignore
+  } catch (err) {
+    // A missing durable deduplication record can cause an already-applied remote
+    // operation to be replayed. Surface storage failures instead of reporting success.
+    throw err instanceof Error ? err : new Error('Failed to persist inbound sync deduplication record');
   }
 }
 
 /** Checks whether an inbound operationId was already durably applied to this device */
 export async function isInboxOperationProcessed(operationId: string): Promise<boolean> {
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: cannot safely verify inbound sync deduplication.');
+  const db = await openOperationalDb();
   try {
-    const db = await openOperationalDb();
-    const exists = await new Promise<boolean>((resolve, reject) => {
+    return await new Promise<boolean>((resolve, reject) => {
       const tx = db.transaction(['syncInbox'], 'readonly');
       const req = tx.objectStore('syncInbox').get(operationId);
       req.onsuccess = () => resolve(Boolean(req.result));
-      req.onerror = () => reject(req.error);
+      req.onerror = () => reject(req.error ?? new Error('Inbound sync deduplication read failed'));
+      tx.onerror = () => reject(tx.error ?? new Error('Inbound sync deduplication transaction failed'));
+      tx.onabort = () => reject(tx.error ?? new Error('Inbound sync deduplication transaction aborted'));
     });
+  } finally {
     db.close();
-    return exists;
-  } catch {
-    return false;
   }
 }
 
