@@ -3448,7 +3448,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                   where('ownerId', '==', ownerId),
                   limit(401)
                 );
-                const returnsSnap = await tx.get(returnsQuery);
+                const returnsSnap = await getDocs(returnsQuery);
                 if (returnsSnap.size > 400) {
                   throw new Error('تعداد برگشت‌های مرجع از سقف امن تراکنش بیشتر است؛ برای جلوگیری از ثبت ناقص هیچ تغییری اعمال نشد.');
                 }
