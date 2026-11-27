@@ -127,6 +127,34 @@ export interface EncryptedOperationalWorkspaceMeta {
   migrationState: 'prepared';
 }
 
+/** Validates untrusted IndexedDB migration metadata before it is used or displayed. */
+export function validateEncryptedOperationalWorkspaceRecordMetadata(
+  value: unknown,
+  expectedWorkspaceId?: string
+): value is EncryptedOperationalWorkspaceRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<EncryptedOperationalWorkspaceRecord>;
+  return (
+    typeof record.workspaceId === 'string' &&
+    record.workspaceId.length > 0 &&
+    record.workspaceId.length <= 180 &&
+    (!expectedWorkspaceId || record.workspaceId === expectedWorkspaceId) &&
+    typeof record.envelopeJson === 'string' &&
+    record.envelopeJson.length > 0 &&
+    record.envelopeJson.length <= 1_500_000 &&
+    record.schemaVersion === 1 &&
+    Number.isSafeInteger(record.recordCount) &&
+    Number(record.recordCount) >= 0 &&
+    Number.isSafeInteger(record.sourceRevision) &&
+    Number(record.sourceRevision) >= 1 &&
+    typeof record.plaintextSha256 === 'string' &&
+    /^[a-f0-9]{64}$/i.test(record.plaintextSha256) &&
+    typeof record.preparedAt === 'string' &&
+    Number.isFinite(Date.parse(record.preparedAt)) &&
+    record.migrationState === 'prepared'
+  );
+}
+
 export interface OperationalDbStats {
   supported: boolean;
   ready: boolean;
@@ -778,15 +806,8 @@ export async function loadPreparedEncryptedOperationalWorkspace(
   } finally {
     db.close();
   }
-  if (!record || record.migrationState !== 'prepared' || typeof record.envelopeJson !== 'string') return null;
-  if (
-    record.schemaVersion !== 1 ||
-    !Number.isSafeInteger(record.recordCount) ||
-    record.recordCount < 0 ||
-    !Number.isSafeInteger(record.sourceRevision) ||
-    record.sourceRevision < 1 ||
-    !/^[a-f0-9]{64}$/i.test(record.plaintextSha256)
-  ) {
+  if (!record) return null;
+  if (!validateEncryptedOperationalWorkspaceRecordMetadata(record, cleanWorkspaceId)) {
     throw new Error('فراداده نسخه عملیاتی رمزگذاری‌شده نامعتبر است؛ بازیابی متوقف شد.');
   }
 
@@ -830,7 +851,10 @@ export async function getPreparedEncryptedOperationalWorkspaceMeta(
       const req = tx.objectStore('secureWorkspace').get(cleanWorkspaceId);
       req.onsuccess = () => {
         const row = req.result as EncryptedOperationalWorkspaceRecord | undefined;
-        if (!row || row.migrationState !== 'prepared') return resolve(null);
+        if (!row) return resolve(null);
+        if (!validateEncryptedOperationalWorkspaceRecordMetadata(row, cleanWorkspaceId)) {
+          return reject(new Error('فراداده نسخه عملیاتی رمزگذاری‌شده نامعتبر است.'));
+        }
         resolve({
           workspaceId: row.workspaceId,
           schemaVersion: row.schemaVersion,
