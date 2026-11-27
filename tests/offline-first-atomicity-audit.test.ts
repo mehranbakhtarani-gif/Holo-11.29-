@@ -328,6 +328,13 @@ async function runTests() {
   assert.match(syncCloseReader, /typeof parsed\.encryptedEnvelope === 'string'/);
   assert.doesNotMatch(syncCloseReader, /parsed\.payloadJson/);
   assert.match(localBackupSrc, /export function readLegacyPlaintextSyncCloseSnapshot\(\)/);
+  const localSnapshotRestoreStart = localBackupSrc.indexOf('export async function loadLocalSnapshotPayload(');
+  const localSnapshotRestoreEnd = localBackupSrc.indexOf('export async function deleteLocalSnapshot(', localSnapshotRestoreStart);
+  const localSnapshotRestore = localBackupSrc.slice(localSnapshotRestoreStart, localSnapshotRestoreEnd);
+  assert.match(localSnapshotRestore, /allowLegacyPlaintext = false/);
+  assert.match(localSnapshotRestore, /allowLegacyPlaintext \? found\.payloadJson/);
+  assert.match(localSnapshotRestore, /allowLegacyPlaintext \? syncSnap\.payloadJson/);
+
   assert.match(operationalHydration, /catch \(error\)[\s\S]*throw error/);
   assert.match(accountingCtxSrc, /Operational workspace hydration failed; fallback hydration was blocked/);
 
