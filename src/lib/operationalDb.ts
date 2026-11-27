@@ -1323,6 +1323,9 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
   workspace: OperationalWorkspaceData,
   expectedSourceRevision: number
 ): Promise<EncryptedOperationalWorkspaceMeta> {
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('ذخیره نسخه عملیاتی رمزگذاری‌شده تا پایان بازیابی متوقف است.');
+  }
   const cleanWorkspaceId = workspaceId.trim();
   if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) {
     throw new Error('شناسه فضای کاری برای ذخیره رمزگذاری‌شده معتبر نیست.');
@@ -1339,6 +1342,9 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
     throw new Error(verification.error || 'اعتبارسنجی نسخه رمزگذاری‌شده فضای کاری ناموفق بود.');
   }
 
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('ذخیره نسخه عملیاتی رمزگذاری‌شده تا پایان بازیابی متوقف است.');
+  }
   const recordCount = countOperationalWorkspaceRecords(workspace);
   const record: EncryptedOperationalWorkspaceRecord = {
     workspaceId: cleanWorkspaceId,
@@ -1361,6 +1367,11 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
       const tx = db.transaction(['meta', 'secureWorkspace'], 'readwrite');
       const metaReq = tx.objectStore('meta').get('workspace_meta');
       metaReq.onsuccess = () => {
+        if (isOperationalRestoreBarrierActive()) {
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+          if (!settled) { settled = true; reject(new Error('ذخیره نسخه عملیاتی رمزگذاری‌شده تا پایان بازیابی متوقف است.')); }
+          return;
+        }
         const current = metaReq.result as { localRevision?: number } | undefined;
         const currentRevision = Math.max(1, Number(current?.localRevision) || 1);
         if (currentRevision !== expectedSourceRevision) {
