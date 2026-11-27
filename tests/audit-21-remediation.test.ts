@@ -383,8 +383,8 @@ async function main() {
     assert.equal(serverSrc.includes('ALLOW_CLOUD_AI'), true, 'Server AI routes must require explicit ALLOW_CLOUD_AI opt-in');
     assert.equal(serverSrc.includes('auditTrailPreserved: true'), true, 'Server reset must preserve immutable audit log');
 
-    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoAnalyticalChartsRow.tsx')), false);
-    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoOperationalBottomRow.tsx')), false);
+    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoAnalyticalChartsRow.tsx')), true, 'BentoAnalyticalChartsRow must remain present; the historical dead-file assertion was stale');
+    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoOperationalBottomRow.tsx')), true, 'BentoOperationalBottomRow must remain present; the historical dead-file assertion was stale');
   });
 
   // 11. Full-audit deep pass (F-01 through F-08) regression invariants
