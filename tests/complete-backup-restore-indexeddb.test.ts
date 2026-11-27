@@ -17,12 +17,13 @@ Object.defineProperty(globalThis, 'window', {
 
 const { unlockBackupSession, lockBackupSession } = await import('../src/lib/backupSession');
 const { encryptBackupEnvelope } = await import('../src/lib/offlineFirstCore');
-const { saveDocumentAttachment } = await import('../src/lib/documentVault');
+const { saveDocumentAttachment, setDocumentVaultRestoreBarrier } = await import('../src/lib/documentVault');
 const {
   createOperationalRestoreJournal,
   discardStagingOperationalRestoreJournal,
   getActiveOperationalRestoreJournal,
   isOperationalRestoreBarrierActive,
+  setOperationalRestoreBarrier,
   saveOperationalWorkspaceTx,
 } = await import('../src/lib/operationalDb');
 const { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } = await import('../src/lib/completeBackupRestore');
@@ -51,6 +52,15 @@ await createOperationalRestoreJournal({
 });
 assert.equal((await getActiveOperationalRestoreJournal())?.restoreId, preparationId,
   'startup must discover a preparation journal before attachment staging');
+await assert.rejects(
+  resumePendingCompleteBackupRestore(),
+  /پاک‌سازی خودکار انجام نشد/,
+  'a second tab must not auto-delete a preparation journal that may belong to a live tab'
+);
+assert.equal((await getActiveOperationalRestoreJournal())?.restoreId, preparationId,
+  'the active preparation journal must remain durable after a blocked recovery attempt');
+setOperationalRestoreBarrier(false);
+setDocumentVaultRestoreBarrier(false);
 await discardStagingOperationalRestoreJournal(preparationId);
 assert.equal(await getActiveOperationalRestoreJournal(), null,
   'aborted preparation must be safely removable before commit intent');
