@@ -400,6 +400,24 @@ export async function deleteLocalSnapshot(snapshotId: string): Promise<void> {
   }
 }
 
+export async function downloadEncryptedBackupFileToDevice(
+  payloadJson: string,
+  fiscalYear: string,
+  passphrase: string
+): Promise<void> {
+  const envelope = await encryptBackupEnvelope(payloadJson, passphrase);
+  const stamp = getTodayShamsi().replace(/\\//g, '-');
+  const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `holoo-apex-encrypted-backup-${fiscalYear}-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export function downloadBackupFileToDevice(payloadJson: string, fiscalYear: string): void {
   const stamp = getTodayShamsi().replace(/\//g, '-');
   const blob = new Blob([payloadJson], { type: 'application/json;charset=utf-8' });
