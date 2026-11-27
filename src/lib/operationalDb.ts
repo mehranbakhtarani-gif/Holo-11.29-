@@ -299,6 +299,47 @@ export async function createOperationalRestoreJournal(
   }
 }
 
+/** Update attachment staging metadata while the restore is still non-committing. */
+export async function updateStagingOperationalRestoreJournal(
+  restoreId: string,
+  attachmentManifestDigest: string,
+  attachmentCount: number
+): Promise<OperationalRestoreJournalRecord> {
+  if (!restoreId || !/^[a-f0-9]{64}$/i.test(attachmentManifestDigest) ||
+      !Number.isSafeInteger(attachmentCount) || attachmentCount < 0) {
+    throw new Error('فرادادهٔ staging بازیابی معتبر نیست.');
+  }
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای به‌روزرسانی ژورنال در دسترس نیست.');
+  const db = await openOperationalDb(true);
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
+      const store = tx.objectStore(RESTORE_JOURNAL_STORE);
+      let updated: OperationalRestoreJournalRecord | null = null;
+      const request = store.get(restoreId);
+      request.onsuccess = () => {
+        const current = request.result as OperationalRestoreJournalRecord | undefined;
+        if (!current || !isValidOperationalRestoreJournalRecord(current) || current.state !== 'staging') {
+          tx.abort();
+          return;
+        }
+        updated = {
+          ...current,
+          attachmentManifestDigest,
+          attachmentCount,
+          updatedAt: new Date().toISOString(),
+        };
+        store.put(updated);
+      };
+      tx.oncomplete = () => updated ? resolve(updated) : reject(new Error('ژورنال staging به‌روزرسانی نشد.'));
+      tx.onerror = () => reject(tx.error ?? new Error('به‌روزرسانی ژورنال staging ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش به‌روزرسانی ژورنال staging لغو شد.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
 /**
  * Apply the encrypted workspace staged in the durable restore journal.
  * All operational entity stores and the journal phase advance share one IDB transaction.
