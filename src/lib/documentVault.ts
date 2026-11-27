@@ -761,6 +761,29 @@ export async function discardStagedDocumentAttachmentBundle(restoreId: string): 
   } finally { db.close(); }
 }
 
+/** Remove pre-commit staging manifests left by a crash before the operational journal was created. */
+export async function cleanupOrphanedStagedDocumentAttachmentBundles(): Promise<number> {
+  if (!isIdbAvailable()) return 0;
+  const db = await openVaultDb(true);
+  let orphanIds: string[] = [];
+  try {
+    orphanIds = await new Promise((resolve, reject) => {
+      const tx = db.transaction([VAULT_RESTORE_MANIFESTS_STORE], 'readonly');
+      const request = tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE).getAll();
+      request.onsuccess = () => resolve(
+        ((request.result ?? []) as Array<{ restoreId?: string; state?: string }>)
+          .filter((row) => row.state === 'staged' && typeof row.restoreId === 'string')
+          .map((row) => row.restoreId as string)
+      );
+      request.onerror = () => reject(request.error ?? new Error('خواندن manifestهای staging ناموفق بود.'));
+    });
+  } finally { db.close(); }
+  for (const restoreId of orphanIds) {
+    await discardStagedDocumentAttachmentBundle(restoreId);
+  }
+  return orphanIds.length;
+}
+
 /** Test/diagnostics helper to verify tampering detection without altering production DB */
 export async function verifyAttachmentRecordIntegrity(
   record: DocumentAttachmentRecord
