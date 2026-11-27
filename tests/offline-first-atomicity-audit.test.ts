@@ -316,6 +316,7 @@ async function runTests() {
   const localBackupSrc = fs.readFileSync(path.join(root, 'src/lib/localBackup.ts'), 'utf8');
   const appSrc = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
   const offlinePanelSrc = fs.readFileSync(path.join(root, 'src/components/OfflineFirstControlPanel.tsx'), 'utf8');
+  const settingsViewSrc = fs.readFileSync(path.join(root, 'src/components/SettingsView.tsx'), 'utf8');
 
   // Operational DB read failures must not be mistaken for an empty workspace,
   // otherwise fallback/demo hydration could mask or overwrite inaccessible data.
@@ -334,6 +335,16 @@ async function runTests() {
   assert.match(localSnapshotRestore, /allowLegacyPlaintext = false/);
   assert.match(localSnapshotRestore, /allowLegacyPlaintext \? found\.payloadJson/);
   assert.match(localSnapshotRestore, /allowLegacyPlaintext \? syncSnap\.payloadJson/);
+  assert.match(localBackupSrc, /encryptionStatus: row\.encryptedEnvelope \? 'encrypted' as const : 'legacy-plaintext' as const/);
+  const legacyRestoreFlowStart = accountingCtxSrc.indexOf('const restoreFromLocalSnapshot = useCallback');
+  const legacyRestoreFlowEnd = accountingCtxSrc.indexOf('const removeLocalSnapshot = useCallback', legacyRestoreFlowStart);
+  const legacyRestoreFlow = accountingCtxSrc.slice(legacyRestoreFlowStart, legacyRestoreFlowEnd);
+  assert.match(legacyRestoreFlow, /if \(allowLegacyPlaintext\)/);
+  assert.match(legacyRestoreFlow, /saveLocalSnapshot\([\s\S]*reason: 'pre_migration'/);
+  assert.match(legacyRestoreFlow, /if \(!migrated\)[\s\S]*return false/);
+  assert.match(settingsViewSrc, /window\.confirm\([\s\S]*نسخه پشتیبان قدیمی و بدون رمزنگاری است/);
+  assert.match(settingsViewSrc, /restoreFromLocalSnapshot\(snap\.id, isLegacyPlaintext\)/);
+
 
   assert.match(operationalHydration, /catch \(error\)[\s\S]*throw error/);
   assert.match(accountingCtxSrc, /Operational workspace hydration failed; fallback hydration was blocked/);
