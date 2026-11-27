@@ -455,10 +455,19 @@ export async function commitInvoiceOperationalTx(
 
       // 1. Inventory (Products & FIFO/MWA layers)
       const prodStore = tx.objectStore('products');
+      const seenProductIds = new Set<string>();
       for (const prod of payload.updatedProducts) {
-        if (!prod || typeof prod.id !== 'string' || !prod.id.trim() || !Number.isFinite(prod.stock)) {
-          throw new Error('ATOMIC_ROLLBACK_INVALID_PRODUCT: شناسه یا موجودی کالا نامعتبر است.');
+        if (
+          !prod ||
+          typeof prod.id !== 'string' ||
+          !prod.id.trim() ||
+          !Number.isFinite(prod.stock) ||
+          prod.stock < 0 ||
+          seenProductIds.has(prod.id)
+        ) {
+          throw new Error('ATOMIC_ROLLBACK_INVALID_PRODUCT: شناسه، موجودی یا تکرار کالای فاکتور نامعتبر است.');
         }
+        seenProductIds.add(prod.id);
         const req = prodStore.put(prod);
         req.onerror = () => abortAndReject(req.error ?? new Error('Product store write failed'));
       }
@@ -469,14 +478,27 @@ export async function commitInvoiceOperationalTx(
         if (!v.id || !Array.isArray(v.lines) || v.lines.length < 2) {
           throw new Error('ATOMIC_ROLLBACK_INVALID_VOUCHER: سند حسابداری باید حداقل ۲ ردیف معتبر داشته باشد.');
         }
-        const totalDebit = v.lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
-        const totalCredit = v.lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
-        if (
-          !Number.isFinite(totalDebit) ||
-          !Number.isFinite(totalCredit) ||
-          Math.round(totalDebit) !== Math.round(totalCredit) ||
-          Math.round(totalDebit) <= 0
-        ) {
+        let totalDebit = 0;
+        let totalCredit = 0;
+        for (const line of v.lines) {
+          const debit = line?.debit;
+          const credit = line?.credit;
+          if (
+            !Number.isSafeInteger(debit) ||
+            Number(debit) < 0 ||
+            !Number.isSafeInteger(credit) ||
+            Number(credit) < 0 ||
+            (Number(debit) > 0 && Number(credit) > 0)
+          ) {
+            throw new Error('ATOMIC_ROLLBACK_INVALID_VOUCHER_LINE: مبلغ ردیف سند باید عدد صحیح امن و نامنفی باشد و هر ردیف فقط یک‌طرفه ثبت شود.');
+          }
+          totalDebit += Number(debit);
+          totalCredit += Number(credit);
+          if (!Number.isSafeInteger(totalDebit) || !Number.isSafeInteger(totalCredit)) {
+            throw new Error('ATOMIC_ROLLBACK_INVALID_VOUCHER_TOTAL: جمع سند از محدوده عدد صحیح امن خارج است.');
+          }
+        }
+        if (totalDebit !== totalCredit || totalDebit <= 0) {
           throw new Error(
             `ATOMIC_ROLLBACK_UNBALANCED_VOUCHER: سند حسابداری تراز نیست (بدهکار=${totalDebit}، بستانکار=${totalCredit}).`
           );
@@ -493,8 +515,14 @@ export async function commitInvoiceOperationalTx(
       if (allCheques.length > 0) {
         const chequeStore = tx.objectStore('cheques');
         for (const chq of allCheques) {
-          if (!chq || typeof chq.id !== 'string' || !chq.id.trim() || !Number.isFinite(chq.amount) || chq.amount <= 0) {
-            throw new Error('ATOMIC_ROLLBACK_INVALID_CHEQUE: اطلاعات چک خزانه نامعتبر است.');
+          if (
+            !chq ||
+            typeof chq.id !== 'string' ||
+            !chq.id.trim() ||
+            !Number.isSafeInteger(chq.amount) ||
+            chq.amount <= 0
+          ) {
+            throw new Error('ATOMIC_ROLLBACK_INVALID_CHEQUE: شناسه یا مبلغ چک خزانه نامعتبر است.');
           }
           const req = chequeStore.put(chq);
           req.onerror = () => abortAndReject(req.error ?? new Error('Cheque store write failed'));
@@ -514,9 +542,17 @@ export async function commitInvoiceOperationalTx(
       revReq.onsuccess = () => {
         try {
           const existing = revReq.result as { localRevision?: number } | undefined;
+          const currentRevision = Number(existing?.localRevision ?? 0);
+          if (
+            !Number.isSafeInteger(currentRevision) ||
+            currentRevision < 0 ||
+            currentRevision >= Number.MAX_SAFE_INTEGER
+          ) {
+            throw new Error('ATOMIC_ROLLBACK_INVALID_REVISION: شماره بازبینی فضای کاری معتبر نیست.');
+          }
           const metaPutReq = metaStore.put({
             key: 'workspace_meta',
-            localRevision: (existing?.localRevision ?? 0) + 1,
+            localRevision: currentRevision + 1,
             updatedAt: committedAt,
             schemaVersion: OP_DB_VERSION,
           });
