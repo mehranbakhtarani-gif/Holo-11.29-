@@ -406,15 +406,13 @@ async function runTests() {
   assert.match(cancelInvoiceBody, /liveInvoiceVersion !== \(inv\._version \?\? 1\)/);
   assert.doesNotMatch(cancelInvoiceBody, /applyOfflineCancelBatch|writeBatch\(db\)/);
 
-  const convertProformaEnd = accountingCtxSrc.indexOf('const postDepreciationVoucher', convertProformaIdx);
-  const proformaCancellationBody = accountingCtxSrc.slice(convertProformaIdx, convertProformaEnd);
   assert.match(
-    proformaCancellationBody,
+    cancelInvoiceBody,
     /ابطال پیش‌فاکتور در فضای ابری به کنترل نسخه Firestore نیاز دارد/,
     'cloud proforma cancellation must fail closed while offline'
   );
-  assert.match(proformaCancellationBody, /const outcome = await runTransaction\(db, async \(tx\) =>/);
-  assert.match(proformaCancellationBody, /liveVersion !== \(inv\._version \?\? 1\)/);
+  assert.match(cancelInvoiceBody, /const outcome = await runTransaction\(db, async \(tx\) =>/);
+  assert.match(cancelInvoiceBody, /liveVersion !== \(inv\._version \?\? 1\)/);
   console.log('✓ 1c. Cloud invoice and proforma cancellation reject offline stale writes and enforce version checks');
 
   const stockAdjustIdx = accountingCtxSrc.indexOf('const adjustProductStockWithVoucher = useCallback');
