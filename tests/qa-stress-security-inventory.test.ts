@@ -107,6 +107,25 @@ console.log('Running QA Stress, Inventory Integration, Accounting Math & Securit
     );
   }
   logPass('Inventory ledger cumulative sale-return guard', 'FIFO, moving average and periodic average all reject over-returns');
+
+  const fifoPartialReturns = recalculateInventoryLedger({
+    productId: 'fifo-partial-return-product',
+    costingMethod: 'fifo',
+    movements: [
+      { id: 'fifo-return-buy-1', date: '1405/01/01', kind: 'purchase', productId: 'fifo-partial-return-product', qty: 100, totalCostIrr: 100_000 },
+      { id: 'fifo-return-buy-2', date: '1405/01/02', kind: 'purchase', productId: 'fifo-partial-return-product', qty: 20, totalCostIrr: 40_000 },
+      { id: 'fifo-return-sale', date: '1405/01/03', kind: 'sale', productId: 'fifo-partial-return-product', qty: 120 },
+      { id: 'fifo-return-1', date: '1405/01/04', kind: 'sale_return', productId: 'fifo-partial-return-product', qty: 15, sourceRefId: 'fifo-return-sale' },
+      { id: 'fifo-return-2', date: '1405/01/05', kind: 'sale_return', productId: 'fifo-partial-return-product', qty: 15, sourceRefId: 'fifo-return-sale' },
+    ],
+  });
+  assert.equal(fifoPartialReturns.kardex.find((row) => row.movementId === 'fifo-return-1')?.cogsOrCostIrr, 30_000);
+  assert.equal(fifoPartialReturns.kardex.find((row) => row.movementId === 'fifo-return-2')?.cogsOrCostIrr, 20_000);
+  assert.equal(fifoPartialReturns.totalCogsIrr, 90_000);
+  assert.equal(fifoPartialReturns.finalState.stockQty, 30);
+  assert.equal(fifoPartialReturns.finalState.totalValueIrr, 50_000);
+  assert.equal(fifoPartialReturns.conservationDeltaIrr, 0);
+  logPass('FIFO successive partial returns', 'later returns continue through the original sale layers without repeating the same layer');
 }
 
 
