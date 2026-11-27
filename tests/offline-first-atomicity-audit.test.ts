@@ -325,7 +325,7 @@ async function runTests() {
   const operationalHydration = operationalDbSrc.slice(operationalHydrationStart, operationalHydrationEnd);
   const syncCloseReaderStart = localBackupSrc.indexOf('export function readSyncCloseSnapshot()');
   const syncCloseReaderEnd = localBackupSrc.indexOf('export function readLegacyPlaintextSyncCloseSnapshot()', syncCloseReaderStart);
-  const syncCloseReader = operationalDbSrc.slice(syncCloseReaderStart, syncCloseReaderEnd);
+  const syncCloseReader = localBackupSrc.slice(syncCloseReaderStart, syncCloseReaderEnd);
   assert.match(syncCloseReader, /typeof parsed\.encryptedEnvelope === 'string'/);
   assert.doesNotMatch(syncCloseReader, /parsed\.payloadJson/);
   assert.match(localBackupSrc, /export function readLegacyPlaintextSyncCloseSnapshot\(\)/);
