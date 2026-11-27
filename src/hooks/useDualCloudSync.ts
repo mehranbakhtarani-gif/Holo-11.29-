@@ -1,3 +1,4 @@
+import { getActiveOperationalRestoreJournal } from '../lib/operationalDb';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAccounting } from '../context/AccountingContext';
 import {
@@ -101,6 +102,15 @@ function saveLastFirebaseBackupAt(stamp: string): void {
     localStorage.setItem(LAST_FB_BACKUP_KEY, stamp);
   } catch {
     // ignore
+  }
+}
+
+async function isRestoreRecoveryBlockingSync(): Promise<boolean> {
+  try {
+    return Boolean(await getActiveOperationalRestoreJournal());
+  } catch {
+    // Corrupt/unreadable recovery journal must fail closed for every sync direction.
+    return true;
   }
 }
 
@@ -491,6 +501,7 @@ export function useDualCloudSync() {
   );
 
   const pushToFirebaseNow = useCallback(
+      if (await isRestoreRecoveryBlockingSync()) { showToast('همگام‌سازی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (silent = false): Promise<boolean> => {
       if (!backupSessionUnlocked) { if (!silent) showToast('ابتدا قفل رمزنگاری پشتیبان را در تنظیمات باز کنید.'); return false; }
       if (fbInFlightRef.current) return false;
@@ -590,6 +601,7 @@ export function useDualCloudSync() {
   );
 
   const pullFromFirebaseNow = useCallback(
+      if (await isRestoreRecoveryBlockingSync()) { showToast('دریافت ابری تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (backupId?: string): Promise<boolean> => {
       if (!backupSessionUnlocked) { showToast('برای بازیابی پشتیبان رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.'); return false; }
       if (fbInFlightRef.current) return false;
@@ -858,6 +870,7 @@ export function useDualCloudSync() {
   }, [isOnline, refreshSupabaseStatus]);
 
   const syncSupabaseNow = useCallback(
+      if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('همگام‌سازی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (silent = false, overrideToken?: string | null): Promise<boolean> => {
       if (!backupSessionUnlocked) { if (!silent) showToast('ابتدا قفل رمزنگاری پشتیبان را در تنظیمات باز کنید.'); return false; }
       if (sbInFlightRef.current) return false;
@@ -1135,6 +1148,7 @@ export function useDualCloudSync() {
   );
 
   const pullFromSupabase = useCallback(
+      if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('دریافت ابری تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (backupId?: string, silent = false): Promise<boolean> => {
       if (!backupSessionUnlocked) { if (!silent) showToast('برای بازیابی پشتیبان رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.'); return false; }
       if (sbInFlightRef.current) return false;
