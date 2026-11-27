@@ -503,7 +503,7 @@ export async function deleteDocumentAttachment(
 
 export interface EncryptedDocumentAttachmentBundle {
   format: 'holoo-apex-encrypted-document-vault';
-  schemaVersion: 1;
+  schemaVersion: 2;
   exportedAt: string;
   attachments: StoredDocumentAttachmentRecord[];
 }
@@ -532,24 +532,63 @@ export async function exportEncryptedDocumentAttachmentBundle(): Promise<string>
     throw new Error('بایگانی پایدار اسناد در این مرورگر در دسترس نیست.');
   }
 
-  for (const row of rows) {
+  const normalizedRows = [...rows];
+  let migratedAny = false;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
     if (!row.encryptedEnvelope || typeof row.dataUrl === 'string') {
       throw new Error(`پیوست قدیمی «${row.fileName}» هنوز رمزگذاری نشده است؛ ابتدا آن را از مسیر مهاجرت امن باز کنید.`);
     }
     const verified = await decryptAndVerifyBackupEnvelope(row.encryptedEnvelope, passphrase);
     if (!verified.ok || !verified.snapshotJson) throw new Error(verified.error || 'اعتبارسنجی رمزگذاری پیوست ناموفق بود.');
-    const payload = JSON.parse(verified.snapshotJson) as { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
-    if (typeof payload.dataUrl !== 'string' || payload.mimeType !== row.mimeType || payload.sha256 !== row.sha256 ||
+    const payload = JSON.parse(verified.snapshotJson) as {
+      dataUrl?: unknown; mimeType?: unknown; sha256?: unknown; metadataSha256?: unknown;
+    };
+    if (typeof payload.dataUrl !== 'string' ||
+        getBase64DataUrlByteLength(payload.dataUrl, row.mimeType) === null ||
+        payload.mimeType !== row.mimeType || payload.sha256 !== row.sha256 ||
         await computeSha256Hex(payload.dataUrl) !== row.sha256) {
       throw new Error(`اعتبار محتوای پیوست «${row.fileName}» تأیید نشد.`);
+    }
+    const expectedMetadataSha256 = await computeAttachmentMetadataSha256(row);
+    if (payload.metadataSha256 !== undefined && payload.metadataSha256 !== expectedMetadataSha256) {
+      throw new Error(`اصالت فراداده پیوست «${row.fileName}» تأیید نشد.`);
+    }
+    if (payload.metadataSha256 === undefined) {
+      const envelope = await encryptBackupEnvelope(JSON.stringify({
+        dataUrl: payload.dataUrl,
+        mimeType: row.mimeType,
+        sha256: row.sha256,
+        metadataSha256: expectedMetadataSha256,
+      }), passphrase);
+      normalizedRows[index] = { ...row, encryptedEnvelope: JSON.stringify(envelope) };
+      migratedAny = true;
+    }
+  }
+
+  // Persist metadata-binding migrations only after every attachment has passed validation.
+  if (migratedAny) {
+    if (isIdbAvailable()) {
+      const db = await openVaultDb();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(VAULT_STORE, 'readwrite');
+          normalizedRows.forEach((row) => tx.objectStore(VAULT_STORE).put(row));
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error ?? new Error('ذخیره مهاجرت اصالت فراداده پیوست‌ها ناموفق بود.'));
+          tx.onabort = () => reject(tx.error ?? new Error('تراکنش مهاجرت اصالت فراداده پیوست‌ها لغو شد.'));
+        });
+      } finally { db.close(); }
+    } else if (isNonBrowserTestRuntime()) {
+      normalizedRows.forEach((row) => memoryVault.set(row.id, row));
     }
   }
 
   const bundle: EncryptedDocumentAttachmentBundle = {
     format: 'holoo-apex-encrypted-document-vault',
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
-    attachments: rows,
+    attachments: normalizedRows,
   };
   return JSON.stringify(bundle);
 }
