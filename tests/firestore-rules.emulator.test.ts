@@ -184,10 +184,9 @@ async function run() {
       updatedAt: serverTimestamp(),
     };
     await assertSucceeds(setDoc(doc(ownerA, 'cloudBackups', 'encrypted_backup'), encryptedCloudBackup));
+    const { snapshotEnvelope: _envelope, encryption: _encryption, ...legacyCloudBackup } = encryptedCloudBackup;
     await assertFails(setDoc(doc(ownerA, 'cloudBackups', 'plaintext_backup'), {
-      ...encryptedCloudBackup,
-      snapshotEnvelope: undefined,
-      encryption: undefined,
+      ...legacyCloudBackup,
       snapshot: { accounts: [{ code: '101', balance: 500 }] },
     }));
 
