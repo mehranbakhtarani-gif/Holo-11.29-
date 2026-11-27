@@ -535,8 +535,12 @@ export const SettingsView: React.FC<{
             showToast('ساختار بسته پشتیبان یکپارچه معتبر نیست.', 'error');
             return;
           }
-          // Attachment restore performs full envelope, metadata, MIME and digest validation
-          // before its single IndexedDB transaction. Workspace import follows only on success.
+          const proceed = window.confirm(
+            'بازیابی پیوست‌ها و اطلاعات حسابداری در دو مخزن مستقل انجام می‌شود و هنوز تراکنش اتمیک بین آن‌ها وجود ندارد. اگر مرحله دوم شکست بخورد، ممکن است بازیابی ناقص بماند. آیا ادامه می‌دهید؟'
+          );
+          if (!proceed) return;
+          // Attachment restore validates the full bundle before its IndexedDB transaction.
+          // Workspace import follows afterward; cross-store rollback is not yet atomic.
           const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(
             JSON.stringify(parsed.documentAttachments)
           );
