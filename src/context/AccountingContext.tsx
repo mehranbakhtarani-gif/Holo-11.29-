@@ -763,7 +763,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           return;
         }
         handleFirestoreError(error, currentOp, currentPath);
-        throw err;
       } finally {
         setIsSyncing(false);
       }
@@ -940,7 +939,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             (err) => {
               if (isFirestoreOfflineError(err)) return;
               handleFirestoreError(err, OperationType.GET, `users/${uid}`);
-              throw err;
             }
           )
         );
@@ -960,7 +958,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               (err) => {
                 if (isFirestoreOfflineError(err)) return;
                 handleFirestoreError(err, OperationType.LIST, colName);
-                throw err;
               }
             )
           );
@@ -1126,7 +1123,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       setProfile(next);
       showToast('مشخصات شرکتی و سال مالی ذخیره شد.');
-      throw err;
     },
     [profile, user, showToast, assertPermission]
   );
@@ -1159,7 +1155,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           const key = `holoo_profile_photo_${user?.uid || profile.uid}`;
           if (photoData) window.localStorage.setItem(key, photoData);
           else window.localStorage.removeItem(key);
-          throw err;
         }
       } catch {
         // The in-memory profile remains available for this session.
@@ -1198,7 +1193,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `accounts/${id}`);
-          throw err;
         }
       } else {
         setAccounts((prev) => [...prev, full]);
@@ -1227,7 +1221,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'accounts', accountId), updatePayload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `accounts/${accountId}`);
-          throw err;
         }
       } else {
         setAccounts((prev) =>
@@ -1258,7 +1251,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'accounts', accountId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `accounts/${accountId}`);
-          throw err;
         }
       } else {
         setAccounts((prev) => prev.filter((a) => a.id !== accountId));
@@ -1300,7 +1292,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `parties/${id}`);
-          throw err;
         }
       } else {
         setParties((prev) => [full, ...prev]);
@@ -1366,7 +1357,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }).catch(() => {});
           } else {
             handleFirestoreError(err, OperationType.UPDATE, `parties/${partyId}`);
-            throw err;
           }
         }
       } else {
@@ -1398,7 +1388,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'parties', partyId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `parties/${partyId}`);
-          throw err;
         }
       } else {
         setParties((prev) => prev.filter((p) => p.id !== partyId));
@@ -1581,7 +1570,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setVouchers((prev) => [...prev, full]);
-        throw err;
       }
       showToast(
         isFx
@@ -1771,7 +1759,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               : v
           )
         );
-        throw err;
       }
       showToast(`سند موقت شماره ${existing.voucherNumber} با موفقیت اصلاح شد.`);
     },
@@ -1801,7 +1788,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setVouchers((prev) => prev.filter((v) => v.id !== voucherId));
-        throw err;
       }
       showToast(`سند موقت شماره ${existing.voucherNumber} حذف شد.`);
       return true;
@@ -1854,7 +1840,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               const snap = await tx.get(voucherRef);
               if (!snap.exists()) {
                 throw new Error('سند موردنظر در فضای ابری پیدا نشد؛ قطعی‌سازی انجام نشد.');
-                throw err;
               }
               const live = snap.data();
               if (live.status === 'permanent') {
@@ -1904,7 +1889,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setVouchers((prev) =>
           prev.map((voucher) => (voucher.id === voucherId ? permanentVoucher : voucher))
         );
-        throw err;
       }
 
       if (!suppressNativeNotification) {
@@ -2015,7 +1999,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           return updated;
         })
       );
-      throw err;
     }
     showToast('تمامی اسناد سال‌های مالی باز بر اساس تاریخ شمسی و به تفکیک سال مالی شماره‌گذاری مجدد شدند.');
   }, [vouchers, profile.closedFiscalYears, profile.fiscalYear, user, showToast, assertPermission]);
@@ -2061,7 +2044,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `products/${id}`);
-          throw err;
         }
       } else {
         setProducts((prev) => [full, ...prev]);
@@ -2107,7 +2089,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'products', productId), payload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `products/${productId}`);
-          throw err;
         }
       } else {
         setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, ...patch } : p)));
@@ -2132,7 +2113,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'products', productId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `products/${productId}`);
-          throw err;
         }
       } else {
         setProducts((prev) => prev.filter((p) => p.id !== productId));
@@ -2154,7 +2134,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `products/${productId}`);
-          throw err;
         }
       } else {
         setProducts((prev) =>
@@ -2358,7 +2337,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             voucher: sealedVoucher,
             unit: profile.currencyUnit,
           });
-          throw err;
         }
       }
 
@@ -2584,7 +2562,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             voucher: plannedVoucher,
             unit: profile.currencyUnit,
           });
-          throw err;
         }
       }
 
@@ -2674,7 +2651,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               : p
           )
         );
-        throw err;
       }
       showToast(`حواله انتقال کالای «${prod.name}» از «${prod.warehouse}» به «${cleanWh}» ثبت شد.`);
     },
@@ -2869,7 +2845,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
         } else {
           setCheques((prev) => [full, ...prev]);
-          throw err;
         }
         if (!skipVoucher) {
           try {
@@ -2922,7 +2897,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setCheques((prev) => prev.map((c) => (c.id === chequeId ? { ...c, ...patch } : c)));
-        throw err;
       }
       showToast('مشخصات چک صیادی ویرایش شد.');
     },
@@ -3873,7 +3847,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               _version: delta.prevVersion + 1,
               updatedByDevice: deviceId,
             });
-            throw err;
           }
           const cancelledInvoice: Invoice = {
             ...inv,
@@ -3949,7 +3922,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               updatedProducts: [],
               invoice: cancelledProforma,
             });
-            throw err;
           } catch (txErr) {
             console.error('[OperationalDB] Atomic proforma cancellation rolled back:', txErr);
             showToast('خطا در ابطال پیش‌فاکتور در پایگاه داده محلی (عملیات ROLLBACK شد).');
@@ -4289,7 +4261,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             cheque: plan.cheque ?? undefined,
             invoice: finalInvoice,
           });
-          throw err;
         } catch (err) {
           showToast(
             err instanceof Error
@@ -4372,7 +4343,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setEmployees((prev) => [...prev, full]);
-        throw err;
       }
       showToast(`پرسنل «${emp.fullName}» به لیست حقوق و دستمزد افزوده شد.`);
     },
@@ -4401,7 +4371,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, ...patch } : e)));
-        throw err;
       }
       showToast('مشخصات و حکم کارگزینی پرسنل ویرایش شد.');
     },
@@ -4422,7 +4391,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setEmployees((prev) => prev.filter((e) => e.id !== empId));
-        throw err;
       }
       showToast('پرسنل از لیست فعال حذف شد.');
     },
@@ -4678,7 +4646,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setAssets((prev) => [...prev, full]);
-        throw err;
       }
       showToast(`دارایی ثابت «${asset.title}» ثبت شد.`);
     },
@@ -4705,7 +4672,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, ...patch } : a)));
-        throw err;
       }
       showToast('مشخصات دارایی ثابت ویرایش شد.');
     },
@@ -4726,7 +4692,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setAssets((prev) => prev.filter((a) => a.id !== assetId));
-        throw err;
       }
       showToast('دارایی ثابت حذف شد.');
     },
@@ -4985,7 +4950,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `costCenters/${id}`);
-          throw err;
         }
       } else {
         setCostCenters((prev) => [...prev, full]);
@@ -5007,7 +4971,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'costCenters', ccId), payload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `costCenters/${ccId}`);
-          throw err;
         }
       } else {
         setCostCenters((prev) => prev.map((c) => (c.id === ccId ? { ...c, ...patch } : c)));
@@ -5024,7 +4987,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'costCenters', ccId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `costCenters/${ccId}`);
-          throw err;
         }
       } else {
         setCostCenters((prev) => prev.filter((c) => c.id !== ccId));
@@ -5178,7 +5140,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setCurrencies((prev) => [...prev, full]);
-        throw err;
       }
 
       // Also seed an initial daily rate entry for today so it's immediately usable
@@ -5207,7 +5168,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `exchangeRates/${rateId}`);
-          throw err;
         }
       } else {
         setExchangeRates((prev) => [rateEntry, ...prev]);
@@ -5251,7 +5211,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `currencies/${currencyId}`);
-          throw err;
         }
       } else {
         setCurrencies((prev) =>
@@ -5287,7 +5246,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setCurrencies((prev) => prev.filter((c) => c.id !== currencyId));
-        throw err;
       }
       showToast(`ارز «${target.name} (${target.code})» حذف شد.`);
       return true;
@@ -5323,7 +5281,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             });
           } catch (err) {
             handleFirestoreError(err, OperationType.UPDATE, `exchangeRates/${existing.id}`);
-            throw err;
           }
         } else {
           setExchangeRates((prev) =>
@@ -5365,7 +5322,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             });
           } catch (err) {
             handleFirestoreError(err, OperationType.CREATE, `exchangeRates/${id}`);
-            throw err;
           }
         } else {
           setExchangeRates((prev) => [full, ...prev]);
@@ -5408,7 +5364,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'exchangeRates', rateId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `exchangeRates/${rateId}`);
-          throw err;
         }
       } else {
         setExchangeRates((prev) => prev.filter((r) => r.id !== rateId));
@@ -5508,7 +5463,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `importDossiers/${full.id}`);
-          throw err;
         }
       } else {
         setImportDossiers((prev) => [full, ...prev]);
@@ -5676,7 +5630,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             inventoryValueIrr: step.nextState.totalValueIrr,
             lotNumber: agg.lotNumber || prod.lotNumber,
           });
-          throw err;
         }
       }
 
@@ -5779,7 +5732,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `importDossiers/${dossierId}`);
-          throw err;
         }
       } else {
         setImportDossiers((prev) =>
@@ -5846,7 +5798,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `salesOrders/${full.id}`);
-          throw err;
         }
       } else {
         setSalesOrders((prev) => [full, ...prev]);
@@ -5910,7 +5861,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               : o
           )
         );
-        throw err;
       }
       logActivity(
         'انبار و باسکول',
@@ -6007,7 +5957,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           creditAmount: grandTotal,
           status: 'issued',
         });
-        throw err;
       } catch (err) {
         if (user) {
           await updateDoc(doc(db, 'salesOrders', orderId), {
@@ -6026,7 +5975,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `salesOrders/${orderId}`);
-          throw err;
         }
       } else {
         setSalesOrders((prev) =>
@@ -6088,7 +6036,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `subcontractJobs/${full.id}`);
-          throw err;
         }
       } else {
         setSubcontractJobs((prev) => [full, ...prev]);
@@ -6231,7 +6178,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           costLayers: rawStep.nextState.layers,
           inventoryValueIrr: rawStep.nextState.totalValueIrr,
         });
-        throw err;
       }
 
       // Compute Normal vs Abnormal Loss (IAS 2 / استاندارد حسابداری ۸: افت غیرعادی به هزینه ۸۰۴۰۱ می‌رود و بهای کالا را متورم نمی‌کند)
@@ -6389,7 +6335,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `subcontractJobs/${jobId}`);
-          throw err;
         }
       } else {
         setSubcontractJobs((prev) =>
@@ -6578,7 +6523,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `rbacOperators/${full.id}`);
-          throw err;
         }
       } else {
         setRbacOperators((prev) => [...prev, full]);
@@ -6607,7 +6551,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setRbacOperators((prev) => prev.map((o) => (o.id === opId ? { ...o, ...patch } : o)));
-        throw err;
       }
       logActivity('مدیریت کاربران', 'ویرایش سطح دسترسی کاربر', `شناسه اپراتور: ${opId}`);
       showToast('سطح دسترسی کاربر به‌روزرسانی شد.');
@@ -6631,7 +6574,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         setRbacOperators((prev) => prev.filter((o) => o.id !== opId));
-        throw err;
       }
       if (activeOperatorId === opId) {
         const next = rbacOperators.find((o) => o.id !== opId);
