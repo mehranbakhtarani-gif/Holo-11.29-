@@ -331,15 +331,37 @@ export async function applyOperationalRestoreJournalWorkspace(
     }
     const workspace = parseOperationalWorkspaceSnapshot(verified.snapshotJson);
     const recordCount = countOperationalWorkspaceRecords(workspace);
-    if (workspace.bankReconciliationSessions !== undefined) {
-      if (!workspace.bankReconciliationSessions || typeof workspace.bankReconciliationSessions !== 'object' ||
-          Array.isArray(workspace.bankReconciliationSessions)) {
-        throw new Error('ساختار تطبیق بانکی در فضای کاری بازیابی معتبر نیست.');
-      }
-      importAllBankReconciliationSessions(workspace.bankReconciliationSessions);
-    }
     if (recordCount !== journal.workspaceRecordCount) {
       throw new Error('تعداد رکوردهای فضای کاری با ژورنال بازیابی مطابقت ندارد.');
+    }
+    if (workspace.bankReconciliationSessions !== undefined) {
+      const sessions = workspace.bankReconciliationSessions;
+      if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) {
+        throw new Error('ساختار تطبیق بانکی در فضای کاری بازیابی معتبر نیست.');
+      }
+      let expectedDecisionCount = 0;
+      for (const [bankCode, entries] of Object.entries(sessions)) {
+        if (!bankCode || ['__proto__', 'constructor', 'prototype'].includes(bankCode) ||
+            !entries || typeof entries !== 'object' || Array.isArray(entries)) {
+          throw new Error('ساختار حساب یا ردیف تطبیق بانکی در بسته نامعتبر است.');
+        }
+        for (const [rowId, rawDecision] of Object.entries(entries as Record<string, unknown>)) {
+          if (!rowId || ['__proto__', 'constructor', 'prototype'].includes(rowId) ||
+              !rawDecision || typeof rawDecision !== 'object' || Array.isArray(rawDecision)) {
+            throw new Error('یکی از تصمیم‌های تطبیق بانکی در بسته نامعتبر است.');
+          }
+          const decision = rawDecision as Record<string, unknown>;
+          if (typeof decision.statementRowId !== 'string' ||
+              !['pending_review', 'confirmed', 'rejected', 'adjusted', 'duplicate_ignored'].includes(String(decision.reviewStatus))) {
+            throw new Error('فیلدهای یکی از تصمیم‌های تطبیق بانکی معتبر نیست.');
+          }
+          expectedDecisionCount += 1;
+        }
+      }
+      const importedDecisionCount = importAllBankReconciliationSessions(sessions);
+      if (importedDecisionCount !== expectedDecisionCount) {
+        throw new Error('تمام تصمیم‌های تطبیق بانکی با موفقیت بازیابی نشدند.');
+      }
     }
 
     const stores = [
