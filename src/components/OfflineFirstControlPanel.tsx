@@ -20,7 +20,6 @@ import { useAccounting } from '../context/AccountingContext';
 import { useOnlineStatus } from '../hooks/usePWAInstall';
 import {
   buildIsolatedWorkspaceStorageKey,
-  computeSnapshotSha256Hex,
   createLocalOfflinePasscodeRecord,
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
