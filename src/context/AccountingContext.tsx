@@ -1472,7 +1472,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           ? `payv_${sha256HexSync(`${ownerId}:${payload.referenceId}`).slice(0, 32)}`
           : (payload.voucherType === 'closing' || payload.voucherType === 'opening') && payload.referenceId
             ? `vch_${sha256HexSync(`${ownerId}:${payload.referenceId}`).slice(0, 32)}`
-            : generateSafeId('vch');
+            : payload.referenceId && !payload.allowDuplicate
+              ? `vch_${sha256HexSync(`${ownerId}:reference:${payload.referenceId}`).slice(0, 32)}`
+              : generateSafeId('vch');
 
       const normCode = normalizeCurrencyCode(payload.currencyCode);
       const isFx = isForeignCurrency(normCode) && Number(payload.exchangeRate) > 0;
