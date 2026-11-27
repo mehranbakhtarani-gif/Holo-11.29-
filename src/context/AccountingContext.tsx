@@ -1590,6 +1590,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           throw err;
         }
       } else {
+        if (vouchers.some((existing) => existing.id === id || (full.referenceId && existing.referenceId === full.referenceId))) {
+          throw new Error('سند با همین شناسه یا شناسه مرجع قبلاً ثبت شده است؛ از ثبت تکراری جلوگیری شد.');
+        }
         setVouchers((prev) => [...prev, full]);
       }
       showToast(
