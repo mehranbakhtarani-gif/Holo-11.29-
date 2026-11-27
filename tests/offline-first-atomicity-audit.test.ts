@@ -402,6 +402,14 @@ async function runTests() {
     'offline cheque status changes must atomically persist cheque and ledger voucher'
   );
 
+  const payrollIdx = accountingCtxSrc.indexOf('const postMonthlyPayrollVoucher = useCallback');
+  const payrollEnd = accountingCtxSrc.indexOf('const paySalariesVoucher = useCallback', payrollIdx);
+  assert.ok(payrollIdx !== -1 && payrollEnd > payrollIdx);
+  const payrollBody = accountingCtxSrc.slice(payrollIdx, payrollEnd);
+  assert.match(payrollBody, /Number\\.isSafeInteger\\(totalExpense\\)/);
+  assert.match(payrollBody, /totalExpense !== totalNet \+ totalInsurance \+ totalTax/);
+  assert.match(payrollBody, /ماه حقوق باید یک عنوان معتبر/);
+
   const depreciationIdx = accountingCtxSrc.indexOf('const postDepreciationVoucher = useCallback');
   const depreciationEnd = accountingCtxSrc.indexOf('const addCostCenter = useCallback', depreciationIdx);
   assert.ok(depreciationIdx !== -1 && depreciationEnd > depreciationIdx);
