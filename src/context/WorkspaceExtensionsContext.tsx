@@ -700,6 +700,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             warehouseTransfers: [...existing, result.transferRecord].slice(-250),
             _version: nextVersion,
             updatedByDevice: deviceLabel.slice(0, 120),
+            createdAt: extensionSnap.exists() ? extensionData.createdAt : serverTimestamp(),
             updatedAt: serverTimestamp(),
           }, { merge: true });
         });
