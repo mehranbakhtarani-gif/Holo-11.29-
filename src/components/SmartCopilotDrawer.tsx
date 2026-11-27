@@ -620,13 +620,13 @@ export const SmartCopilotDrawer: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end no-print">
+    <div dir="ltr" className="fixed inset-0 z-50 flex justify-end overflow-hidden no-print">
       <div
         className="flex-1 bg-slate-950/40 backdrop-blur-[1px]"
         onClick={onClose}
         aria-hidden="true"
       />
-      <aside className="w-full max-w-lg bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 h-full flex flex-col shadow-2xl">
+      <aside dir="rtl" className="relative z-10 w-full max-w-lg min-w-0 max-h-[100dvh] h-[100dvh] overflow-hidden bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl">
         {/* Header + Hybrid Online / Offline Mode Switcher */}
         <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 space-y-3">
           <div className="flex items-center justify-between gap-3">

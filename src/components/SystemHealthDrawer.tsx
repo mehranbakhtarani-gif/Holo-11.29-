@@ -245,7 +245,7 @@ export const SystemHealthDrawer: React.FC<SystemHealthDrawerProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-start bg-slate-950/60 dark:backdrop-blur-xs no-print"
+      dir="ltr" className="fixed inset-0 z-50 flex justify-start overflow-hidden bg-slate-950/60 dark:backdrop-blur-xs no-print"
       role="dialog"
       aria-modal="true"
       aria-label="مرکز هوشمند پایش سلامت سیستم"
@@ -254,7 +254,7 @@ export const SystemHealthDrawer: React.FC<SystemHealthDrawerProps> = ({
       <div className="flex-1" onClick={onClose} aria-hidden="true" />
 
       {/* Glassmorphic Diagnostic Drawer */}
-      <div className="w-full max-w-3xl h-full bg-white dark:bg-slate-900/95 dark:backdrop-blur-xl border-r border-slate-200 dark:border-white/10 shadow-2xl flex flex-col overflow-hidden text-right">
+      <div dir="rtl" className="w-full max-w-[min(48rem,100vw)] min-w-0 h-[100dvh] max-h-[100dvh] bg-white dark:bg-slate-900/95 dark:backdrop-blur-xl border-r border-slate-200 dark:border-white/10 shadow-2xl flex flex-col overflow-hidden text-right">
         {/* Top Drawer Header */}
         <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">

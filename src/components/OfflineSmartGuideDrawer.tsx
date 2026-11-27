@@ -145,13 +145,13 @@ export const OfflineSmartGuideDrawer: React.FC<{
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-slate-950/55 backdrop-blur-xs no-print"
+      dir="ltr" className="fixed inset-0 z-50 flex justify-end overflow-hidden bg-slate-950/55 backdrop-blur-xs no-print"
       role="dialog"
       aria-modal="true"
       aria-label="منوی راهنمای هوشمند آفلاین"
     >
       <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-3xl bg-white dark:bg-slate-950 h-full shadow-2xl border-r border-slate-200 dark:border-slate-800 flex flex-col text-right">
+      <div dir="rtl" className="relative z-10 w-full max-w-[min(48rem,100vw)] min-w-0 h-[100dvh] max-h-[100dvh] overflow-hidden bg-white dark:bg-slate-950 shadow-2xl border-r border-slate-200 dark:border-slate-800 flex flex-col text-right">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-gradient-to-l from-teal-700/8 via-transparent to-transparent">
           <div className="flex items-center gap-3 min-w-0">
