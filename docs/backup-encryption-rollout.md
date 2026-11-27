@@ -97,3 +97,10 @@ Required work before cutover:
 - The shadow copy is written to the dedicated `secureWorkspace` IndexedDB store only after encryption/decryption round-trip and SHA-256 verification.
 - The final IndexedDB write checks the source workspace revision in the same transaction as the encrypted record write. If the operational workspace changed while encryption was running, the stale encrypted copy is rejected.
 - This is a non-destructive dual-write preparation stage. The existing entity stores remain authoritative and plaintext; the encrypted shadow is not yet used as the active read source. No legacy entity records are deleted or rewritten by this process.
+
+
+### Workspace extension coverage in encrypted shadow (2026-11-28)
+
+- The encrypted operational snapshot now captures the complete JSON object stored at `holoo_apex96_workspace_extensions_v2`, including tracked warehouse transfers and the other extension collections.
+- Snapshot validation rejects a malformed extension payload; the record-count check includes its arrays and maps.
+- This is still a non-destructive shadow snapshot. The active localStorage mirror and IndexedDB operational entity stores remain plaintext. No encryption-only cutover or deletion of legacy data has been enabled.
