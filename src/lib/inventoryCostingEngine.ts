@@ -413,6 +413,18 @@ export function applyInventoryMovementStep(
       : undefined;
     const origLayers = movement.originalConsumedLayers || refHistory?.consumedLayers;
 
+    // A FIFO sale return must be backed by the original sale's consumed-layer allocation.
+    // Never invent a fallback cost layer for quantities that were not part of that sale.
+    if (method === 'fifo' && (!origLayers || origLayers.length === 0)) {
+      throw new Error('برای برگشت فروش در روش FIFO، ریزلایه‌های مصرف‌شده سند فروش اصلی در دسترس نیست؛ برگشت بدون مرجع معتبر مجاز نیست.');
+    }
+    if (method === 'fifo') {
+      const originalSoldQty = roundQty(origLayers!.reduce((sum, layer) => sum + roundQty(layer.qty), 0));
+      if (qty > originalSoldQty + 0.00005) {
+        throw new Error(`مقدار برگشت فروش (${roundQty2(qty)}) از مقدار فروش مرجع (${roundQty2(originalSoldQty)}) بیشتر است.`);
+      }
+    }
+
     let restoredCostIrr = 0;
     const restoredLayerEntries: InventoryCostLayer[] = [];
 
@@ -443,20 +455,7 @@ export function applyInventoryMovementStep(
       }
 
       if (remainingToRestore > 0.00005) {
-        const fallbackUnit =
-          movement.unitCostIrr ?? refHistory?.unitCostIrr ?? state.weightedAvgUnitCostIrr;
-        const extraVal = Math.round(remainingToRestore * fallbackUnit);
-        restoredCostIrr += extraVal;
-        restoredLayerEntries.push({
-          layerId: `ret_${movement.id}_extra`,
-          date: movement.date,
-          sourceRef: movement.sourceRefId || movement.id,
-          warehouse: movement.warehouse,
-          originalQty: remainingToRestore,
-          remainingQty: remainingToRestore,
-          unitCostIrr: fallbackUnit,
-          totalCostIrr: extraVal,
-        });
+        throw new Error('تخصیص لایه‌های فروش مرجع برای مقدار برگشتی کافی نیست؛ از ایجاد لایه بهای تمام‌شده حدسی جلوگیری شد.');
       }
 
       // Prepend restored historical layers to front of FIFO queue (earliest-available)
@@ -554,8 +553,13 @@ export function applyInventoryMovementStep(
         }
       }
 
-      // If still remaining (or no explicit sourceRefId), adjust newest purchase layers first (LIFO layer reversal)
-      for (let i = layers.length - 1; i >= 0 && remainingToRemove > 0.00005; i--) {
+      // When an originating purchase is specified, never silently consume unrelated purchase layers.
+      if (movement.sourceRefId && remainingToRemove > 0.00005) {
+        throw new Error('مقدار برگشت از خرید از مانده لایه خرید مرجع بیشتر است یا لایه مرجع پیدا نشد؛ برگشت به لایه‌های خرید دیگر منتقل نمی‌شود.');
+      }
+
+      // Without a source reference only, preserve the documented newest-layer reversal policy.
+      for (let i = layers.length - 1; !movement.sourceRefId && i >= 0 && remainingToRemove > 0.00005; i--) {
         const layer = layers[i];
         if (layer.remainingQty <= 0.00005) continue;
         const take = roundQty(Math.min(layer.remainingQty, remainingToRemove));
@@ -782,6 +786,11 @@ export function recalculateInventoryLedger(input: {
           purchaseReturnVarianceIrr: 0,
         });
       } else if (m.kind === 'purchase_return') {
+        if (!m.allowNegativeStock && runningQty + 0.0001 < q) {
+          throw new Error(
+            `موجودی انبار در تاریخ ${m.date} برای برگشت از خرید کافی نیست (موجودی: ${roundQty2(runningQty)}، برگشت: ${roundQty2(q)}).`
+          );
+        }
         const val =
           m.totalCostIrr !== undefined
             ? Math.round(m.totalCostIrr)
