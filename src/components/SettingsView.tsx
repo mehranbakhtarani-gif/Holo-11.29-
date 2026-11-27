@@ -499,6 +499,11 @@ export const SettingsView: React.FC<{
   const handleRestoreBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      showToast('حجم بسته پشتیبان از سقف ۱۰۰ مگابایت بیشتر است.', 'error');
+      e.target.value = '';
+      return;
+    }
     const reader = new FileReader();
     reader.onload = async () => {
       if (typeof reader.result !== 'string') return;
@@ -512,6 +517,11 @@ export const SettingsView: React.FC<{
           if (!parsed.workspace || typeof parsed.workspace !== 'object' ||
               !Array.isArray((parsed.workspace as Record<string, unknown>).accounts) ||
               !Array.isArray((parsed.workspace as Record<string, unknown>).vouchers) ||
+              !((parsed.workspace as Record<string, unknown>).accounts as unknown[]).some((account) =>
+                !!account && typeof account === 'object' &&
+                typeof (account as Record<string, unknown>).code === 'string' &&
+                typeof (account as Record<string, unknown>).title === 'string'
+              ) ||
               !parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
             showToast('ساختار بسته پشتیبان یکپارچه معتبر نیست.', 'error');
             return;
