@@ -134,7 +134,7 @@ Legacy plaintext attachment records remain readable only after the backup vault 
 
 Remaining controls before phase-4 exit:
 - Add browser IndexedDB integration tests for encrypted-at-rest bytes, legacy migration, wrong-passphrase/tamper rejection, and failed atomic replacement.
-- Extend the manual complete-backup package to cloud sync and the encrypted operational shadow; those flows still do not include Document Vault attachments. Design a recoverable cross-database commit/rollback protocol before claiming all-or-nothing restore.
+- Extend the complete-backup package to cloud sync and the encrypted operational shadow; those flows still do not include Document Vault attachments. The Settings manual restore now uses the forward-recovery journal protocol in `docs/complete-backup-restore-protocol.md`, but this is not a cross-database atomic transaction.
 - Evaluate whether attachment metadata (file names, entity labels, notes, uploader identity) needs field-level encryption; these fields remain queryable in plaintext to support listing and RBAC.
 - Document shared passphrase/key recovery requirements across devices. A device that lacks the passphrase cannot decrypt attachment content.
 
