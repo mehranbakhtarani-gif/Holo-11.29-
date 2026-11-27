@@ -3803,7 +3803,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               handleFirestoreError(err, OperationType.UPDATE, `atomic-cancel-invoice/${invoiceId}`);
               throw err;
             }
-          }
         } else {
           // Local atomic commit in Operational IndexedDB:
           // Commit restored FIFO/MWA inventory layers, cancelled invoice, reversal voucher,
