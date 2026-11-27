@@ -675,6 +675,28 @@ export async function applyStagedDocumentAttachmentBundle(
   } finally { db.close(); }
 }
 
+/** Remove only the non-live staging rows for a restore attempt. */
+export async function discardStagedDocumentAttachmentBundle(restoreId: string): Promise<void> {
+  validateRestoreId(restoreId);
+  if (!isIdbAvailable()) throw new Error('پاک‌سازی staging پایدار پیوست‌ها در این محیط در دسترس نیست.');
+  const db = await openVaultDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readwrite');
+      const staging = tx.objectStore(VAULT_RESTORE_STAGING_STORE);
+      const cursorRequest = staging.index('restoreId').openKeyCursor(IDBKeyRange.only(restoreId));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (cursor) { staging.delete(cursor.primaryKey); cursor.continue(); }
+        else tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE).delete(restoreId);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error('پاک‌سازی staging پیوست‌ها ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('پاک‌سازی staging پیوست‌ها لغو شد.'));
+    });
+  } finally { db.close(); }
+}
+
 /** Test/diagnostics helper to verify tampering detection without altering production DB */
 export async function verifyAttachmentRecordIntegrity(
   record: DocumentAttachmentRecord
