@@ -125,6 +125,10 @@ export function mergeWorkspaceExtensionField(
 
   if (isRecord(base) && isRecord(local) && isRecord(remote)) {
     const keys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
+    const unsafeKeys = [...keys].filter((key) =>
+      key === '__proto__' || key === 'constructor' || key === 'prototype'
+    );
+    if (unsafeKeys.length) return { ok: false, conflicts: unsafeKeys };
     const value: Record<string, unknown> = {};
     const conflicts: string[] = [];
     for (const key of keys) {
