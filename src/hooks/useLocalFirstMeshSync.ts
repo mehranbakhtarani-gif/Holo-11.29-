@@ -1157,7 +1157,7 @@ export function useLocalFirstMeshSync() {
     } finally {
       window.setTimeout(() => setIsP2PSyncing(false), 700);
     }
-  }, [selectedPeerId, isOnline, showToast]);
+  }, [selectedPeerId, isOnline, restoreBarrierActive, showToast]);
 
   const dismissInitialSetup = useCallback(() => {
     try {
@@ -1170,6 +1170,7 @@ export function useLocalFirstMeshSync() {
 
   const retryOutboxItem = useCallback(
     async (operationId: string) => {
+      if (restoreBarrierActive) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
       const items = await listDexieOutboxItems();
       const target = items.find((i) => i.operationId === operationId);
       if (!target) return;
@@ -1219,6 +1220,7 @@ export function useLocalFirstMeshSync() {
   );
 
   const retryAllPendingOutbox = useCallback(async () => {
+    if (restoreBarrierActive) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
     const items = await listDexieOutboxItems();
     const pendingFolder = items.some((i) => i.target === 'local_folder' && i.status !== 'synced');
     const pendingP2P = items.some((i) => i.target === 'p2p_mesh' && i.status !== 'synced');
