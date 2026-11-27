@@ -1679,6 +1679,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             description: cleanDesc,
             voucherType: payload.voucherType,
             status: payload.status,
+            fiscalYear: voucherFy,
+            ...(nextHash ? { integrityHash: nextHash } : {}),
             lines: cleanLines,
             totalDebit,
             totalCredit,
@@ -1715,27 +1717,21 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               );
               return;
             }
+            if (outcome === 'missing') {
+              throw new Error('سند موردنظر در فضای ابری پیدا نشد؛ ویرایش انجام نشد.');
+            }
           }
         } catch (err) {
           if (isFirestoreOfflineError(err)) {
-            await updateDoc(doc(db, 'vouchers', voucherId), {
-              date: payload.date.slice(0, 20),
-              description: cleanDesc,
-              voucherType: payload.voucherType,
-              status: payload.status,
-              lines: cleanLines,
-              totalDebit,
-              totalCredit,
-              currencyCode: isFx ? normCode.slice(0, 10) : BASE_CURRENCY_CODE,
-              exchangeRate: safeRate,
-              foreignTotalDebit,
-              foreignTotalCredit,
-              _version: expectedVersion + 1,
-              updatedByDevice: deviceId.slice(0, 64),
-              updatedAt: serverTimestamp(),
-            }).catch(() => {});
+            try {
+              await updateDoc(ref, updateFields);
+            } catch (offlineWriteError) {
+              handleFirestoreError(offlineWriteError, OperationType.UPDATE, `vouchers/${voucherId}`);
+              throw offlineWriteError;
+            }
           } else {
             handleFirestoreError(err, OperationType.UPDATE, `vouchers/${voucherId}`);
+            throw err;
           }
         }
       } else {
