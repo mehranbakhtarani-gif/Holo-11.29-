@@ -166,4 +166,36 @@ if(u.pathname==="/api/supabase/sync"&&req.method==="POST"){
   return out({status:outcome,operationId:operationId||undefined,serverRevision:nextRevision,conflictPolicy,syncedAt:now,retainedBackups:b.backups,prunedBackupsCount:b.prunedBackupsCount},200,allow);
  }catch{return out({error:"ارتباط با سرور Supabase برقرار نشد.",code:"SUPABASE_SYNC_FAILED"},502,allow)}
 }
+
+if(u.pathname==="/api/supabase/backups"&&req.method==="GET"){
+ const actor=actorFor(req,env);
+ if(!actor||!validWid(actor.workspaceId))return out({error:"برای مشاهده نسخه‌های پشتیبان ابتدا وارد شوید.",code:"AUTH_REQUIRED"},401,allow);
+ const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
+ const prefix=actor.uid+"__bak__";
+ try{
+  const url=cfg.base+"/rest/v1/"+cfg.table+"?owner_id=like."+encodeURIComponent(prefix+"*")+"&select=owner_id,revision,company_name,fiscal_year,last_device_label,voucher_count,invoice_count,product_count,created_at,updated_at&order=created_at.desc&limit=100";
+  const r=await fetch(url,{headers:sbHeaders(cfg),signal:AbortSignal.timeout(8000)});
+  if(!r.ok)return out({error:"دریافت فهرست نسخه‌های پشتیبان ناموفق بود.",code:"BACKUP_LIST_FAILED"},r.status,allow);
+  const rows=(await r.json()).filter(x=>typeof x.owner_id==="string"&&x.owner_id.startsWith(prefix));
+  const backups=rows.map(x=>({id:x.owner_id,provider:"supabase",revision:Number(x.revision)||1,savedAt:x.created_at||x.updated_at||null,deviceLabel:x.last_device_label||"دستگاه کاری",companyName:x.company_name||"",fiscalYear:x.fiscal_year||"1405",voucherCount:Number(x.voucher_count)||0,invoiceCount:Number(x.invoice_count)||0,productCount:Number(x.product_count)||0}));
+  return out({backups,backupCount:backups.length},200,allow);
+ }catch{return out({error:"ارتباط با Supabase برای دریافت فهرست پشتیبان برقرار نشد.",code:"BACKUP_LIST_NETWORK_ERROR"},502,allow)}
+}
+if(u.pathname==="/api/supabase/backups"&&req.method==="DELETE"){
+ const actor=actorFor(req,env);
+ if(!actor||!validWid(actor.workspaceId))return out({error:"برای حذف نسخه پشتیبان ابتدا وارد شوید.",code:"AUTH_REQUIRED"},401,allow);
+ const backupId=String(u.searchParams.get("backupId")||"");
+ const prefix=actor.uid+"__bak__";
+ if(backupId.length>180||!backupId.startsWith(prefix)||!new RegExp("^"+prefix.replace(/[.*+?^${}()|[\]\\]/g,"\\if(u.pathname.startsWith("/api/ai/")||u.pathname.startsWith("/api/supabase/"))")+"[a-zA-Z0-9_-]{8,80}$").test(backupId))return out({error:"شناسه نسخه پشتیبان نامعتبر است یا به این فضای کاری تعلق ندارد.",code:"BACKUP_FORBIDDEN"},403,allow);
+ const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
+ try{
+  const url=cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent(backupId);
+  const r=await fetch(url,{method:"DELETE",headers:sbHeaders(cfg,{Prefer:"return=representation"}),signal:AbortSignal.timeout(8000)});
+  if(!r.ok)return out({error:"حذف نسخه پشتیبان از Supabase ناموفق بود.",code:"BACKUP_DELETE_FAILED"},r.status,allow);
+  const deleted=await r.json().catch(()=>[]);
+  if(!Array.isArray(deleted)||deleted.length===0)return out({deleted:false,error:"نسخه پشتیبان پیدا نشد.",code:"BACKUP_NOT_FOUND"},404,allow);
+  return out({deleted:true,backupId},200,allow);
+ }catch{return out({error:"ارتباط با Supabase برای حذف نسخه پشتیبان برقرار نشد.",code:"BACKUP_DELETE_NETWORK_ERROR"},502,allow)}
+}
+
 if(u.pathname.startsWith("/api/ai/")||u.pathname.startsWith("/api/supabase/"))return out({error:"این API هنوز به Worker منتقل نشده است.",code:"API_NOT_MIGRATED"},501,allow);return out({error:"Not found"},404,allow)}};
