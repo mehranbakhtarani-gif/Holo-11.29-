@@ -402,7 +402,17 @@ async function runTests() {
     'offline cheque status changes must atomically persist cheque and ledger voucher'
   );
 
-  console.log('✓ 1. Static Offline-First & Zero-Direct-API audit passed for sync hooks, Workbox and atomic financial operations');
+  const depreciationIdx = accountingCtxSrc.indexOf('const postDepreciationVoucher = useCallback');
+  const depreciationEnd = accountingCtxSrc.indexOf('const addCostCenter = useCallback', depreciationIdx);
+  assert.ok(depreciationIdx !== -1 && depreciationEnd > depreciationIdx);
+  const depreciationBody = accountingCtxSrc.slice(depreciationIdx, depreciationEnd);
+  const offlineDepreciationBranch = depreciationBody.slice(depreciationBody.lastIndexOf('} else {'));
+  assert.match(
+    offlineDepreciationBranch,
+    /ثبت استهلاک در حالت آفلاین موقتاً متوقف است/,
+    'offline depreciation must fail closed until asset and voucher writes share one IndexedDB transaction'
+  );
+  console.log('✓ 1. Static audit passed for offline guards, atomic financial operations and depreciation fail-closed behavior');
 
   // =========================================================================
   // 2. ATOMIC COMMIT HAPPY PATH (Create Invoice: Inventory + Ledger + Treasury + Invoice)
