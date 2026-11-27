@@ -260,6 +260,127 @@ export async function createOperationalRestoreJournal(
   }
 }
 
+/**
+ * Apply the encrypted workspace staged in the durable restore journal.
+ * All operational entity stores and the journal phase advance share one IDB transaction.
+ * This is one half of the cross-database forward-recovery protocol; Document Vault
+ * must still be applied and verified before the restore can be marked committed.
+ */
+export async function applyOperationalRestoreJournalWorkspace(
+  restoreId: string
+): Promise<{ localRevision: number; recordCount: number }> {
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای اعمال بازیابی فضای کاری در دسترس نیست.');
+  const passphrase = requireBackupSessionPassphrase();
+  const db = await openOperationalDb();
+  try {
+    const journal = await new Promise<OperationalRestoreJournalRecord>((resolve, reject) => {
+      const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
+      const request = tx.objectStore(RESTORE_JOURNAL_STORE).get(restoreId);
+      request.onsuccess = () => {
+        const row = request.result;
+        if (!isValidOperationalRestoreJournalRecord(row) || !['commit_requested', 'failed_recovery_required'].includes(row.state)) {
+          reject(new Error('ژورنال در وضعیت مجاز برای اعمال فضای کاری نیست.'));
+          return;
+        }
+        resolve(row);
+      };
+      request.onerror = () => reject(request.error ?? new Error('خواندن ژورنال بازیابی ناموفق بود.'));
+    });
+    const verified = await decryptAndVerifyBackupEnvelope(journal.workspaceEnvelopeJson, passphrase);
+    if (!verified.ok || !verified.snapshotJson || verified.sha256 !== journal.workspacePlaintextSha256) {
+      throw new Error(verified.error || 'اصالت فضای کاری staging شده تأیید نشد.');
+    }
+    const workspace = parseOperationalWorkspaceSnapshot(verified.snapshotJson);
+    const recordCount = countOperationalWorkspaceRecords(workspace);
+    if (recordCount !== journal.workspaceRecordCount) {
+      throw new Error('تعداد رکوردهای فضای کاری با ژورنال بازیابی مطابقت ندارد.');
+    }
+
+    const stores = [
+      'meta', 'accounts', 'parties', 'products', 'vouchers', 'invoices', 'cheques',
+      'employees', 'assets', 'costCenters', 'currencies', 'exchangeRates',
+      'importDossiers', 'salesOrders', 'subcontractJobs', 'rbacOperators', 'auditLogs',
+      'warehouses', 'taxReports', 'localProfiles', 'syncOutbox', 'syncInbox',
+      RESTORE_JOURNAL_STORE,
+    ];
+    const committedAt = new Date().toISOString();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(stores, 'readwrite');
+      const metaStore = tx.objectStore('meta');
+      const journalStore = tx.objectStore(RESTORE_JOURNAL_STORE);
+      let nextRevision = 1;
+      let didQueueWrites = false;
+      const journalRequest = journalStore.get(restoreId);
+      const metaRequest = metaStore.get('workspace_meta');
+      const queueWrites = () => {
+        if (didQueueWrites || !journalRequest.readyState || !metaRequest.readyState) return;
+        didQueueWrites = true;
+        const current = journalRequest.result as OperationalRestoreJournalRecord | undefined;
+        if (!isValidOperationalRestoreJournalRecord(current) ||
+            !['commit_requested', 'failed_recovery_required'].includes(current.state) ||
+            current.packageDigest !== journal.packageDigest ||
+            current.workspacePlaintextSha256 !== journal.workspacePlaintextSha256) {
+          tx.abort();
+          return;
+        }
+        const currentMeta = metaRequest.result as { localRevision?: number } | undefined;
+        nextRevision = Math.max(1, Number(currentMeta?.localRevision || 0) + 1);
+        const putRows = (storeName: string, rows: Array<Record<string, unknown>>, keyField: string) => {
+          const store = tx.objectStore(storeName);
+          store.clear();
+          for (const row of rows) {
+            if (!row || typeof row !== 'object' || typeof row[keyField] !== 'string' || !String(row[keyField]).trim()) {
+              tx.abort();
+              return false;
+            }
+            store.put(row);
+          }
+          return true;
+        };
+        metaStore.put({ key: 'profile', value: workspace.profile, updatedAt: committedAt });
+        metaStore.put({ key: 'workspace_meta', localRevision: nextRevision, updatedAt: committedAt, schemaVersion: OP_DB_VERSION });
+        const valid =
+          putRows('accounts', workspace.accounts as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('parties', workspace.parties as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('products', workspace.products as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('vouchers', workspace.vouchers as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('invoices', workspace.invoices as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('cheques', workspace.cheques as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('employees', workspace.employees as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('assets', workspace.assets as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('costCenters', workspace.costCenters as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('currencies', workspace.currencies as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('exchangeRates', workspace.exchangeRates as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('importDossiers', workspace.importDossiers as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('salesOrders', workspace.salesOrders as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('subcontractJobs', workspace.subcontractJobs as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('rbacOperators', workspace.rbacOperators as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('auditLogs', workspace.auditLogs as unknown as Array<Record<string, unknown>>, 'id') &&
+          putRows('warehouses', workspace.warehouses ?? [], 'id') &&
+          putRows('taxReports', workspace.taxReports ?? [], 'id') &&
+          putRows('localProfiles', workspace.localProfiles ?? [], 'workspaceId') &&
+          putRows('syncOutbox', workspace.syncOutbox ?? [] as unknown as Array<Record<string, unknown>>, 'operationId') &&
+          putRows('syncInbox', workspace.syncInbox ?? [] as unknown as Array<Record<string, unknown>>, 'operationId');
+        if (!valid) {
+          tx.abort();
+          return;
+        }
+        journalStore.put({ ...current, state: 'workspace_applied', updatedAt: committedAt, lastRecoveryError: undefined });
+      };
+      journalRequest.onsuccess = queueWrites;
+      metaRequest.onsuccess = queueWrites;
+      tx.oncomplete = () => {
+        resetOperationalDiffCache();
+        resolve({ localRevision: nextRevision, recordCount });
+      };
+      tx.onerror = () => reject(tx.error ?? new Error('تراکنش اعمال فضای کاری ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش اعمال فضای کاری لغو شد.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
 /** Monotonic journal transition; terminal committed records cannot be reopened. */
 export async function transitionOperationalRestoreJournal(
   restoreId: string,
