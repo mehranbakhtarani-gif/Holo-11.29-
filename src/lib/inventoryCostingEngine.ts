@@ -1108,6 +1108,16 @@ export function planWarehouseTransfer(input: {
   }
 
   const remainingSourceLayers = cloneLayers(state.layers);
+  const layerQty = remainingSourceLayers.reduce((sum, layer) => {
+    if (!Number.isFinite(layer.remainingQty) || layer.remainingQty < 0 ||
+        !Number.isFinite(layer.totalCostIrr) || layer.totalCostIrr < 0) {
+      throw new Error('لایه‌های بهای موجودی برای انتقال معتبر نیستند.');
+    }
+    return sum + layer.remainingQty;
+  }, 0);
+  if (Math.abs(layerQty - state.stockQty) > 0.011) {
+    throw new Error('مجموع مقدار لایه‌های موجودی با موجودی ثبت‌شده انبار تطابق ندارد؛ انتقال متوقف شد.');
+  }
   const transferredLayers: InventoryCostLayer[] = [];
   let rem = qty;
   let transferredCostIrr = 0;
@@ -1132,6 +1142,10 @@ export function planWarehouseTransfer(input: {
       unitCostIrr: take > 0 ? Math.round(takeCost / take) : layer.unitCostIrr,
       totalCostIrr: takeCost,
     });
+  }
+
+  if (rem > 0.00005) {
+    throw new Error('لایه‌های بهای موجودی برای پوشش کامل مقدار انتقال کافی نیستند؛ انتقال متوقف شد.');
   }
 
   return {
