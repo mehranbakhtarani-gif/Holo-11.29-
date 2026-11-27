@@ -5,6 +5,7 @@
  * an idempotent multi-device sync outbox.
  */
 
+import type { FinancialCollectionKind } from './offlineFirstCore';
 import {
   Account,
   AuditActivityLog,
