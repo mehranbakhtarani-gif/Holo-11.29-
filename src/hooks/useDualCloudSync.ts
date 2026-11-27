@@ -485,6 +485,7 @@ export function useDualCloudSync() {
   // ---------------- FIREBASE 3-BACKUP ROLLING RETENTION + PUSH / PULL ----------------
   const refreshFirebaseBackups = useCallback(
     async (preferServer = false): Promise<CloudBackupMeta[]> => {
+      if (await isRestoreRecoveryBlockingSync()) return [];
       if (!user) {
         setFirebaseBackups([]);
         return [];
@@ -627,6 +628,7 @@ export function useDualCloudSync() {
           showToast('هنوز نسخه پشتیبان ابری روی Firebase ذخیره نشده است. ابتدا یک بار «ارسال به Firebase» را بزنید.');
           return false;
         }
+        if (await isRestoreRecoveryBlockingSync()) { showToast('بازیابی Firebase به‌دلیل فعال‌شدن فرایند بازیابی دیگر متوقف شد.'); return false; }
 
         suppressNextAutoSyncRef.current = true;
         const imported = importBackupJson(res.snapshotJson);
@@ -670,6 +672,7 @@ export function useDualCloudSync() {
 
   const removeFirebaseBackup = useCallback(
     async (backupId: string) => {
+      if (await isRestoreRecoveryBlockingSync()) { showToast('تغییر پشتیبان‌های ابری تا پایان بازیابی متوقف است.'); return; }
       if (!user) return;
       if (!isOnline) {
         showToast('برنامه در حالت آفلاین یا محلی است؛ حذف نسخه ابری Firebase نیازمند اتصال آنلاین است.');
@@ -1173,6 +1176,7 @@ export function useDualCloudSync() {
           if (!silent) showToast('هنوز نسخه‌ای روی Supabase برای این فضای کاری ذخیره نشده است.');
           return false;
         }
+        if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('بازیابی Supabase به‌دلیل فعال‌شدن فرایند بازیابی دیگر متوقف شد.'); return false; }
         const pullHash = fingerprintWorkspacePayload(res.snapshotJson);
         const rev = res.revision || 1;
         const inboxOpId = `sb_pull_${backupId || 'latest'}_r${rev}_${pullHash.slice(0, 12)}`;
@@ -1224,6 +1228,7 @@ export function useDualCloudSync() {
 
   const removeSupabaseBackup = useCallback(
     async (backupId: string) => {
+      if (await isRestoreRecoveryBlockingSync()) { showToast('تغییر پشتیبان‌های ابری تا پایان بازیابی متوقف است.'); return; }
       if ((!supabaseSessionToken && !supabaseCookieAuthenticated) || !isOnline) return;
       const res = await deleteSupabaseBackup(supabaseSessionToken, backupId);
       if (res.ok && res.backups) {
@@ -1525,6 +1530,7 @@ export function useDualCloudSync() {
   }, [isOnline, isSupabaseAuthenticated, user, refreshSupabaseStatus]);
 
   const flushOutboxNow = useCallback(async (): Promise<boolean> => {
+    if (await isRestoreRecoveryBlockingSync()) { showToast('ارسال صف همگام‌سازی تا پایان بازیابی متوقف است.'); return false; }
     if (!isOnline) {
       showToast('دستگاه آفلاین است؛ پس از اتصال به اینترنت صف به‌صورت خودکار ارسال می‌شود.');
       return false;
@@ -1565,6 +1571,7 @@ export function useDualCloudSync() {
       choice: SyncConflictResolutionChoice,
       rememberAsDefault: boolean
     ): Promise<boolean> => {
+      if (await isRestoreRecoveryBlockingSync()) { showToast('حل تعارض تا پایان بازیابی پشتیبان متوقف است.'); return false; }
       if (!pendingConflict) return false;
       setIsResolvingConflict(true);
       try {
@@ -1720,6 +1727,9 @@ export function useDualCloudSync() {
     }> => {
       const details: string[] = [];
       const warnings: string[] = [];
+      if (await isRestoreRecoveryBlockingSync()) {
+        return { ok: false, details, warnings: ['عملیات ابری تا پایان بازیابی پشتیبان متوقف است.'] };
+      }
 
       if (options.supabase) {
         if (!isOnline) {
