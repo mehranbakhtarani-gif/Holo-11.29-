@@ -213,11 +213,13 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
   if (!journal) return null;
   announceRestoreBarrier(true);
   if (journal.state === 'staging') {
-    // Commit intent was never written; by invariant neither live database was changed.
-    await discardStagedDocumentAttachmentBundle(journal.restoreId);
-    await discardStagingOperationalRestoreJournal(journal.restoreId);
-    announceRestoreBarrier(false);
-    return null;
+    // A second tab cannot distinguish a live preparation from a crashed one by
+    // journal state alone. Never auto-delete staging here: the owner tab may
+    // still be writing attachment rows. Keep the app fail-closed for explicit
+    // recovery rather than risk deleting another tab's active restore.
+    throw new Error(
+      'یک عملیات آماده‌سازی بازیابی ثبت شده است. برای جلوگیری از حذف staging فعال در تب دیگر، پاک‌سازی خودکار انجام نشد؛ ابتدا باید وضعیت تب آغازکننده مشخص شود.'
+    );
   }
   if (journal.state === 'workspace_applied') {
     const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
