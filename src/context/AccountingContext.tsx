@@ -1084,6 +1084,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const logout = useCallback(async () => {
     await signOutAccount();
+    lockBackupVault();
+    setBackupSessionUnlocked(false);
     showToast('از حساب ابری خارج شدید. محیط نمونه محلی فعال است.');
   }, [showToast]);
 
