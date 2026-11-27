@@ -408,7 +408,7 @@ export async function downloadEncryptedBackupFileToDevice(
   passphrase: string
 ): Promise<void> {
   const envelope = await encryptBackupEnvelope(payloadJson, passphrase);
-  const stamp = getTodayShamsi().replace(/\\//g, '-');
+  const stamp = getTodayShamsi().replace(/\//g, '-');
   const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
