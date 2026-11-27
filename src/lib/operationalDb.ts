@@ -722,6 +722,9 @@ function syncStoreContentsIncremental<T extends { id: string }>(
 export async function saveOperationalWorkspaceTx(
   data: OperationalWorkspaceData
 ): Promise<{ localRevision: number; committedAt: string } | null> {
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('ذخیره‌سازی فضای کاری تا پایان بازیابی پشتیبان متوقف است.');
+  }
   if (!isIndexedDbAvailable()) return null;
   const db = await openOperationalDb();
   const committedAt = new Date().toISOString();
@@ -754,6 +757,10 @@ export async function saveOperationalWorkspaceTx(
       let nextRevision = Math.max(1, Number(data.localRevision) || 1);
 
       revReq.onsuccess = () => {
+        if (isOperationalRestoreBarrierActive()) {
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+          return;
+        }
         const existing = revReq.result as { localRevision?: number } | undefined;
         if (existing && typeof existing.localRevision === 'number') {
           nextRevision = Math.max(nextRevision, existing.localRevision + 1);
