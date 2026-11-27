@@ -868,7 +868,12 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
     !Array.isArray(parsed.currencies) || !Array.isArray(parsed.exchangeRates) ||
     !Array.isArray(parsed.importDossiers) || !Array.isArray(parsed.salesOrders) ||
     !Array.isArray(parsed.subcontractJobs) || !Array.isArray(parsed.rbacOperators) ||
-    !Array.isArray(parsed.auditLogs)
+    !Array.isArray(parsed.auditLogs) ||
+    (parsed.warehouses !== undefined && !Array.isArray(parsed.warehouses)) ||
+    (parsed.taxReports !== undefined && !Array.isArray(parsed.taxReports)) ||
+    (parsed.localProfiles !== undefined && !Array.isArray(parsed.localProfiles)) ||
+    (parsed.syncOutbox !== undefined && !Array.isArray(parsed.syncOutbox)) ||
+    (parsed.syncInbox !== undefined && !Array.isArray(parsed.syncInbox))
   ) {
     throw new Error('ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار است.');
   }
