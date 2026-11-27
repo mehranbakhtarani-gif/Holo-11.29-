@@ -83,3 +83,21 @@ Phase 4 is complete only when all of the following are true:
 ## Explicitly not required for this phase
 
 Transient device-presence heartbeats, UI-only in-memory state, and cache/service-worker assets are not durable business workspace records. They must be documented and handled by their own lifecycle, but do not expand the encrypted business snapshot boundary.
+
+## Additional durable localStorage datasets found in the repository audit
+
+The following stores are separate from `WorkspaceExtensionsState` and must be included in the versioned snapshot contract because they contain durable operational decisions or business configuration:
+
+| Dataset | Storage key | Classification | Snapshot treatment |
+|---|---|---|---|
+| Custom voucher templates | `holoo_apex_voucher_templates_v1` | Accounting workflow configuration | Include custom templates; built-in system templates remain code-defined |
+| Voucher template usage map | `holoo_apex_voucher_template_usage_v1` | Usage telemetry / convenience | Optional; may be regenerated, but preserve if practical |
+| Bank reconciliation sessions and decisions | `holoo_apex_bank_recon_sessions_v1` | Financial operational work product | Include; validate account/date/session references |
+| Tracked warehouse transfers | `holoo_apex_warehouse_transfers_v1` | Inventory movement records, including in-transit state and transferred FIFO layers | Include as business records; reconcile against product and warehouse state |
+| Invoice print settings | `holoo_apex_invoice_settings_v1` | Company document configuration, may contain logo and bank/contact details | Include in encrypted snapshot; validate fields and cap embedded asset size |
+
+These are not transient UI caches. In particular, bank reconciliation decisions and tracked warehouse transfers must not be lost when restoring the accounting database. They currently persist independently in localStorage and are not part of the IndexedDB operational shadow.
+
+### Explicit exclusion class
+
+Pure presentation preferences (theme, audio feedback, dashboard layout, recent action search, and notification display preferences) are not part of the financial data integrity snapshot. They may be restored separately as user/device preferences and must never be treated as authoritative business records. Credentials, PIN material, device identity, and live device-presence heartbeats must not be copied into workspace backups; they require separate security lifecycle handling.
