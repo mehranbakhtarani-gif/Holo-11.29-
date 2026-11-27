@@ -3443,7 +3443,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 const returnsQuery = query(
                   collection(db, 'invoices'),
                   where('sourceInvoiceId', '==', payload.sourceInvoiceId),
-                  where('invoiceType', '==', 'sale_return')
+                  where('invoiceType', '==', 'sale_return'),
+                  where('ownerId', '==', ownerId)
                 );
                 const returnsSnap = await tx.get(returnsQuery);
                 const liveReturns: Invoice[] = returnsSnap.docs
@@ -3523,6 +3524,15 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                     updatedAt: serverTimestamp(),
                   });
                 }
+              }
+
+              if (isSaleReturn && transactionOriginalInvoice) {
+                const originalRevision = Number(transactionOriginalInvoice._version) || 1;
+                tx.update(doc(db, 'invoices', transactionOriginalInvoice.id), {
+                  _version: originalRevision + 1,
+                  updatedByDevice: deviceId.slice(0, 64),
+                  updatedAt: serverTimestamp(),
+                });
               }
 
               for (const prod of livePlan.updatedProducts) {
