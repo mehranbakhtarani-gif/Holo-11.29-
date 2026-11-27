@@ -70,6 +70,32 @@ const malformed = {
 assert.throws(() => validateBusinessLocalStateSnapshot(malformed));
 assert.deepEqual(values, before);
 
+// Numeric sync cursors must remain decimal integer strings; malformed metadata is rejected.
+assert.throws(() => validateBusinessLocalStateSnapshot({
+  ...snapshot,
+  stores: { ...snapshot.stores, holoo_apex_supabase_revision_v1: '12x' },
+}));
+assert.throws(() => validateBusinessLocalStateSnapshot({
+  ...snapshot,
+  stores: { ...snapshot.stores, holoo_apex_supabase_revision_v1: '1.5' },
+}));
+
+// A quota/write failure may interrupt localStorage replay. Re-running the same
+// validated snapshot must replace the allowlist and converge to the same state.
+const originalSetItem = storage.setItem;
+let writeCount = 0;
+storage.setItem = (key: string, value: string) => {
+  writeCount += 1;
+  if (writeCount === 2) throw new Error('simulated localStorage quota failure');
+  originalSetItem(key, value);
+};
+assert.throws(() => restoreBusinessLocalStateSnapshot(snapshot));
+storage.setItem = originalSetItem;
+restoreBusinessLocalStateSnapshot(snapshot);
+assert.equal(values.get('holoo_apex_voucher_templates_v1'), expectedTemplates);
+assert.equal(values.get('holoo_apex_warehouse_transfers_v1'), expectedTransfers);
+assert.equal(values.get('holoo_apex_supabase_revision_v1'), '12');
+
 // Unknown keys are rejected so credentials/device secrets cannot be smuggled into the snapshot.
 assert.throws(() => validateBusinessLocalStateSnapshot({
   ...snapshot,
