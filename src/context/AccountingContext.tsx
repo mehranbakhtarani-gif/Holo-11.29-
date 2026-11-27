@@ -4507,66 +4507,236 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const postDepreciationVoucher = useCallback(
     async (periodLabel: string) => {
-      const depreciationReferenceId = `depreciation:${profile.fiscalYear}:${periodLabel.trim()}`;
+      if (!assertPermission('canCreateVoucher') || !assertPermission('canFinalizeVoucher')) {
+        throw new Error('عدم دسترسی (RBAC) برای ثبت سند استهلاک.');
+      }
+      const fiscalYear = profile.fiscalYear;
+      const depreciationReferenceId = `depreciation:${fiscalYear}:${periodLabel.trim()}`;
       if (vouchers.some((v) => v.referenceId === depreciationReferenceId)) {
-        const message = `سند استهلاک دوره «${periodLabel}» سال ${profile.fiscalYear} قبلاً ثبت شده است.`;
+        const message = `سند استهلاک دوره «${periodLabel}» سال ${fiscalYear} قبلاً ثبت شده است.`;
         showToast(message, 'error');
         throw new Error(message);
       }
-      let totalDep = 0;
-      for (const a of assets) {
-        const dep = calculateMonthlyDepreciation(a);
-        if (dep > 0) {
-          totalDep += dep;
-          const nextAccum = a.accumulatedDepreciation + dep;
-          if (user) {
-            try {
-              await updateDoc(doc(db, 'assets', a.id), {
-                accumulatedDepreciation: nextAccum,
-                updatedAt: serverTimestamp(),
-              });
-            } catch (err) {
-              handleFirestoreError(err, OperationType.UPDATE, `assets/${a.id}`);
+
+      const date = getTodayShamsi();
+      const description = `سند اتوماتیک استهلاک دارایی‌های ثابت — ${periodLabel}`;
+      const buildLines = (totalDep: number): VoucherLine[] => [
+        {
+          accountCode: '80301',
+          accountTitle: 'هزینه استهلاک اموال و تجهیزات',
+          costCenterId: 'cc_hq',
+          description: `هزینه استهلاک ${periodLabel}`,
+          debit: totalDep,
+          credit: 0,
+        },
+        {
+          accountCode: '20201',
+          accountTitle: 'استهلاک انباشته تجهیزات اداری',
+          description: `افزایش استهلاک انباشته ${periodLabel}`,
+          debit: 0,
+          credit: totalDep,
+        },
+      ];
+
+      if (user) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          throw new Error('برای ثبت اتمیک استهلاک در فضای ابری، اتصال اینترنت لازم است. هیچ تغییری اعمال نشد.');
+        }
+        if (assets.length > 400) {
+          throw new Error('تعداد دارایی‌ها از ظرفیت امن تراکنش بیشتر است؛ این دوره باید از مسیر پردازش دسته‌ای سمت سرور ثبت شود.');
+        }
+        const voucherId = `depv_${sha256HexSync(depreciationReferenceId).slice(0, 32)}`;
+        const voucherRef = doc(db, 'vouchers', voucherId);
+        const counterRef = doc(db, 'counters', user.uid);
+        const assetRefs = assets.map((asset) => doc(db, 'assets', asset.id));
+        const sameYearMax = vouchers
+          .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fiscalYear)
+          .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
+
+        const committed = await runTransaction(db, async (tx) => {
+          const readRefs = [voucherRef, counterRef, ...assetRefs];
+          const snaps = await Promise.all(readRefs.map((ref) => tx.get(ref)));
+          const voucherSnap = snaps[0];
+          const counterSnap = snaps[1];
+          const liveAssetSnaps = snaps.slice(2);
+          if (voucherSnap.exists()) {
+            throw new Error(`سند استهلاک دوره «${periodLabel}» قبلاً در فضای ابری ثبت شده است.`);
+          }
+
+          let totalDep = 0;
+          const assetUpdates: { id: string; accumulatedDepreciation: number }[] = [];
+          liveAssetSnaps.forEach((assetSnap, index) => {
+            if (!assetSnap.exists()) {
+              throw new Error(`دارایی ${assets[index].id} در فضای ابری پیدا نشد؛ ثبت استهلاک متوقف شد.`);
             }
+            const live = assetSnap.data();
+            const liveAsset: FixedAsset = {
+              ...assets[index],
+              purchaseCost: Number(live.purchaseCost),
+              salvageValue: Number(live.salvageValue),
+              usefulLifeYears: Number(live.usefulLifeYears),
+              accumulatedDepreciation: Number(live.accumulatedDepreciation) || 0,
+              purchaseDate: String(live.purchaseDate || assets[index].purchaseDate),
+            };
+            const dep = calculateMonthlyDepreciation(liveAsset);
+            if (!Number.isFinite(dep) || dep < 0) {
+              throw new Error(`محاسبه استهلاک دارایی ${liveAsset.assetCode} نامعتبر است.`);
+            }
+            if (dep > 0) {
+              const nextAccum = liveAsset.accumulatedDepreciation + dep;
+              if (nextAccum > liveAsset.purchaseCost - liveAsset.salvageValue) {
+                throw new Error(`استهلاک انباشته دارایی ${liveAsset.assetCode} از مبلغ استهلاک‌پذیر بیشتر می‌شود.`);
+              }
+              totalDep += dep;
+              assetUpdates.push({ id: liveAsset.id, accumulatedDepreciation: nextAccum });
+            }
+          });
+
+          if (totalDep <= 0) return null;
+          const lines = buildLines(totalDep);
+          const validation = validateVoucherPayload({
+            payload: {
+              date,
+              description,
+              voucherType: 'depreciation',
+              referenceId: depreciationReferenceId,
+              lines,
+            },
+            accounts,
+            parties,
+            existingVouchers: vouchers,
+            closedFiscalYears: profile.closedFiscalYears,
+          });
+          if (!validation.valid) {
+            throw new Error(validation.errors[0] || 'سند استهلاک نامعتبر است.');
+          }
+
+          const currentMax = counterSnap.exists()
+            ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, sameYearMax)
+            : sameYearMax;
+          const voucherNumber = currentMax + 1;
+          const voucherBase: Voucher = {
+            id: voucherId,
+            ownerId,
+            voucherNumber,
+            date,
+            fiscalYear: validation.fiscalYear || fiscalYear,
+            description,
+            voucherType: 'depreciation',
+            status: 'permanent',
+            totalDebit: validation.totalDebit,
+            totalCredit: validation.totalCredit,
+            referenceId: depreciationReferenceId,
+            lines: validation.sanitizedLines.slice(0, 100),
+            _version: 1,
+            updatedByDevice: deviceId,
+          };
+          const sealedVoucher = {
+            ...voucherBase,
+            integrityHash: computeVoucherIntegrityHash(voucherBase),
+          };
+
+          assetUpdates.forEach((assetUpdate) => {
+            tx.update(doc(db, 'assets', assetUpdate.id), {
+              accumulatedDepreciation: assetUpdate.accumulatedDepreciation,
+              updatedAt: serverTimestamp(),
+            });
+          });
+          tx.set(voucherRef, {
+            ownerId,
+            voucherNumber,
+            date,
+            fiscalYear: voucherBase.fiscalYear,
+            description,
+            voucherType: 'depreciation',
+            status: 'permanent',
+            totalDebit: validation.totalDebit,
+            totalCredit: validation.totalCredit,
+            referenceId: depreciationReferenceId,
+            integrityHash: sealedVoucher.integrityHash,
+            lines: sealedVoucher.lines,
+            _version: 1,
+            updatedByDevice: deviceId.slice(0, 64),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          if (counterSnap.exists()) {
+            tx.update(counterRef, {
+              lastVoucherNumber: voucherNumber,
+              updatedByDevice: deviceId.slice(0, 64),
+              updatedAt: serverTimestamp(),
+            });
           } else {
-            setAssets((prev) =>
-              prev.map((x) =>
-                x.id === a.id ? { ...x, accumulatedDepreciation: nextAccum } : x
-              )
-            );
+            tx.set(counterRef, {
+              ownerId: user.uid,
+              lastVoucherNumber: voucherNumber,
+              lastInvoiceSeq: 102,
+              updatedByDevice: deviceId.slice(0, 64),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          return { voucher: sealedVoucher, assetUpdates };
+        });
+
+        if (!committed) {
+          showToast('دارایی قابل استهلاک برای این دوره وجود ندارد.');
+          return;
+        }
+        const updated = new Map(committed.assetUpdates.map((item) => [item.id, item.accumulatedDepreciation]));
+        setAssets((prev) =>
+          prev.map((asset) =>
+            updated.has(asset.id)
+              ? { ...asset, accumulatedDepreciation: updated.get(asset.id)! }
+              : asset
+          )
+        );
+        emitVoucherNotificationEvent({
+          type: 'created_permanent',
+          voucher: committed.voucher,
+          unit: profile.currencyUnit,
+        });
+      } else {
+        const assetUpdates: { id: string; accumulatedDepreciation: number }[] = [];
+        let totalDep = 0;
+        for (const asset of assets) {
+          const dep = calculateMonthlyDepreciation(asset);
+          if (!Number.isFinite(dep) || dep < 0) {
+            throw new Error(`محاسبه استهلاک دارایی ${asset.assetCode} نامعتبر است.`);
+          }
+          if (dep > 0) {
+            const nextAccum = asset.accumulatedDepreciation + dep;
+            if (nextAccum > asset.purchaseCost - asset.salvageValue) {
+              throw new Error(`استهلاک انباشته دارایی ${asset.assetCode} از مبلغ استهلاک‌پذیر بیشتر می‌شود.`);
+            }
+            totalDep += dep;
+            assetUpdates.push({ id: asset.id, accumulatedDepreciation: nextAccum });
           }
         }
+        if (totalDep <= 0) {
+          showToast('دارایی قابل استهلاک برای این دوره وجود ندارد.');
+          return;
+        }
+        await createVoucher({
+          date,
+          description,
+          voucherType: 'depreciation',
+          status: 'permanent',
+          referenceId: depreciationReferenceId,
+          lines: buildLines(totalDep),
+        });
+        const updated = new Map(assetUpdates.map((item) => [item.id, item.accumulatedDepreciation]));
+        setAssets((prev) =>
+          prev.map((asset) =>
+            updated.has(asset.id)
+              ? { ...asset, accumulatedDepreciation: updated.get(asset.id)! }
+              : asset
+          )
+        );
       }
-      if (totalDep <= 0) {
-        showToast('دارایی قابل استهلاک برای این دوره وجود ندارد.');
-        return;
-      }
-      await createVoucher({
-        date: getTodayShamsi(),
-        description: `سند اتوماتیک استهلاک دارایی‌های ثابت — ${periodLabel}`,
-        voucherType: 'depreciation',
-        status: 'permanent',
-        referenceId: depreciationReferenceId,
-        lines: [
-          {
-            accountCode: '80301',
-            accountTitle: 'هزینه استهلاک اموال و تجهیزات',
-            costCenterId: 'cc_hq',
-            description: `هزینه استهلاک ${periodLabel}`,
-            debit: totalDep,
-            credit: 0,
-          },
-          {
-            accountCode: '20201',
-            accountTitle: 'استهلاک انباشته تجهیزات اداری',
-            description: `افزایش استهلاک انباشته ${periodLabel}`,
-            debit: 0,
-            credit: totalDep,
-          },
-        ],
-      });
+      showToast(`سند استهلاک دوره «${periodLabel}» با ثبت اتمیک دارایی‌ها و سند حسابداری صادر شد.`, 'success');
     },
-    [assets, user, vouchers, profile.fiscalYear, createVoucher, showToast]
+    [assets, vouchers, accounts, parties, profile.fiscalYear, profile.closedFiscalYears, profile.currencyUnit, ownerId, user, deviceId, createVoucher, showToast, assertPermission]
   );
 
   const addCostCenter = useCallback(
