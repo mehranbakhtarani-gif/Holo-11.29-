@@ -2604,39 +2604,34 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- CHEQUES & TREASURY ----------------
   const addCheque = useCallback(
     async (payload: Omit<Cheque, 'id' | 'ownerId'>, skipVoucher = false) => {
-      if (!assertPermission('canManageTreasury', skipVoucher)) return;
+      if (!assertPermission('canManageTreasury', skipVoucher)) {
+        throw new Error('عدم دسترسی (RBAC) برای ثبت چک.');
+      }
       const id = generateSafeId('chq');
       const full: Cheque = { ...payload, id, ownerId };
+      const chequeData = {
+        ownerId,
+        sayadiId: full.sayadiId.slice(0, 32),
+        serial: full.serial.slice(0, 48),
+        direction: full.direction,
+        partyId: full.partyId.slice(0, 128),
+        partyName: full.partyName.slice(0, 160),
+        bankName: full.bankName.slice(0, 100),
+        ...(full.branch ? { branch: full.branch.slice(0, 100) } : {}),
+        amount: full.amount,
+        issueDate: full.issueDate.slice(0, 20),
+        dueDate: full.dueDate.slice(0, 20),
+        status: full.status,
+        ...(full.notes ? { notes: full.notes.slice(0, 300) } : {}),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
 
-      if (user) {
-        try {
-          await setDoc(doc(db, 'cheques', id), {
-            ownerId,
-            sayadiId: full.sayadiId.slice(0, 32),
-            serial: full.serial.slice(0, 48),
-            direction: full.direction,
-            partyId: full.partyId.slice(0, 128),
-            partyName: full.partyName.slice(0, 160),
-            bankName: full.bankName.slice(0, 100),
-            ...(full.branch ? { branch: full.branch.slice(0, 100) } : {}),
-            amount: full.amount,
-            issueDate: full.issueDate.slice(0, 20),
-            dueDate: full.dueDate.slice(0, 20),
-            status: full.status,
-            ...(full.notes ? { notes: full.notes.slice(0, 300) } : {}),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.CREATE, `cheques/${id}`);
-          throw err;
-        }
-      } else {
-        setCheques((prev) => [full, ...prev]);
-      }
-
+      let voucherLines: VoucherLine[] = [];
+      let voucherValidation: ReturnType<typeof validateVoucherPayload> | null = null;
+      const voucherDescription = `ثبت چک صیادی ${payload.sayadiId} — ${payload.partyName}`;
       if (!skipVoucher) {
-        const lines: VoucherLine[] =
+        voucherLines =
           payload.direction === 'receivable'
             ? [
                 {
@@ -2678,19 +2673,160 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                   credit: payload.amount,
                 },
               ];
-
-        await createVoucher({
-          date: payload.issueDate,
-          description: `ثبت چک صیادی ${payload.sayadiId} — ${payload.partyName}`,
-          voucherType: 'treasury',
-          status: 'permanent',
-          lines,
-          referenceId: id,
-          internalSystemCall: true,
+        voucherValidation = validateVoucherPayload({
+          payload: {
+            date: payload.issueDate,
+            description: voucherDescription,
+            voucherType: 'treasury',
+            referenceId: id,
+            lines: voucherLines,
+          },
+          accounts,
+          parties,
+          existingVouchers: vouchers,
+          closedFiscalYears: profile.closedFiscalYears,
         });
+        if (!voucherValidation.valid) {
+          throw new Error(voucherValidation.errors[0] || 'سند حسابداری چک معتبر نیست.');
+        }
       }
+
+      if (user && !skipVoucher && (typeof navigator === 'undefined' || navigator.onLine)) {
+        const chequeRef = doc(db, 'cheques', id);
+        const voucherId = `chqv_${sha256HexSync(id).slice(0, 32)}`;
+        const voucherRef = doc(db, 'vouchers', voucherId);
+        const counterRef = doc(db, 'counters', user.uid);
+        const fiscalYear = voucherValidation!.fiscalYear || extractFiscalYearFromDate(payload.issueDate) || profile.fiscalYear;
+        const sameYearMax = vouchers
+          .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fiscalYear)
+          .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
+
+        await runTransaction(db, async (tx) => {
+          const [chequeSnap, voucherSnap, counterSnap] = await Promise.all([
+            tx.get(chequeRef),
+            tx.get(voucherRef),
+            tx.get(counterRef),
+          ]);
+          if (chequeSnap.exists() || voucherSnap.exists()) {
+            throw new Error('این عملیات ثبت چک قبلاً انجام شده یا شناسه آن تکراری است.');
+          }
+          const currentMax = counterSnap.exists()
+            ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, sameYearMax)
+            : sameYearMax;
+          const voucherNumber = currentMax + 1;
+          const voucherBase: Voucher = {
+            id: voucherId,
+            ownerId,
+            voucherNumber,
+            date: payload.issueDate.slice(0, 20),
+            fiscalYear,
+            description: voucherDescription.trim().slice(0, 300),
+            voucherType: 'treasury',
+            status: 'permanent',
+            totalDebit: voucherValidation!.totalDebit,
+            totalCredit: voucherValidation!.totalCredit,
+            referenceId: id,
+            lines: voucherValidation!.sanitizedLines.slice(0, 100),
+            _version: 1,
+            updatedByDevice: deviceId,
+          };
+          const sealedVoucher = {
+            ...voucherBase,
+            integrityHash: computeVoucherIntegrityHash(voucherBase),
+          };
+          tx.set(chequeRef, chequeData);
+          tx.set(voucherRef, {
+            ownerId,
+            voucherNumber,
+            date: sealedVoucher.date,
+            fiscalYear,
+            description: sealedVoucher.description,
+            voucherType: 'treasury',
+            status: 'permanent',
+            totalDebit: sealedVoucher.totalDebit,
+            totalCredit: sealedVoucher.totalCredit,
+            referenceId: id,
+            integrityHash: sealedVoucher.integrityHash,
+            lines: sealedVoucher.lines,
+            _version: 1,
+            updatedByDevice: deviceId.slice(0, 64),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          if (counterSnap.exists()) {
+            tx.update(counterRef, {
+              lastVoucherNumber: voucherNumber,
+              updatedByDevice: deviceId.slice(0, 64),
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            tx.set(counterRef, {
+              ownerId: user.uid,
+              lastVoucherNumber: voucherNumber,
+              lastInvoiceSeq: 102,
+              updatedByDevice: deviceId.slice(0, 64),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        });
+        emitVoucherNotificationEvent({
+          type: 'created_permanent',
+          voucher: {
+            id: voucherId,
+            ownerId,
+            voucherNumber: 0,
+            date: payload.issueDate,
+            description: voucherDescription,
+            voucherType: 'treasury',
+            status: 'permanent',
+            totalDebit: voucherValidation!.totalDebit,
+            totalCredit: voucherValidation!.totalCredit,
+            lines: voucherValidation!.sanitizedLines,
+            referenceId: id,
+          },
+          unit: profile.currencyUnit,
+        });
+      } else {
+        if (user) {
+          try {
+            await setDoc(doc(db, 'cheques', id), chequeData);
+          } catch (err) {
+            handleFirestoreError(err, OperationType.CREATE, `cheques/${id}`);
+            throw err;
+          }
+        } else {
+          setCheques((prev) => [full, ...prev]);
+        }
+        if (!skipVoucher) {
+          try {
+            await createVoucher({
+              date: payload.issueDate,
+              description: voucherDescription,
+              voucherType: 'treasury',
+              status: 'permanent',
+              lines: voucherLines,
+              referenceId: id,
+              internalSystemCall: true,
+            });
+          } catch (err) {
+            if (user) {
+              try {
+                await deleteDoc(doc(db, 'cheques', id));
+              } catch {
+                // Preserve the original voucher error; a failed compensation is surfaced in logs.
+                console.error('[Treasury] Failed to compensate cheque after voucher creation failure.', id);
+              }
+            } else {
+              setCheques((prev) => prev.filter((cheque) => cheque.id !== id));
+            }
+            throw err;
+          }
+        }
+      }
+      showToast(`چک صیادی ${payload.sayadiId} ثبت شد.`);
     },
-    [ownerId, user, createVoucher, assertPermission]
+    [ownerId, user, deviceId, accounts, parties, vouchers, profile.closedFiscalYears, profile.fiscalYear, profile.currencyUnit, createVoucher, assertPermission]
   );
 
   const updateCheque = useCallback(
