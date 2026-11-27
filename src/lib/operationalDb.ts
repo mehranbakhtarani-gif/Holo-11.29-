@@ -121,6 +121,7 @@ export interface EncryptedOperationalWorkspaceMeta {
   workspaceId: string;
   schemaVersion: number;
   recordCount: number;
+  sourceRevision: number;
   plaintextSha256: string;
   preparedAt: string;
   migrationState: 'prepared';
