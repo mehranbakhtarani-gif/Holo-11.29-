@@ -659,6 +659,24 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
   }
 }
 
+export function countOperationalWorkspaceRecords(workspace: OperationalWorkspaceData): number {
+  const collections = [
+    workspace.accounts, workspace.parties, workspace.products, workspace.vouchers,
+    workspace.invoices, workspace.cheques, workspace.employees, workspace.assets,
+    workspace.costCenters, workspace.currencies, workspace.exchangeRates,
+    workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
+    workspace.rbacOperators, workspace.auditLogs,
+  ];
+  if (!collections.every(Array.isArray)) {
+    throw new Error('ساختار مجموعه رکوردهای فضای کاری معتبر نیست.');
+  }
+  const total = collections.reduce((sum, rows) => sum + rows.length, 0);
+  if (!Number.isSafeInteger(total) || total < 0) {
+    throw new Error('تعداد رکوردهای فضای کاری خارج از محدوده مجاز است.');
+  }
+  return total;
+}
+
 export function parseOperationalWorkspaceSnapshot(snapshotJson: string): OperationalWorkspaceData {
   let parsed: Partial<OperationalWorkspaceData>;
   try {
@@ -714,13 +732,7 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
     throw new Error(verification.error || 'اعتبارسنجی نسخه رمزگذاری‌شده فضای کاری ناموفق بود.');
   }
 
-  const recordCount = [
-    workspace.accounts, workspace.parties, workspace.products, workspace.vouchers,
-    workspace.invoices, workspace.cheques, workspace.employees, workspace.assets,
-    workspace.costCenters, workspace.currencies, workspace.exchangeRates,
-    workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
-    workspace.rbacOperators, workspace.auditLogs,
-  ].reduce((sum, rows) => sum + rows.length, 0);
+  const recordCount = countOperationalWorkspaceRecords(workspace);
   const record: EncryptedOperationalWorkspaceRecord = {
     workspaceId: cleanWorkspaceId,
     envelopeJson: JSON.stringify(envelope),
@@ -853,13 +865,7 @@ export async function loadPreparedEncryptedOperationalWorkspace(
     throw new Error('اثر انگشت نسخه عملیاتی رمزگذاری‌شده با فراداده آن مطابقت ندارد.');
   }
   const workspace = parseOperationalWorkspaceSnapshot(result.snapshotJson);
-  const actualRecordCount = [
-    workspace.accounts, workspace.parties, workspace.products, workspace.vouchers,
-    workspace.invoices, workspace.cheques, workspace.employees, workspace.assets,
-    workspace.costCenters, workspace.currencies, workspace.exchangeRates,
-    workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
-    workspace.rbacOperators, workspace.auditLogs,
-  ].reduce((total, rows) => total + rows.length, 0);
+  const actualRecordCount = countOperationalWorkspaceRecords(workspace);
   if (actualRecordCount !== record.recordCount) {
     throw new Error('تعداد رکوردهای فضای کاری با فراداده نسخه رمزگذاری‌شده مطابقت ندارد.');
   }
