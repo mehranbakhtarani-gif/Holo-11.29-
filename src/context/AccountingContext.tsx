@@ -1818,7 +1818,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const permanentVoucher = {
         ...target,
         status: 'permanent' as const,
-        integrityHash: computeVoucherIntegrityHash({ ...target, status: 'permanent' as const }),
+        integrityHash: computeVoucherIntegrityHash(target),
       };
       if (user) {
         try {
