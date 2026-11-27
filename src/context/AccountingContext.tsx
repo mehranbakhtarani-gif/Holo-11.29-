@@ -155,7 +155,7 @@ interface AccountingContextValue {
   unlockBackupSession: (passphrase: string) => boolean;
   lockBackupSession: () => void;
   triggerLocalBackupNow: (alsoDownload?: boolean) => Promise<void>;
-  restoreFromLocalSnapshot: (snapshotId: string) => Promise<boolean>;
+  restoreFromLocalSnapshot: (snapshotId: string, allowLegacyPlaintext?: boolean) => Promise<boolean>;
   removeLocalSnapshot: (snapshotId: string) => Promise<void>;
   profile: CompanyProfile;
   accounts: Account[];
@@ -7158,8 +7158,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
 
   const restoreFromLocalSnapshot = useCallback(
-    async (snapshotId: string): Promise<boolean> => {
-      const payload = await loadLocalSnapshotPayload(snapshotId);
+    async (snapshotId: string, allowLegacyPlaintext = false): Promise<boolean> => {
+      const payload = await loadLocalSnapshotPayload(snapshotId, allowLegacyPlaintext);
       if (!payload) {
         showToast('فایل پشتیبان انتخاب‌شده در حافظه دستگاه یافت نشد.');
         return false;
