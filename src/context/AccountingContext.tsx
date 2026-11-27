@@ -2470,14 +2470,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         try {
             await runTransaction(db, async (tx) => {
               const counterRef = doc(db, 'counters', user.uid);
-              const invoiceRef = doc(db, 'invoices', id);
-              const [counterSnap, invoiceSnap] = await Promise.all([
-                tx.get(counterRef),
-                tx.get(invoiceRef),
-              ]);
-              if (invoiceSnap.exists()) {
-                throw new Error(`شماره فاکتور «${payload.invoiceNumber}» قبلاً در فضای ابری ثبت شده است؛ ثبت تکراری متوقف شد.`);
-              }
+              const counterSnap = await tx.get(counterRef);
               const currentMax = counterSnap.exists()
                 ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
                 : localMaxVoucherNum;
@@ -3428,7 +3421,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           try {
             committedInvoice = await runTransaction(db, async (tx) => {
               const counterRef = doc(db, 'counters', user.uid);
-              const counterSnap = await tx.get(counterRef);
+              const invoiceRef = doc(db, 'invoices', id);
+              const [counterSnap, invoiceSnap] = await Promise.all([
+                tx.get(counterRef),
+                tx.get(invoiceRef),
+              ]);
+              if (invoiceSnap.exists()) {
+                throw new Error(`شماره فاکتور «${payload.invoiceNumber}» قبلاً در فضای ابری ثبت شده است؛ ثبت تکراری متوقف شد.`);
+              }
               const currentMax = counterSnap.exists()
                 ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
                 : localMaxVoucherNum;
