@@ -23,6 +23,7 @@ import {
 } from '../src/lib/bankReconciliationEngine';
 import {
   canRoleAccessSensitivity,
+  listDocumentAttachments,
   retrieveVerifiedAttachment,
   saveDocumentAttachment,
 } from '../src/lib/documentVault';
@@ -1232,6 +1233,19 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
   const denied = await retrieveVerifiedAttachment(saved.meta.id, 'warehouse_keeper');
   assert.equal(denied.ok, false);
 
+  const listed = await listDocumentAttachments({ entityType: 'contract', entityId: 'cnt_405' });
+  assert.equal(listed.length, 1);
+  assert.equal('dataUrl' in listed[0], false, 'Metadata listing must never expose plaintext attachment bytes');
+
+  lockBackupSession();
+  const locked = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
+  assert.equal(locked.ok, false, 'Encrypted attachment retrieval must require an unlocked vault');
+
+  unlockBackupSession('incorrect-document-vault-passphrase');
+  const wrongPassphrase = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
+  assert.equal(wrongPassphrase.ok, false, 'Wrong passphrase must not decrypt an attachment');
+
+  unlockBackupSession('document-vault-test-passphrase');
   const allowed = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
   assert.equal(allowed.ok, true);
   if (allowed.ok) {
