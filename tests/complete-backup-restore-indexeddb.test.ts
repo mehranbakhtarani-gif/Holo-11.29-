@@ -4,6 +4,14 @@ import { webcrypto } from 'node:crypto';
 
 const indexedDb = globalThis.indexedDB;
 Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: {
+    locks: {
+      request: async (_name: string, _options: { mode: 'exclusive' }, callback: () => Promise<unknown>) => callback(),
+    },
+  },
+});
 Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
@@ -17,13 +25,11 @@ Object.defineProperty(globalThis, 'window', {
 
 const { unlockBackupSession, lockBackupSession } = await import('../src/lib/backupSession');
 const { encryptBackupEnvelope } = await import('../src/lib/offlineFirstCore');
-const { saveDocumentAttachment, exportEncryptedDocumentAttachmentBundle, setDocumentVaultRestoreBarrier } = await import('../src/lib/documentVault');
+const { saveDocumentAttachment, exportEncryptedDocumentAttachmentBundle } = await import('../src/lib/documentVault');
 const {
   createOperationalRestoreJournal,
-  discardStagingOperationalRestoreJournal,
   getActiveOperationalRestoreJournal,
   isOperationalRestoreBarrierActive,
-  setOperationalRestoreBarrier,
   saveOperationalWorkspaceTx,
 } = await import('../src/lib/operationalDb');
 const { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } = await import('../src/lib/completeBackupRestore');
@@ -52,18 +58,13 @@ await createOperationalRestoreJournal({
 });
 assert.equal((await getActiveOperationalRestoreJournal())?.restoreId, preparationId,
   'startup must discover a preparation journal before attachment staging');
-await assert.rejects(
-  resumePendingCompleteBackupRestore(),
-  /پاک‌سازی خودکار انجام نشد/,
-  'a second tab must not auto-delete a preparation journal that may belong to a live tab'
-);
-assert.equal((await getActiveOperationalRestoreJournal())?.restoreId, preparationId,
-  'the active preparation journal must remain durable after a blocked recovery attempt');
-setOperationalRestoreBarrier(false);
-setDocumentVaultRestoreBarrier(false);
-await discardStagingOperationalRestoreJournal(preparationId);
+const recoveredPreparation = await resumePendingCompleteBackupRestore();
+assert.equal(recoveredPreparation, null,
+  'after acquiring the exclusive restore lock, a pre-commit staging journal is safe to discard');
 assert.equal(await getActiveOperationalRestoreJournal(), null,
-  'aborted preparation must be safely removable before commit intent');
+  'a crashed pre-commit preparation must be cleaned before normal startup resumes');
+assert.equal(isOperationalRestoreBarrierActive(), false,
+  'successful pre-commit cleanup must release the local restore barrier');
 
 async function countLiveAttachments(): Promise<number> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
