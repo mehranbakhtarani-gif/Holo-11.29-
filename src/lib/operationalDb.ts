@@ -1267,7 +1267,13 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
     throw new Error('محتوای فضای کاری رمزگذاری‌شده JSON معتبر نیست.');
   }
   if (
-    !parsed.profile || !Array.isArray(parsed.accounts) || parsed.accounts.length === 0 ||
+    !parsed.profile || typeof parsed.profile !== 'object' ||
+    typeof parsed.profile.uid !== 'string' || !parsed.profile.uid.trim() ||
+    typeof parsed.profile.companyName !== 'string' || !parsed.profile.companyName.trim() ||
+    typeof parsed.profile.fiscalYear !== 'string' || !parsed.profile.fiscalYear.trim() ||
+    !Array.isArray(parsed.accounts) || parsed.accounts.length === 0 ||
+    !parsed.accounts.every((account) => !!account && typeof account.id === 'string' &&
+      typeof account.code === 'string' && typeof account.title === 'string') ||
     !Array.isArray(parsed.parties) || !Array.isArray(parsed.products) ||
     !Array.isArray(parsed.vouchers) || !Array.isArray(parsed.invoices) ||
     !Array.isArray(parsed.cheques) || !Array.isArray(parsed.employees) ||
