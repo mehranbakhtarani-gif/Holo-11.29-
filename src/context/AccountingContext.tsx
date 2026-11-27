@@ -2740,7 +2740,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             date: getTodayShamsi(),
             description: plan.description,
             voucherType: 'treasury',
-            status: 'permanent',
             lines: plan.lines,
             referenceId: transitionReferenceId,
             allowDuplicate: true,
