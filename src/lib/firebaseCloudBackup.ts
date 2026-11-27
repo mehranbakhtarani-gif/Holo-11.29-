@@ -252,7 +252,9 @@ export async function saveAndPruneFirebaseBackup(params: {
       backups: [],
       prunedCount: 0,
       savedAtShamsi,
-      error: 'خطا در ذخیره نسخه پشتیبان روی Firebase Firestore.',
+      error: err instanceof Error && err.message.includes('قفل پشتیبان')
+        ? err.message
+        : 'خطا در ذخیره نسخه پشتیبان روی Firebase Firestore.',
     };
   }
 }
