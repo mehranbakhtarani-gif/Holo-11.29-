@@ -374,14 +374,17 @@ export async function listLocalSnapshots(): Promise<LocalBackupSnapshotMeta[]> {
   }
 }
 
-export async function loadLocalSnapshotPayload(snapshotId: string): Promise<string | null> {
+export async function loadLocalSnapshotPayload(
+  snapshotId: string,
+  allowLegacyPlaintext = false
+): Promise<string | null> {
   const syncSnap = readSyncCloseSnapshot();
   if (syncSnap && syncSnap.id === snapshotId) {
     if (syncSnap.encryptedEnvelope) {
       const result = await decryptAndVerifyBackupEnvelope(syncSnap.encryptedEnvelope, requireBackupSessionPassphrase());
       return result.ok ? result.snapshotJson ?? null : null;
     }
-    return syncSnap.payloadJson ?? null;
+    return allowLegacyPlaintext ? syncSnap.payloadJson ?? null : null;
   }
   try {
     const db = await openBackupDb();
@@ -397,7 +400,7 @@ export async function loadLocalSnapshotPayload(snapshotId: string): Promise<stri
       const result = await decryptAndVerifyBackupEnvelope(found.encryptedEnvelope, requireBackupSessionPassphrase());
       return result.ok ? result.snapshotJson ?? null : null;
     }
-    return found.payloadJson ?? null;
+    return allowLegacyPlaintext ? found.payloadJson ?? null : null;
   } catch {
     return null;
   }
