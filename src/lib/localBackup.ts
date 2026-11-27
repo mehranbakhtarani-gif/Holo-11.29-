@@ -262,14 +262,38 @@ export function saveSyncCloseSnapshot(_params: {
   return null;
 }
 
+/**
+ * Returns only authenticated-format encrypted close snapshots to normal hydration paths.
+ * Legacy plaintext records are deliberately excluded from automatic restore.
+ */
 export function readSyncCloseSnapshot(): LocalBackupSnapshot | null {
-  // Legacy plaintext close snapshots remain detectable for explicit migration only.
   try {
     const raw = localStorage.getItem(LAST_CLOSE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as LocalBackupSnapshot;
-    return parsed && (typeof parsed.payloadJson === 'string' || typeof parsed.encryptedEnvelope === 'string') ? parsed : null;
-  } catch { return null; }
+    return parsed && typeof parsed.encryptedEnvelope === 'string' && parsed.encryptedEnvelope.length > 0
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Exposes a legacy plaintext close snapshot only for an explicit, user-confirmed
+ * migration workflow. Never call this from application boot or automatic hydration.
+ */
+export function readLegacyPlaintextSyncCloseSnapshot(): LocalBackupSnapshot | null {
+  try {
+    const raw = localStorage.getItem(LAST_CLOSE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LocalBackupSnapshot;
+    return parsed && typeof parsed.payloadJson === 'string' && parsed.payloadJson.length > 0
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function saveLocalSnapshot(params: {
