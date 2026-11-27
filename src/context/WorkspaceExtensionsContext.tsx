@@ -1,4 +1,5 @@
 import React, {
+import { mergeRemoteArray } from '../lib/workspaceExtensionsMerge';
   createContext,
   useCallback,
   useContext,
@@ -333,10 +334,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
               data.productMetaMap && typeof data.productMetaMap === 'object'
                 ? data.productMetaMap
                 : prev.productMetaMap,
-            favoriteMenus:
-              Array.isArray(data.favoriteMenus) && data.favoriteMenus.length > 0
-                ? data.favoriteMenus
-                : prev.favoriteMenus,
+            favoriteMenus: mergeRemoteArray(data.favoriteMenus, prev.favoriteMenus),
             pettyCashCeilingIrr:
               typeof data.pettyCashCeilingIrr === 'number'
                 ? data.pettyCashCeilingIrr
@@ -344,10 +342,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             pettyCashItems: Array.isArray(data.pettyCashItems)
               ? data.pettyCashItems
               : prev.pettyCashItems,
-            recurringTemplates:
-              Array.isArray(data.recurringTemplates) && data.recurringTemplates.length > 0
-                ? data.recurringTemplates
-                : prev.recurringTemplates,
+            recurringTemplates: mergeRemoteArray(data.recurringTemplates, prev.recurringTemplates),
             bankLoans: Array.isArray(data.bankLoans) ? data.bankLoans : prev.bankLoans,
             dyeLots: Array.isArray(data.dyeLots) ? data.dyeLots : prev.dyeLots,
             warehouseSlips: Array.isArray(data.warehouseSlips)
@@ -357,10 +352,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             installmentPlans: Array.isArray(data.installmentPlans)
               ? data.installmentPlans
               : prev.installmentPlans,
-            volumeDiscountRules:
-              Array.isArray(data.volumeDiscountRules) && data.volumeDiscountRules.length > 0
-                ? data.volumeDiscountRules
-                : prev.volumeDiscountRules,
+            volumeDiscountRules: mergeRemoteArray(data.volumeDiscountRules, prev.volumeDiscountRules),
             moadianLinks:
               data.moadianLinks && typeof data.moadianLinks === 'object'
                 ? data.moadianLinks
