@@ -28,7 +28,7 @@ import {
 } from '../types/accounting';
 
 const OP_DB_NAME = 'holoo_apex_operational_db_v1';
-export const OP_DB_VERSION = 4;
+export const OP_DB_VERSION = 5;
 
 export const OPERATIONAL_STORES = [
   'meta',
@@ -162,6 +162,152 @@ export function validateEncryptedOperationalWorkspaceRecordMetadata(
   );
 }
 
+export type RestoreJournalState =
+  | 'staging'
+  | 'commit_requested'
+  | 'workspace_applied'
+  | 'committed'
+  | 'failed_recovery_required';
+
+export interface OperationalRestoreJournalRecord {
+  restoreId: string;
+  workspaceId: string;
+  packageDigest: string;
+  workspaceEnvelopeJson: string;
+  workspacePlaintextSha256: string;
+  workspaceSchemaVersion: number;
+  workspaceRecordCount: number;
+  attachmentManifestDigest: string;
+  attachmentCount: number;
+  packageSchemaVersion: number;
+  state: RestoreJournalState;
+  createdAt: string;
+  updatedAt: string;
+  lastRecoveryError?: string;
+}
+
+const RESTORE_JOURNAL_STORE = 'restoreJournal';
+const RESTORE_JOURNAL_TERMINAL_STATES: RestoreJournalState[] = ['committed'];
+
+function isValidRestoreJournalRecord(value: unknown): value is OperationalRestoreJournalRecord {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as Partial<OperationalRestoreJournalRecord>;
+  return typeof row.restoreId === 'string' && /^[a-zA-Z0-9_-]{12,100}$/.test(row.restoreId) &&
+    typeof row.workspaceId === 'string' && row.workspaceId.length > 0 && row.workspaceId.length <= 180 &&
+    typeof row.packageDigest === 'string' && /^[a-f0-9]{64}$/i.test(row.packageDigest) &&
+    typeof row.workspaceEnvelopeJson === 'string' && row.workspaceEnvelopeJson.length > 0 &&
+    row.workspaceEnvelopeJson.length <= 12_000_000 &&
+    typeof row.workspacePlaintextSha256 === 'string' && /^[a-f0-9]{64}$/i.test(row.workspacePlaintextSha256) &&
+    row.workspaceSchemaVersion === 2 &&
+    Number.isSafeInteger(row.workspaceRecordCount) && Number(row.workspaceRecordCount) >= 0 &&
+    typeof row.attachmentManifestDigest === 'string' && /^[a-f0-9]{64}$/i.test(row.attachmentManifestDigest) &&
+    Number.isSafeInteger(row.attachmentCount) && Number(row.attachmentCount) >= 0 &&
+    (row.packageSchemaVersion === 1 || row.packageSchemaVersion === 2) &&
+    ['staging', 'commit_requested', 'workspace_applied', 'committed', 'failed_recovery_required'].includes(String(row.state)) &&
+    typeof row.createdAt === 'string' && Number.isFinite(Date.parse(row.createdAt)) &&
+    typeof row.updatedAt === 'string' && Number.isFinite(Date.parse(row.updatedAt));
+}
+
+/** Read the durable restore journal before normal workspace hydration. */
+export async function getActiveOperationalRestoreJournal(): Promise<OperationalRestoreJournalRecord | null> {
+  if (!isIndexedDbAvailable()) throw new Error('برای بررسی وضعیت بازیابی، IndexedDB در دسترس نیست.');
+  const db = await openOperationalDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
+      const request = tx.objectStore(RESTORE_JOURNAL_STORE).getAll();
+      request.onsuccess = () => {
+        const rows = (request.result as unknown[]).filter(isValidRestoreJournalRecord);
+        const active = rows.filter((row) => !RESTORE_JOURNAL_TERMINAL_STATES.includes(row.state))
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        resolve(active[0] ?? null);
+      };
+      request.onerror = () => reject(request.error ?? new Error('خواندن ژورنال بازیابی ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش خواندن ژورنال بازیابی لغو شد.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/** Persist a validated encrypted restore journal record. Does not modify live workspace rows. */
+export async function createOperationalRestoreJournal(
+  record: OperationalRestoreJournalRecord
+): Promise<void> {
+  if (!isValidRestoreJournalRecord(record) || record.state !== 'staging') {
+    throw new Error('ساختار اولیه ژورنال بازیابی معتبر نیست.');
+  }
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای ثبت ژورنال بازیابی در دسترس نیست.');
+  const db = await openOperationalDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
+      const store = tx.objectStore(RESTORE_JOURNAL_STORE);
+      const get = store.get(record.restoreId);
+      get.onsuccess = () => {
+        if (get.result) {
+          tx.abort();
+          return;
+        }
+        store.add(record);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error('ثبت ژورنال بازیابی ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('ثبت ژورنال بازیابی لغو شد.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/** Monotonic journal transition; terminal committed records cannot be reopened. */
+export async function transitionOperationalRestoreJournal(
+  restoreId: string,
+  expectedStates: RestoreJournalState[],
+  nextState: RestoreJournalState,
+  patch: Partial<Pick<OperationalRestoreJournalRecord, 'lastRecoveryError' | 'updatedAt'>>
+): Promise<OperationalRestoreJournalRecord> {
+  if (!restoreId || !expectedStates.length) throw new Error('پارامتر تغییر وضعیت ژورنال معتبر نیست.');
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای تغییر ژورنال بازیابی در دسترس نیست.');
+  const db = await openOperationalDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
+      const store = tx.objectStore(RESTORE_JOURNAL_STORE);
+      let updated: OperationalRestoreJournalRecord | null = null;
+      const get = store.get(restoreId);
+      get.onsuccess = () => {
+        const current = get.result as OperationalRestoreJournalRecord | undefined;
+        if (!current || !isValidRestoreJournalRecord(current) || !expectedStates.includes(current.state)) {
+          tx.abort();
+          return;
+        }
+        const allowed: Record<RestoreJournalState, RestoreJournalState[]> = {
+          staging: ['commit_requested', 'failed_recovery_required'],
+          commit_requested: ['workspace_applied', 'failed_recovery_required'],
+          workspace_applied: ['committed', 'failed_recovery_required'],
+          failed_recovery_required: ['commit_requested', 'workspace_applied', 'committed'],
+          committed: [],
+        };
+        if (!allowed[current.state].includes(nextState)) {
+          tx.abort();
+          return;
+        }
+        updated = { ...current, ...patch, state: nextState, updatedAt: patch.updatedAt ?? new Date().toISOString() };
+        store.put(updated);
+      };
+      tx.oncomplete = () => {
+        if (updated) resolve(updated);
+        else reject(new Error('ژورنال بازیابی پس از تراکنش قابل تأیید نبود.'));
+      };
+      tx.onerror = () => reject(tx.error ?? new Error('تغییر ژورنال بازیابی ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تغییر وضعیت ژورنال بازیابی لغو شد.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
 export interface OperationalDbStats {
   supported: boolean;
   ready: boolean;
@@ -187,6 +333,9 @@ function openOperationalDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       const db = req.result;
       const upgradeTx = req.transaction;
+      if (!db.objectStoreNames.contains(RESTORE_JOURNAL_STORE)) {
+        db.createObjectStore(RESTORE_JOURNAL_STORE, { keyPath: 'restoreId' });
+      }
       for (const storeName of OPERATIONAL_STORES) {
         let store: IDBObjectStore;
         if (!db.objectStoreNames.contains(storeName)) {
