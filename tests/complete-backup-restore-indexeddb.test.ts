@@ -19,6 +19,8 @@ const { unlockBackupSession, lockBackupSession } = await import('../src/lib/back
 const { encryptBackupEnvelope } = await import('../src/lib/offlineFirstCore');
 const { saveDocumentAttachment } = await import('../src/lib/documentVault');
 const {
+  createOperationalRestoreJournal,
+  discardStagingOperationalRestoreJournal,
   getActiveOperationalRestoreJournal,
   isOperationalRestoreBarrierActive,
   saveOperationalWorkspaceTx,
@@ -27,6 +29,31 @@ const { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } = awa
 
 const passphrase = 'IndexedDB-Restore-Test#1405';
 unlockBackupSession(passphrase);
+
+// A new tab must be able to observe the durable preparation record before any
+// attachment staging writes begin.
+const preparationId = 'restore_preparation_visibility_test';
+const preparationTime = new Date().toISOString();
+await createOperationalRestoreJournal({
+  restoreId: preparationId,
+  workspaceId: 'restore-workspace',
+  packageDigest: 'a'.repeat(64),
+  workspaceEnvelopeJson: JSON.stringify({ format: 'holoo-apex-encrypted-backup' }),
+  workspacePlaintextSha256: 'b'.repeat(64),
+  workspaceSchemaVersion: 2,
+  workspaceRecordCount: 1,
+  attachmentManifestDigest: 'a'.repeat(64),
+  attachmentCount: 0,
+  packageSchemaVersion: 2,
+  state: 'staging',
+  createdAt: preparationTime,
+  updatedAt: preparationTime,
+});
+assert.equal((await getActiveOperationalRestoreJournal())?.restoreId, preparationId,
+  'startup must discover a preparation journal before attachment staging');
+await discardStagingOperationalRestoreJournal(preparationId);
+assert.equal(await getActiveOperationalRestoreJournal(), null,
+  'aborted preparation must be safely removable before commit intent');
 
 async function countLiveAttachments(): Promise<number> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
