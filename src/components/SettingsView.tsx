@@ -94,6 +94,9 @@ export const SettingsView: React.FC<{
     setAutoBackupOnClose,
     localSnapshots,
     lastLocalBackupAt,
+    backupSessionUnlocked,
+    unlockBackupSession,
+    lockBackupSession,
     triggerLocalBackupNow,
     restoreFromLocalSnapshot,
     removeLocalSnapshot,
@@ -178,6 +181,7 @@ export const SettingsView: React.FC<{
   const [fiscalYear, setFiscalYear] = useState(profile.fiscalYear);
   const [currencyUnit, setCurrencyUnit] = useState(profile.currencyUnit);
   const [deviceNameInput, setDeviceNameInput] = useState(deviceLabel);
+  const [backupPassphraseInput, setBackupPassphraseInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uiThemeRef = useRef<HTMLDivElement | null>(null);
   const offlineFirstRef = useRef<HTMLDivElement | null>(null);
@@ -1277,6 +1281,43 @@ export const SettingsView: React.FC<{
               <span>ذخیره + دانلود فایل JSON</span>
             </button>
           </div>
+        </div>
+
+        <div className="p-3.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-bold text-slate-900 dark:text-white">قفل رمزنگاری پشتیبان‌ها</div>
+            <span className={backupSessionUnlocked ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-amber-700 dark:text-amber-400 font-semibold'}>
+              {backupSessionUnlocked ? 'باز · فقط در حافظه نشست' : 'قفل است'}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-5">
+            نسخه‌های جدید حافظه داخلی با PBKDF2-SHA-256 و AES-256-GCM رمزگذاری می‌شوند. رمز در حافظه مرورگر نگهداری می‌شود و با بارگذاری مجدد برنامه باید دوباره وارد شود؛ رمز یا کلید در localStorage ذخیره نمی‌شود.
+          </p>
+          {!backupSessionUnlocked ? (
+            <form className="flex flex-col sm:flex-row gap-2" onSubmit={(e) => {
+              e.preventDefault();
+              if (unlockBackupSession(backupPassphraseInput)) setBackupPassphraseInput('');
+            }}>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={backupPassphraseInput}
+                onChange={(e) => setBackupPassphraseInput(e.target.value)}
+                minLength={6}
+                placeholder="رمز اختصاصی پشتیبان (حداقل ۶ کاراکتر)"
+                className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+              />
+              <button type="submit" disabled={backupPassphraseInput.trim().length < 6}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold">
+                بازکردن قفل پشتیبان
+              </button>
+            </form>
+          ) : (
+            <button type="button" onClick={lockBackupSession}
+              className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200">
+              قفل‌کردن پشتیبان‌ها
+            </button>
+          )}
         </div>
 
         {/* Device Identity & Auto-Backup Toggle */}
