@@ -310,10 +310,12 @@ export async function applyOperationalRestoreJournalWorkspace(
       const journalStore = tx.objectStore(RESTORE_JOURNAL_STORE);
       let nextRevision = 1;
       let didQueueWrites = false;
+      let journalReady = false;
+      let metaReady = false;
       const journalRequest = journalStore.get(restoreId);
       const metaRequest = metaStore.get('workspace_meta');
       const queueWrites = () => {
-        if (didQueueWrites || !journalRequest.readyState || !metaRequest.readyState) return;
+        if (didQueueWrites || !journalReady || !metaReady) return;
         didQueueWrites = true;
         const current = journalRequest.result as OperationalRestoreJournalRecord | undefined;
         if (!isValidOperationalRestoreJournalRecord(current) ||
@@ -359,16 +361,16 @@ export async function applyOperationalRestoreJournalWorkspace(
           putRows('warehouses', workspace.warehouses ?? [], 'id') &&
           putRows('taxReports', workspace.taxReports ?? [], 'id') &&
           putRows('localProfiles', workspace.localProfiles ?? [], 'workspaceId') &&
-          putRows('syncOutbox', workspace.syncOutbox ?? [] as unknown as Array<Record<string, unknown>>, 'operationId') &&
-          putRows('syncInbox', workspace.syncInbox ?? [] as unknown as Array<Record<string, unknown>>, 'operationId');
+          putRows('syncOutbox', (workspace.syncOutbox ?? []) as unknown as Array<Record<string, unknown>>, 'operationId') &&
+          putRows('syncInbox', (workspace.syncInbox ?? []) as unknown as Array<Record<string, unknown>>, 'operationId');
         if (!valid) {
           tx.abort();
           return;
         }
         journalStore.put({ ...current, state: 'workspace_applied', updatedAt: committedAt, lastRecoveryError: undefined });
       };
-      journalRequest.onsuccess = queueWrites;
-      metaRequest.onsuccess = queueWrites;
+      journalRequest.onsuccess = () => { journalReady = true; queueWrites(); };
+      metaRequest.onsuccess = () => { metaReady = true; queueWrites(); };
       tx.oncomplete = () => {
         resetOperationalDiffCache();
         resolve({ localRevision: nextRevision, recordCount });
