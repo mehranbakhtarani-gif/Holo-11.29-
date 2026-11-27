@@ -3364,7 +3364,15 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         };
       }
 
+      const isSaleReturn = payload.invoiceType === 'sale_return';
+      const assertSaleReturnRequiresAtomicCloud = () => {
+        if (isSaleReturn) {
+          throw new Error('برگشت فروش فقط با تراکنش آنلاین و بررسی ماندهٔ زندهٔ فاکتور مرجع مجاز است؛ در حالت آفلاین یا محلی هیچ تغییری اعمال نشد.');
+        }
+      };
+
       const commitAtomicOfflineCloudBatch = async (): Promise<Invoice> => {
+        assertSaleReturnRequiresAtomicCloud();
         const batch = writeBatch(db);
         for (const prod of plan.updatedProducts) {
           batch.update(doc(db, 'products', prod.id), {
@@ -3395,6 +3403,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (user) {
         const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
         if (isOfflineNow) {
+          assertSaleReturnRequiresAtomicCloud();
           // Single atomic Firestore writeBatch (products + voucher + cheque + invoice) queued in local IndexedDB
           committedInvoice = await commitAtomicOfflineCloudBatch();
         } else {
@@ -3408,6 +3417,44 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
                 : localMaxVoucherNum;
               const liveNextVoucherNum = currentMax + 1;
+              let transactionOriginalInvoice = linkedOriginalInvoice;
+              let transactionExistingInvoices = invoices;
+
+              if (isSaleReturn) {
+                if (!payload.sourceInvoiceId) {
+                  throw new Error('برگشت فروش فاقد شناسهٔ فاکتور مرجع است.');
+                }
+                const originalRef = doc(db, 'invoices', payload.sourceInvoiceId);
+                const originalSnap = await tx.get(originalRef);
+                if (!originalSnap.exists()) {
+                  throw new Error('فاکتور فروش مرجع در سرور یافت نشد.');
+                }
+                const originalData = originalSnap.data();
+                if (originalData.ownerId !== ownerId || originalData.invoiceType !== 'sale' || originalData.status === 'cancelled') {
+                  throw new Error('فاکتور مرجع متعلق به این شرکت یا یک فروش فعال نیست.');
+                }
+                transactionOriginalInvoice = {
+                  ...(linkedOriginalInvoice ?? {} as Invoice),
+                  ...originalData,
+                  id: originalSnap.id,
+                  ownerId: originalData.ownerId,
+                } as Invoice;
+
+                const returnsQuery = query(
+                  collection(db, 'invoices'),
+                  where('sourceInvoiceId', '==', payload.sourceInvoiceId),
+                  where('invoiceType', '==', 'sale_return')
+                );
+                const returnsSnap = await tx.get(returnsQuery);
+                const liveReturns: Invoice[] = returnsSnap.docs
+                  .filter((returnDoc) => returnDoc.data().ownerId === ownerId)
+                  .map((returnDoc) => ({ ...returnDoc.data(), id: returnDoc.id } as Invoice));
+                const liveReturnIds = new Set(liveReturns.map((item) => item.id));
+                transactionExistingInvoices = [
+                  ...invoices.filter((item) => item.sourceInvoiceId !== payload.sourceInvoiceId || !liveReturnIds.has(item.id)),
+                  ...liveReturns,
+                ];
+              }
 
               // Read live products (including FIFO/MWA costLayers) for every item in the invoice
               const uniqueProductIds = Array.from(new Set(payload.items.map((it) => it.productId)));
@@ -3452,8 +3499,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 currentPartyBalance: currentPartyBal,
                 enforceCashOverdraftGuard: true,
                 defaultCostingMethod: profile.defaultCostingMethod,
-                originalInvoice: linkedOriginalInvoice,
-                existingInvoices: invoices,
+                originalInvoice: transactionOriginalInvoice,
+                existingInvoices: transactionExistingInvoices,
                 existingVouchers: vouchers,
                 closedFiscalYears: profile.closedFiscalYears,
                 fxDecimals,
@@ -3513,6 +3560,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             });
           } catch (err) {
             if (isFirestoreOfflineError(err)) {
+              assertSaleReturnRequiresAtomicCloud();
               committedInvoice = await commitAtomicOfflineCloudBatch();
             } else {
               const msg =
@@ -3531,6 +3579,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
         }
       } else {
+        assertSaleReturnRequiresAtomicCloud();
         // Local Operational Mode: Single atomic 4-store IndexedDB transaction (products + voucher + cheque + invoice)
         try {
           await commitInvoiceOperationalTx({
