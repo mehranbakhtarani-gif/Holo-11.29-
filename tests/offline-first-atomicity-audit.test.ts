@@ -340,6 +340,13 @@ async function runTests() {
   assert.match(batchFinalizeBody, /دائم‌سازی گروهی:[\\s\\S]*ناموفق/);
   console.log('✓ Batch voucher finalization reports partial failures accurately');
 
+  const renumberIdx = accountingCtxSrc.indexOf('const renumberVouchersChronologically');
+  assert.ok(renumberIdx !== -1, 'renumberVouchersChronologically must exist');
+  const renumberBody = accountingCtxSrc.slice(renumberIdx, renumberIdx + 3400);
+  assert.match(renumberBody, /changedVouchers\\.length > 450[\\s\\S]*هیچ تغییری اعمال نشد/);
+  console.log('✓ Cloud voucher renumbering refuses multi-commit partial updates');
+
+
 
 
 
