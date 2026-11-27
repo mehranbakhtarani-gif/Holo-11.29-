@@ -394,7 +394,15 @@ async function runTests() {
     'convertProformaToSale must commit atomically via commitInvoiceOperationalTx'
   );
 
-  console.log('✓ 1. Static Offline-First & Zero-Direct-API audit passed for both sync hooks + Workbox + AccountingContext');
+  const updateChequeStatusIdx = accountingCtxSrc.indexOf('const updateChequeStatus = useCallback');
+  assert.ok(updateChequeStatusIdx !== -1, 'updateChequeStatus must exist');
+  assert.match(
+    accountingCtxSrc.slice(updateChequeStatusIdx, updateChequeStatusIdx + 14000),
+    /await commitChequeStatusOperationalTx\(/,
+    'offline cheque status changes must atomically persist cheque and ledger voucher'
+  );
+
+  console.log('✓ 1. Static Offline-First & Zero-Direct-API audit passed for sync hooks, Workbox and atomic financial operations');
 
   // =========================================================================
   // 2. ATOMIC COMMIT HAPPY PATH (Create Invoice: Inventory + Ledger + Treasury + Invoice)
