@@ -1672,10 +1672,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           : undefined;
 
       if (user) {
-        try {
-          const ref = doc(db, 'vouchers', voucherId);
-          const updateFields = {
-            date: payload.date.slice(0, 20),
+        const ref = doc(db, 'vouchers', voucherId);
+        const updateFields = {
+          date: payload.date.slice(0, 20),
             description: cleanDesc,
             voucherType: payload.voucherType,
             status: payload.status,
@@ -1690,8 +1689,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             foreignTotalCredit,
             _version: expectedVersion + 1,
             updatedByDevice: deviceId.slice(0, 64),
-            updatedAt: serverTimestamp(),
-          };
+          updatedAt: serverTimestamp(),
+        };
+        try {
           const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
           if (isOfflineNow) {
             await updateDoc(ref, updateFields);
