@@ -440,8 +440,11 @@ export async function computeWebCryptoHmacSha256(passphrase: string, message: st
 
 /** Encrypts a P2P mesh snapshot payload end-to-end with AES-256-GCM (PBKDF2-SHA256 key derivation) */
 export async function encryptMeshPayloadAesGcm(passphrase: string, plaintext: string): Promise<string> {
-  if (!globalThis.crypto?.subtle) {
-    return plaintext;
+  if (!globalThis.crypto?.subtle || typeof globalThis.crypto.getRandomValues !== 'function') {
+    throw new Error('WebCrypto AES-GCM unavailable; refusing to transmit an unencrypted P2P payload.');
+  }
+  if (!passphrase.trim()) {
+    throw new Error('P2P encryption passphrase is required.');
   }
   const salt = new Uint8Array(16);
   const iv = new Uint8Array(12);
