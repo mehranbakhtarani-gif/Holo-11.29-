@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHolooSeedData } from '../src/data/holooSeed';
-import { validateVoucherPayload } from '../src/lib/accountingEngine';
+import { calculateMonthlyDepreciation, validateVoucherPayload } from '../src/lib/accountingEngine';
 import { applyInventoryMovementStep, recalculateInventoryLedger } from '../src/lib/inventoryCostingEngine';
 import type { ProductInventoryState } from '../src/lib/inventoryCostingEngine';
 import type { Voucher } from '../src/types/accounting';
@@ -62,6 +62,27 @@ assert.throws(
   /برای برگشت از خرید کافی نیست/
 );
 
+const validAsset = {
+  id: 'asset-test',
+  ownerId: 'phase1-test',
+  assetCode: 'AST-001',
+  title: 'Office equipment',
+  purchaseDate: '1405/01/01',
+  purchaseCost: 1_200_000,
+  salvageValue: 0,
+  usefulLifeYears: 5,
+  accumulatedDepreciation: 0,
+};
+assert.equal(calculateMonthlyDepreciation(validAsset), 20_000);
+assert.throws(
+  () => calculateMonthlyDepreciation({ ...validAsset, salvageValue: 1_300_000 }),
+  /اطلاعات مالی دارایی/
+);
+assert.throws(
+  () => calculateMonthlyDepreciation({ ...validAsset, accumulatedDepreciation: 1_200_001 }),
+  /استهلاک انباشته/
+);
+
 const seed = createHolooSeedData('phase1-test');
 const unsafeVoucher = validateVoucherPayload({
   payload: {
@@ -110,4 +131,4 @@ const duplicatePayroll = validateVoucherPayload({
 assert.equal(duplicatePayroll.valid, false, 'A payroll period reference must not be posted twice');
 assert.ok(duplicatePayroll.errors.some((error) => error.includes('قبلاً سند شماره')));
 
-console.log('Phase 2 financial regression tests: 5 passed, 0 failed');
+console.log('Phase 2 financial regression tests: 8 passed, 0 failed');
