@@ -1061,7 +1061,7 @@ export function recalculateInventoryLedger(input: {
     let movementForStep = m;
     if (costingMethod === 'fifo' && m.kind === 'sale_return' && m.sourceRefId) {
       const originalAllocations =
-        m.originalConsumedLayers || saleHistoryByRef.get(m.sourceRefId)?.consumedLayers;
+        saleHistoryByRef.get(m.sourceRefId)?.consumedLayers || m.originalConsumedLayers;
       if (originalAllocations?.length) {
         const alreadyReturned = fifoReturnedQtyBySaleRef.get(m.sourceRefId) || 0;
         movementForStep = {
