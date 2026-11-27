@@ -17,7 +17,7 @@ Object.defineProperty(globalThis, 'window', {
 
 const { unlockBackupSession, lockBackupSession } = await import('../src/lib/backupSession');
 const { encryptBackupEnvelope } = await import('../src/lib/offlineFirstCore');
-const { saveDocumentAttachment, setDocumentVaultRestoreBarrier } = await import('../src/lib/documentVault');
+const { saveDocumentAttachment, exportEncryptedDocumentAttachmentBundle, setDocumentVaultRestoreBarrier } = await import('../src/lib/documentVault');
 const {
   createOperationalRestoreJournal,
   discardStagingOperationalRestoreJournal,
@@ -141,17 +141,34 @@ async function run() {
     localRevision: 8,
   };
   const workspaceEnvelope = await encryptBackupEnvelope(JSON.stringify(workspace), passphrase);
+  const documentAttachments = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as {
+    attachments: Array<{ id: string }>;
+  };
+  assert.equal(documentAttachments.attachments.length, 1,
+    'the backup should contain the pre-existing attachment and a non-empty manifest');
   const packageJson = JSON.stringify({
     format: 'holoo-apex-complete-backup',
     schemaVersion: 2,
     exportedAt: new Date().toISOString(),
     workspaceEnvelope,
-    documentAttachments: {
-      format: 'holoo-apex-encrypted-document-vault',
-      schemaVersion: 2,
-      attachments: [],
-    },
+    documentAttachments: JSON.parse(await exportEncryptedDocumentAttachmentBundle()),
   });
+
+  // Add a post-snapshot row so restore must use the persisted non-empty staging
+  // manifest rather than the journal's initial placeholder metadata.
+  const postSnapshotAttachment = await saveDocumentAttachment({
+    entityType: 'invoice',
+    entityId: 'new-invoice',
+    entityLabel: 'New invoice',
+    fileName: 'new.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:application/pdf;base64,Qg==',
+    sizeBytes: 1,
+    uploadedBy: 'restore-test',
+    uploadedByRole: 'accountant',
+  });
+  assert.equal(postSnapshotAttachment.ok, true);
+  assert.equal(await countLiveAttachments(), 2);
 
   // Inject a deterministic crash at the Document Vault live-replacement boundary.
   const nativeClear = IDBObjectStore.prototype.clear;
@@ -180,7 +197,7 @@ async function run() {
     /ذخیره‌سازی فضای کاری تا پایان بازیابی پشتیبان متوقف است/,
     'background operational persistence must not overwrite a restore in progress'
   );
-  assert.equal(await countLiveAttachments(), 1, 'aborted vault transaction must preserve the old attachment set');
+  assert.equal(await countLiveAttachments(), 2, 'aborted vault transaction must preserve the pre-restore attachment set');
 
   const operationalDb = await new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDb.open('holoo_apex_operational_db_v1', 5);
@@ -202,10 +219,10 @@ async function run() {
 
   const resumed = await resumePendingCompleteBackupRestore();
   assert.ok(resumed, 'interrupted restore should resume');
-  assert.equal(resumed.restoredAttachments, 0);
+  assert.equal(resumed.restoredAttachments, 1, 'recovery must apply the one attachment in the persisted snapshot manifest');
   assert.equal(resumed.restoredWorkspaceRecords, interrupted.workspaceRecordCount);
   assert.equal(await getActiveOperationalRestoreJournal(), null, 'successful recovery must close the journal');
-  assert.equal(await countLiveAttachments(), 0, 'retry must atomically replace the old attachment set');
+  assert.equal(await countLiveAttachments(), 1, 'retry must atomically replace the live set with the one snapshotted attachment');
   assert.equal(isOperationalRestoreBarrierActive(), true,
     'the restored tab remains blocked until reload hydrates the committed workspace');
 
