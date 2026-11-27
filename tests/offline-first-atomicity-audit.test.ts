@@ -503,6 +503,22 @@ async function runTests() {
   assert.equal(chequeRollbackSim.stores.meta.get('workspace_meta').localRevision, 40);
   console.log('✓ 2d. Failed cheque voucher write rolls back the status transition');
 
+  const staleChequeSim = createTransactionalIdbSimulator({
+    cheques: [{ ...cheque, status: 'cleared' as const }],
+    meta: [{ key: 'workspace_meta', localRevision: 50 }],
+  });
+  await assert.rejects(
+    () => commitChequeStatusOperationalTx(
+      { cheque: transitionedCheque, expectedStatus: cheque.status, voucher: chequeVoucher },
+      { dbOverride: staleChequeSim.db }
+    ),
+    /ATOMIC_CHEQUE_STALE_STATUS/
+  );
+  assert.equal(staleChequeSim.stores.cheques.get('chq_1').status, 'cleared');
+  assert.equal(staleChequeSim.stores.vouchers.size, 0);
+  assert.equal(staleChequeSim.stores.meta.get('workspace_meta').localRevision, 50);
+  console.log('✓ 2e. Stale local cheque transitions are rejected without overwriting newer status');
+
   const invalidInvoiceVoucher: Voucher = {
     ...balancedVoucher,
     id: 'vch_negative_invoice',
