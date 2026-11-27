@@ -692,6 +692,10 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             stock: Number(result.updatedProduct.stock.toFixed(4)),
             inventoryValueIrr: Math.round(result.updatedProduct.inventoryValueIrr || 0),
             costLayers: result.updatedProduct.costLayers || [],
+            buyPrice: remoteProduct.buyPrice,
+            lotNumber: remoteProduct.lotNumber ?? '',
+            _version: Math.max(0, Number(productSnap.data()._version) || 0) + 1,
+            updatedByDevice: deviceLabel.slice(0, 120),
             updatedAt: serverTimestamp(),
           });
           const nextVersion = Math.max(0, Number(extensionData._version) || 0) + 1;
@@ -767,6 +771,10 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             stock: Number(received.updatedProduct.stock.toFixed(4)),
             inventoryValueIrr: Math.round(received.updatedProduct.inventoryValueIrr || 0),
             costLayers: received.updatedProduct.costLayers || [],
+            buyPrice: remoteProduct.buyPrice,
+            lotNumber: remoteProduct.lotNumber ?? '',
+            _version: Math.max(0, Number(productSnap.data()._version) || 0) + 1,
+            updatedByDevice: deviceLabel.slice(0, 120),
             updatedAt: serverTimestamp(),
           });
           transaction.update(extensionRef, {
