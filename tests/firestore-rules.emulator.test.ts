@@ -197,6 +197,38 @@ async function run() {
       updatedAt: serverTimestamp(),
     }, { merge: true }));
 
+    // Warehouse transfer commits must be allowed to update cost layers and inventory valuation atomically.
+    const productDoc = doc(ownerA, 'products', 'transfer_product');
+    await assertSucceeds(setDoc(productDoc, {
+      ownerId: 'company_a',
+      sku: 'TR-001',
+      name: 'Transfer yarn',
+      category: 'Yarn',
+      warehouse: 'Main',
+      unit: 'kg',
+      buyPrice: 1000,
+      sellPrice: 1200,
+      stock: 10,
+      reorderPoint: 0,
+      vatExempt: false,
+      costingMethod: 'fifo',
+      costLayers: [{ layerId: 'opening-1', remainingQty: 10, totalCostIrr: 10000 }],
+      inventoryValueIrr: 10000,
+      _version: 1,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(productDoc, {
+      stock: 10,
+      buyPrice: 1000,
+      lotNumber: '',
+      costLayers: [{ layerId: 'opening-1', remainingQty: 8, totalCostIrr: 8000 }],
+      inventoryValueIrr: 10000,
+      _version: 2,
+      updatedByDevice: 'device_a',
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
+
     // New cloud backups must contain an encrypted envelope, never a plaintext snapshot map.
     const encryptedCloudBackup = {
       ownerId: 'company_a',
