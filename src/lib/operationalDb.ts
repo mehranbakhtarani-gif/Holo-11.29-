@@ -149,7 +149,7 @@ export function validateEncryptedOperationalWorkspaceRecordMetadata(
     typeof record.envelopeJson === 'string' &&
     record.envelopeJson.length > 0 &&
     record.envelopeJson.length <= 1_500_000 &&
-    record.schemaVersion === 1 &&
+    record.schemaVersion === 2 &&
     Number.isSafeInteger(record.recordCount) &&
     Number(record.recordCount) >= 0 &&
     Number.isSafeInteger(record.sourceRevision) &&
