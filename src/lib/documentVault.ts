@@ -9,7 +9,8 @@
  *  - Cryptographic SHA-256 content integrity checksum verified on every read
  *  - Strict MIME-type allowlist & file size cap (10 MB max per document)
  *  - Role-based access control (`standard` | `confidential` | `restricted`)
- *  - 100% offline local persistence via dedicated IndexedDB store (with in-memory fallback)
+ *  - Offline IndexedDB persistence with AES-256-GCM encrypted file content at rest
+ *  - Legacy plaintext attachments are migrated on authorized retrieval when the backup vault is unlocked
  */
 
 import { RbacRoleKey } from '../types/accounting';
@@ -243,7 +244,7 @@ export async function listDocumentAttachments(filter?: {
       return true;
     })
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
-    .map(({ dataUrl: _omit, ...meta }) => meta);
+    .map(({ dataUrl: _legacy, encryptedEnvelope: _envelope, ...meta }) => meta);
 }
 
 /**
@@ -301,6 +302,7 @@ export async function retrieveVerifiedAttachment(
   } else if (typeof stored.dataUrl === 'string') {
     if (!isBackupSessionUnlocked()) return { ok: false, error: 'این پیوست از نسخه قدیمی و رمزگذاری‌نشده است؛ برای مهاجرت امن ابتدا قفل پشتیبان را باز کنید.' };
     dataUrl = stored.dataUrl;
+    if (await computeSha256Hex(dataUrl) !== stored.sha256) return { ok: false, error: 'مهر SHA-256 پیوست قدیمی معتبر نیست؛ مهاجرت انجام نشد.' };
     try {
       const envelope = await encryptBackupEnvelope(JSON.stringify({ dataUrl, mimeType: stored.mimeType, sha256: stored.sha256 }), requireBackupSessionPassphrase());
       const migrated: StoredDocumentAttachmentRecord = { ...stored, encryptedEnvelope: JSON.stringify(envelope) };
