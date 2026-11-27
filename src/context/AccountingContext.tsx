@@ -102,6 +102,7 @@ import {
   commitChequeStatusOperationalTx,
   commitDepreciationOperationalTx,
   commitInvoiceOperationalTx,
+  commitSalesOrderDispatchOperationalTx,
   getOperationalDbStats,
   loadOperationalWorkspace,
   OperationalDbStats,
@@ -6129,27 +6130,25 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return;
           }
         } else {
-          if (order.status !== 'ordered') {
-            showToast('این سفارش قبلاً حواله شده یا در وضعیت قابل ارسال نیست؛ تغییری اعمال نشد.', 'warning');
+          try {
+            const committedOrder = await commitSalesOrderDispatchOperationalTx({
+              orderId,
+              ownerId,
+              dispatchNumber,
+              dispatchDate: payload.dispatchDate,
+              driverName: payload.driverName,
+              plateNumber: payload.plateNumber,
+              items: payload.items,
+              updatedByDevice: deviceId,
+            });
+            dispatchNumber = committedOrder.dispatchNumber || dispatchNumber;
+            setSalesOrders((prev) =>
+              prev.map((current) => current.id === orderId ? committedOrder : current)
+            );
+          } catch (err) {
+            showToast(err instanceof Error ? err.message : 'ثبت اتمیک حواله خروج ناموفق بود؛ هیچ تغییری اعمال نشد.', 'error');
             return;
           }
-          setSalesOrders((prev) =>
-            prev.map((current) =>
-              current.id === orderId && current.status === 'ordered'
-                ? {
-                    ...current,
-                    dispatchNumber,
-                    dispatchDate: payload.dispatchDate,
-                    driverName: payload.driverName,
-                    plateNumber: payload.plateNumber,
-                    items: payload.items,
-                    status: 'dispatched',
-                    _version: (current._version ?? 1) + 1,
-                    updatedByDevice: deviceId,
-                  }
-                : current
-            )
-          );
         }
 
         logActivity(
