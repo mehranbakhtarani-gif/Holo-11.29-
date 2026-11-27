@@ -77,6 +77,13 @@ export interface OperationalWorkspaceData {
   subcontractJobs: SubcontractJob[];
   rbacOperators: RbacOperator[];
   auditLogs: AuditActivityLog[];
+  // Auxiliary operational stores are included in the encrypted shadow so the
+  // migration cannot silently omit warehouse, tax, local-profile, or sync state.
+  warehouses?: Record<string, unknown>[];
+  taxReports?: Record<string, unknown>[];
+  localProfiles?: Record<string, unknown>[];
+  syncOutbox?: SyncOutboxOperation[];
+  syncInbox?: SyncInboxRecord[];
   localRevision?: number;
   updatedAt?: string;
 }
@@ -727,6 +734,11 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
       'subcontractJobs',
       'rbacOperators',
       'auditLogs',
+      'warehouses',
+      'taxReports',
+      'localProfiles',
+      'syncOutbox',
+      'syncInbox',
     ];
     const tx = db.transaction(entityStores, 'readonly');
     const [
@@ -747,6 +759,11 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
       subcontractJobs,
       rbacOperators,
       auditLogs,
+      warehouses,
+      taxReports,
+      localProfiles,
+      syncOutbox,
+      syncInbox,
     ] = await Promise.all([
       readAllFromStore<{ key: string; value?: unknown; localRevision?: number; updatedAt?: string }>(
         tx,
@@ -768,6 +785,11 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
       readAllFromStore<SubcontractJob>(tx, 'subcontractJobs'),
       readAllFromStore<RbacOperator>(tx, 'rbacOperators'),
       readAllFromStore<AuditActivityLog>(tx, 'auditLogs'),
+      readAllFromStore<Record<string, unknown>>(tx, 'warehouses'),
+      readAllFromStore<Record<string, unknown>>(tx, 'taxReports'),
+      readAllFromStore<Record<string, unknown>>(tx, 'localProfiles'),
+      readAllFromStore<SyncOutboxOperation>(tx, 'syncOutbox'),
+      readAllFromStore<SyncInboxRecord>(tx, 'syncInbox'),
     ]);
     db.close();
 
@@ -795,6 +817,11 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
       subcontractJobs,
       rbacOperators,
       auditLogs,
+      warehouses,
+      taxReports,
+      localProfiles,
+      syncOutbox,
+      syncInbox,
       localRevision: wsMeta?.localRevision ?? 1,
       updatedAt: wsMeta?.updatedAt,
     };
@@ -812,6 +839,8 @@ export function countOperationalWorkspaceRecords(workspace: OperationalWorkspace
     workspace.costCenters, workspace.currencies, workspace.exchangeRates,
     workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
     workspace.rbacOperators, workspace.auditLogs,
+    workspace.warehouses ?? [], workspace.taxReports ?? [], workspace.localProfiles ?? [],
+    workspace.syncOutbox ?? [], workspace.syncInbox ?? [],
   ];
   if (!collections.every(Array.isArray)) {
     throw new Error('ساختار مجموعه رکوردهای فضای کاری معتبر نیست.');
@@ -843,7 +872,14 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
   ) {
     throw new Error('ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار است.');
   }
-  return parsed as OperationalWorkspaceData;
+  return {
+    ...parsed,
+    warehouses: parsed.warehouses ?? [],
+    taxReports: parsed.taxReports ?? [],
+    localProfiles: parsed.localProfiles ?? [],
+    syncOutbox: parsed.syncOutbox ?? [],
+    syncInbox: parsed.syncInbox ?? [],
+  } as OperationalWorkspaceData;
 }
 
 /**
@@ -882,7 +918,7 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
   const record: EncryptedOperationalWorkspaceRecord = {
     workspaceId: cleanWorkspaceId,
     envelopeJson: JSON.stringify(envelope),
-    schemaVersion: 1,
+    schemaVersion: 2,
     recordCount,
     sourceRevision: expectedSourceRevision,
     plaintextSha256: envelope.plaintextSha256,
