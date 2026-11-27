@@ -5026,13 +5026,48 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
-      const existingClosing = vouchers.find(
-        (v) =>
-          v.voucherType === 'closing' &&
-          (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy &&
-          v.status === 'permanent'
+      // Recover safely if a previous attempt committed a deterministic voucher but
+      // failed before the fiscal-year profile lock was persisted.
+      const closingVoucherId = `vch_${sha256HexSync(`${ownerId}:${closingReferenceId}`).slice(0, 32)}`;
+      const openingVoucherId = `vch_${sha256HexSync(`${ownerId}:${openingReferenceId}`).slice(0, 32)}`;
+      const findPersistedYearEndVoucher = async (
+        referenceId: string,
+        voucherId: string,
+        voucherType: 'closing' | 'opening'
+      ): Promise<boolean> => {
+        const localMatch = vouchers.find(
+          (v) =>
+            v.id === voucherId &&
+            v.referenceId === referenceId &&
+            v.voucherType === voucherType &&
+            v.status === 'permanent' &&
+            v.ownerId === ownerId
+        );
+        if (localMatch) return true;
+        if (!user) return false;
+        const snapshot = await getDoc(doc(db, 'vouchers', voucherId));
+        if (!snapshot.exists()) return false;
+        const persisted = snapshot.data();
+        if (
+          persisted.ownerId !== ownerId ||
+          persisted.referenceId !== referenceId ||
+          persisted.voucherType !== voucherType ||
+          persisted.status !== 'permanent'
+        ) {
+          throw new Error(`شناسه سند ${voucherType} پایان سال با اطلاعات دیگری اشغال شده است؛ عملیات متوقف شد.`);
+        }
+        return true;
+      };
+      const existingClosing = await findPersistedYearEndVoucher(
+        closingReferenceId,
+        closingVoucherId,
+        'closing'
       );
-      const existingOpening = vouchers.find((v) => v.referenceId === openingReferenceId);
+      const existingOpening = await findPersistedYearEndVoucher(
+        openingReferenceId,
+        openingVoucherId,
+        'opening'
+      );
       const planningVouchers = vouchers.filter(
         (v) =>
           !(
