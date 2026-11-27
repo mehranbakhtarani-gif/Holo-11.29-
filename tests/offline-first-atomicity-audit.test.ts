@@ -368,6 +368,21 @@ async function runTests() {
   assert.ok(invoiceOrderGuard.includes('throw new Error(safetyMessage)'));
   console.log('✓ Sales-order invoicing fails closed until invoice/order linkage is atomic');
 
+  const saleReturnIdx = accountingCtxSrc.indexOf('const isSaleReturn = payload.invoiceType === \'sale_return\'');
+  assert.ok(saleReturnIdx !== -1, 'sale-return atomic guard must exist');
+  const saleReturnBody = accountingCtxSrc.slice(saleReturnIdx, saleReturnIdx + 8500);
+  assert.ok(saleReturnBody.includes('assertSaleReturnRequiresAtomicCloud'));
+  assert.ok(saleReturnBody.includes('transactionOriginalInvoice'));
+  assert.ok(saleReturnBody.includes('await tx.get(originalRef)'));
+  assert.ok(saleReturnBody.includes('where(\'sourceInvoiceId\', \'==\', payload.sourceInvoiceId)'));
+  assert.ok(saleReturnBody.includes('where(\'invoiceType\', \'==\', \'sale_return\')'));
+  assert.ok(saleReturnBody.includes('const liveReturns: Invoice[]'));
+  assert.ok(saleReturnBody.includes('transactionExistingInvoices'));
+  assert.ok(saleReturnBody.includes('returnDoc.data().ownerId === ownerId'));
+  assert.match(saleReturnBody, /if \(isOfflineNow\) \{[\s\S]*assertSaleReturnRequiresAtomicCloud\(\)/);
+  assert.match(saleReturnBody, /if \(isFirestoreOfflineError\(err\)\) \{[\s\S]*assertSaleReturnRequiresAtomicCloud\(\)/);
+  console.log('✓ Sale returns revalidate original invoice and all prior returns inside one live Firestore transaction; offline/local paths fail closed');
+
 
 
 
