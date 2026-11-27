@@ -14,6 +14,8 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, isFirestoreOfflineError, OperationType } from './firebase';
 import { getTodayShamsi } from './format';
+import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
+import { requireBackupSessionPassphrase } from './backupSession';
 
 export const MAX_CLOUD_BACKUPS = 3;
 
@@ -212,7 +214,13 @@ export async function saveAndPruneFirebaseBackup(params: {
     const maxRev = existing.backups.reduce((m, b) => Math.max(m, b.revision), 0);
     const nextRevision = maxRev + 1;
 
-    const { snapshotMap, sizeKb } = buildCompactFirestoreSnapshot(params.snapshotJson);
+    const passphrase = requireBackupSessionPassphrase();
+    const envelope = await encryptBackupEnvelope(params.snapshotJson, passphrase);
+    const encryptedEnvelopeJson = JSON.stringify(envelope);
+    const sizeKb = Math.max(1, Math.round(new Blob([encryptedEnvelopeJson]).size / 1024));
+    if (sizeKb > 900) {
+      throw new Error('حجم پشتیبان رمزگذاری‌شده از سقف امن یک سند Firestore بیشتر است؛ برای این نسخه باید از ذخیره‌سازی قطعه‌ای استفاده شود.');
+    }
     const backupId = `fbbak_${params.ownerId.slice(0, 12)}_${nowMs}_${nextRevision}`;
 
     await setDoc(doc(db, 'cloudBackups', backupId), {
@@ -229,7 +237,8 @@ export async function saveAndPruneFirebaseBackup(params: {
       invoiceCount: Math.max(0, Math.floor(params.invoiceCount)),
       productCount: Math.max(0, Math.floor(params.productCount)),
       sizeKb,
-      snapshot: snapshotMap,
+      snapshotEnvelope: encryptedEnvelopeJson,
+      encryption: 'PBKDF2-SHA256+AES-256-GCM',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -304,8 +313,24 @@ export async function pullFirebaseBackupSnapshot(
     }
 
     const data = snap.data() as Record<string, unknown>;
-    if (data.ownerId !== ownerId || !data.snapshot || typeof data.snapshot !== 'object') {
+    if (data.ownerId !== ownerId) {
       return { ok: false, error: 'نسخه پشتیبان انتخاب‌شده معتبر نیست.' };
+    }
+    let snapshotJson: string | undefined;
+    if (typeof data.snapshotEnvelope === 'string') {
+      const decrypted = await decryptAndVerifyBackupEnvelope(
+        data.snapshotEnvelope,
+        requireBackupSessionPassphrase()
+      );
+      if (!decrypted.ok || !decrypted.snapshotJson) {
+        return { ok: false, error: decrypted.error || 'رمزگشایی پشتیبان ابری ناموفق بود.' };
+      }
+      snapshotJson = decrypted.snapshotJson;
+    } else if (data.snapshot && typeof data.snapshot === 'object') {
+      // Legacy plaintext cloud backups remain readable for explicit migration only.
+      snapshotJson = JSON.stringify(data.snapshot);
+    } else {
+      return { ok: false, error: 'ساختار نسخه پشتیبان ابری نامعتبر است.' };
     }
 
     return {
@@ -314,7 +339,7 @@ export async function pullFirebaseBackupSnapshot(
       revision: Number(data.revision) || 1,
       deviceLabel: String(data.deviceLabel || 'دستگاه کاری'),
       savedAtShamsi: String(data.savedAtShamsi || ''),
-      snapshotJson: JSON.stringify(data.snapshot),
+      snapshotJson,
     };
   } catch {
     return { ok: false, error: 'خطا در بازیابی نسخه پشتیبان از Firebase Firestore.' };
