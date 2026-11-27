@@ -387,44 +387,85 @@ export async function retrieveVerifiedAttachment(
     return { ok: false, error: 'بایگانی پایدار اسناد در این مرورگر در دسترس نیست.' };
   }
 
-  if (!stored) {
-    return { ok: false, error: 'مدرک مورد نظر در بایگانی محلی یافت نشد.' };
-  }
+  if (!stored) return { ok: false, error: 'مدرک مورد نظر در بایگانی محلی یافت نشد.' };
   if (!canRoleAccessSensitivity(viewerRole, stored.sensitivity)) {
-    return {
-      ok: false,
-      error: 'سطح دسترسی نقش فعلی برای مشاهده این مدرک محرمانه کافی نیست.',
-    };
+    return { ok: false, error: 'سطح دسترسی نقش فعلی برای مشاهده این مدرک محرمانه کافی نیست.' };
+  }
+  if (!isBackupSessionUnlocked()) {
+    return { ok: false, error: 'برای بازکردن یا مهاجرت پیوست رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.' };
   }
 
+  const passphrase = requireBackupSessionPassphrase();
   let dataUrl: string;
+  let needsMetadataBindingMigration = false;
   if (stored.encryptedEnvelope) {
-    if (!isBackupSessionUnlocked()) return { ok: false, error: 'برای بازکردن پیوست رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.' };
-    const verified = await decryptAndVerifyBackupEnvelope(stored.encryptedEnvelope, requireBackupSessionPassphrase());
+    const verified = await decryptAndVerifyBackupEnvelope(stored.encryptedEnvelope, passphrase);
     if (!verified.ok || !verified.snapshotJson) return { ok: false, error: verified.error || 'رمزگشایی پیوست ناموفق بود.' };
     try {
-      const payload = JSON.parse(verified.snapshotJson) as { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
-      if (typeof payload.dataUrl !== 'string' || typeof payload.mimeType !== 'string' || typeof payload.sha256 !== 'string' || payload.mimeType !== stored.mimeType || payload.sha256 !== stored.sha256) return { ok: false, error: 'ساختار یا فراداده پیوست رمزگذاری‌شده معتبر نیست.' };
+      const payload = JSON.parse(verified.snapshotJson) as {
+        dataUrl?: unknown;
+        mimeType?: unknown;
+        sha256?: unknown;
+        metadataSha256?: unknown;
+      };
+      if (typeof payload.dataUrl !== 'string' ||
+          getBase64DataUrlByteLength(payload.dataUrl, stored.mimeType) === null ||
+          payload.mimeType !== stored.mimeType || payload.sha256 !== stored.sha256 ||
+          await computeSha256Hex(payload.dataUrl) !== stored.sha256) {
+        return { ok: false, error: 'ساختار یا محتوای پیوست رمزگذاری‌شده معتبر نیست.' };
+      }
+      const expectedMetadataSha256 = await computeAttachmentMetadataSha256(stored);
+      if (payload.metadataSha256 !== undefined && payload.metadataSha256 !== expectedMetadataSha256) {
+        return { ok: false, error: 'فراداده پیوست با مهر اصالت رمزگذاری‌شده مطابقت ندارد.' };
+      }
+      needsMetadataBindingMigration = payload.metadataSha256 === undefined;
       dataUrl = payload.dataUrl;
-    } catch { return { ok: false, error: 'محتوای رمزگشایی‌شده پیوست ساختار معتبری ندارد.' }; }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'محتوای رمزگشایی‌شده پیوست ساختار معتبری ندارد.' };
+    }
   } else if (typeof stored.dataUrl === 'string') {
-    if (!isBackupSessionUnlocked()) return { ok: false, error: 'این پیوست از نسخه قدیمی و رمزگذاری‌نشده است؛ برای مهاجرت امن ابتدا قفل پشتیبان را باز کنید.' };
     dataUrl = stored.dataUrl;
-    if (await computeSha256Hex(dataUrl) !== stored.sha256) return { ok: false, error: 'مهر SHA-256 پیوست قدیمی معتبر نیست؛ مهاجرت انجام نشد.' };
+    if (getBase64DataUrlByteLength(dataUrl, stored.mimeType) === null ||
+        await computeSha256Hex(dataUrl) !== stored.sha256) {
+      return { ok: false, error: 'مهر SHA-256 یا قالب Base64 پیوست قدیمی معتبر نیست؛ مهاجرت انجام نشد.' };
+    }
+    needsMetadataBindingMigration = true;
+  } else {
+    return { ok: false, error: 'پیوست فاقد محتوای قابل بازیابی است.' };
+  }
+
+  if (needsMetadataBindingMigration) {
     try {
-      const envelope = await encryptBackupEnvelope(JSON.stringify({ dataUrl, mimeType: stored.mimeType, sha256: stored.sha256 }), requireBackupSessionPassphrase());
+      const metadataSha256 = await computeAttachmentMetadataSha256(stored);
+      const envelope = await encryptBackupEnvelope(JSON.stringify({
+        dataUrl,
+        mimeType: stored.mimeType,
+        sha256: stored.sha256,
+        metadataSha256,
+      }), passphrase);
       const migrated: StoredDocumentAttachmentRecord = { ...stored, encryptedEnvelope: JSON.stringify(envelope) };
       delete migrated.dataUrl;
       if (isIdbAvailable()) {
         const db = await openVaultDb();
-        try { await new Promise<void>((resolve, reject) => { const tx = db.transaction(VAULT_STORE, 'readwrite'); tx.objectStore(VAULT_STORE).put(migrated); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); }); }
-        finally { db.close(); }
-      } else if (isNonBrowserTestRuntime()) memoryVault.set(migrated.id, migrated);
-    } catch (err) { return { ok: false, error: `مهاجرت رمزگذاری‌شده پیوست قدیمی ناموفق بود: ${err instanceof Error ? err.message : ''}` }; }
-  } else return { ok: false, error: 'پیوست فاقد محتوای قابل بازیابی است.' };
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(VAULT_STORE, 'readwrite');
+            tx.objectStore(VAULT_STORE).put(migrated);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error ?? new Error('Metadata binding migration failed'));
+            tx.onabort = () => reject(tx.error ?? new Error('Metadata binding migration aborted'));
+          });
+        } finally { db.close(); }
+      } else if (isNonBrowserTestRuntime()) {
+        memoryVault.set(migrated.id, migrated);
+      }
+      stored = migrated;
+    } catch (err) {
+      return { ok: false, error: `مهاجرت اصالت فراداده پیوست ناموفق بود: ${err instanceof Error ? err.message : ''}` };
+    }
+  }
 
-  const recomputed = await computeSha256Hex(dataUrl);
-  const integrityValid = recomputed === stored.sha256;
+  const integrityValid = (await computeSha256Hex(dataUrl)) === stored.sha256;
   const { encryptedEnvelope: _envelope, dataUrl: _legacy, ...meta } = stored;
   return { ok: true, record: { ...meta, dataUrl }, integrityValid };
 }
