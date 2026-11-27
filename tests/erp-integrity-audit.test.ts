@@ -801,10 +801,12 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
   });
   assert.equal(fractionalTransfer.updatedProduct.stock, 0.0145,
     'warehouse transfers must preserve four-decimal stock precision');
-  assert.equal(
-    fractionalTransfer.updatedProduct.costLayers?.reduce((sum, layer) => sum + layer.remainingQty, 0),
-    0.0145,
-    'transferred and remaining cost layers must reconcile exactly to product stock'
+  assert.ok(
+    Math.abs(
+      (fractionalTransfer.updatedProduct.costLayers?.reduce((sum, layer) => sum + layer.remainingQty, 0) || 0) -
+      fractionalTransfer.updatedProduct.stock
+    ) < 0.00005,
+    'transferred and remaining cost layers must reconcile to product stock within quantity precision'
   );
 
   // Transfer 10 kg in_transit to 'انبار تبریز'
