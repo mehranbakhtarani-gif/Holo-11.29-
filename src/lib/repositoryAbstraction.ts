@@ -66,6 +66,36 @@ export interface LocalRepositoryAdapter {
   hasInbox: (operationId: string) => Promise<boolean>;
 }
 
+/** Rehydrates a durable IndexedDB outbox row after a cold start. Legacy/incomplete rows fail closed. */
+export function restoreDurableSyncOperation(row: SyncOutboxOperation): DurableSyncOperation {
+  if (
+    !row.payload ||
+    typeof row.entityKind !== 'string' ||
+    typeof row.entityId !== 'string' ||
+    typeof row.baseRevision !== 'number'
+  ) {
+    throw new Error(
+      `Outbox operation ${row.operationId} predates durable payload storage or is corrupt; automatic replay is blocked to prevent data loss.`
+    );
+  }
+  return {
+    operationId: row.operationId,
+    workspaceId: row.workspaceId,
+    deviceId: row.deviceId,
+    entityKind: row.entityKind,
+    entityId: row.entityId,
+    baseRevision: row.baseRevision,
+    clientRevision: row.clientRevision,
+    payloadHashSha256: row.payloadHash,
+    payload: row.payload,
+    createdAt: row.createdAt,
+    retryCount: row.retryCount,
+    nextRetryAtMs: row.nextRetryAt ? Date.parse(row.nextRetryAt) || 0 : 0,
+    status: row.status === 'conflict' ? 'conflict_requires_review' : row.status,
+    lastError: row.lastError,
+  };
+}
+
 export interface RemotePushOutcome {
   status: 'applied' | 'already_applied' | 'conflict' | 'network_error';
   serverRevision?: number;
@@ -145,33 +175,7 @@ export class IndexedDbLocalRepository implements LocalRepositoryAdapter {
     const idbOps = await listPendingSyncOutboxOperations();
     return idbOps.map((row) => {
       const cached = this.payloadCache.get(row.operationId);
-      if (cached) return cached;
-      if (
-        !row.payload ||
-        typeof row.entityKind !== 'string' ||
-        typeof row.entityId !== 'string' ||
-        typeof row.baseRevision !== 'number'
-      ) {
-        throw new Error(
-          `Outbox operation ${row.operationId} predates durable payload storage or is corrupt; automatic replay is blocked to prevent data loss.`
-        );
-      }
-      return {
-        operationId: row.operationId,
-        workspaceId: row.workspaceId,
-        deviceId: row.deviceId,
-        entityKind: row.entityKind,
-        entityId: row.entityId,
-        baseRevision: row.baseRevision,
-        clientRevision: row.clientRevision,
-        payloadHashSha256: row.payloadHash,
-        payload: row.payload,
-        createdAt: row.createdAt,
-        retryCount: row.retryCount,
-        nextRetryAtMs: row.nextRetryAt ? Date.parse(row.nextRetryAt) || 0 : 0,
-        status: row.status === 'conflict' ? 'conflict_requires_review' : row.status,
-        lastError: row.lastError,
-      };
+      return cached ?? restoreDurableSyncOperation(row);
     });
   }
 
