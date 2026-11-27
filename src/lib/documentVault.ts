@@ -460,6 +460,9 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(VAULT_STORE, 'readwrite');
         const store = tx.objectStore(VAULT_STORE);
+        // A backup restore is a full vault replacement, not a merge. Clear and repopulate
+        // inside the same transaction so stale attachments cannot survive a successful restore.
+        store.clear();
         validated.forEach((row) => store.put(row));
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error ?? new Error('Document Vault restore failed'));
@@ -467,6 +470,7 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
       });
     } finally { db.close(); }
   } else if (isNonBrowserTestRuntime()) {
+    memoryVault.clear();
     validated.forEach((row) => memoryVault.set(row.id, row));
   } else {
     throw new Error('بازیابی پایدار اسناد در این مرورگر در دسترس نیست.');
