@@ -5166,7 +5166,18 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             v.status === 'permanent' &&
             v.ownerId === ownerId
         );
-        if (localMatch) return localMatch;
+        if (localMatch) {
+          if (
+            !Number.isSafeInteger(localMatch.voucherNumber) ||
+            !Number.isSafeInteger(localMatch.totalDebit) ||
+            localMatch.totalDebit <= 0 ||
+            localMatch.totalDebit !== localMatch.totalCredit ||
+            !Array.isArray(localMatch.lines)
+          ) {
+            throw new Error(`سند ${voucherType} پایان سال محلی ناقص یا نامتوازن است؛ عملیات متوقف شد.`);
+          }
+          return localMatch;
+        }
         if (!user) return null;
         const snapshot = await getDoc(doc(db, 'vouchers', voucherId));
         if (!snapshot.exists()) return null;
