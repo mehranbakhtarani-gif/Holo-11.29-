@@ -1975,6 +1975,40 @@ export interface AtomicInvoicePlanResult {
  * correlated records (Inventory updates, sealed Accounting Voucher, Sayadi Cheque, Invoice)
  * BEFORE any storage write executes — guaranteeing strict all-or-nothing atomicity.
  */
+/**
+ * Returns the still-unreturned portion of a sale's original FIFO allocations.
+ * Partial returns consume the last-issued layers first; later returns must continue
+ * from the remaining allocation rather than restoring the same layer twice.
+ */
+export function getUnreturnedConsumedCostLayers(
+  originalLayers: ConsumedCostLayerAllocation[],
+  previouslyReturnedQty: number
+): ConsumedCostLayerAllocation[] {
+  const remainingLayers = originalLayers.map((layer) => ({ ...layer }));
+  let qtyToRelease = roundQty(Number(previouslyReturnedQty) || 0);
+  const totalQty = roundQty(remainingLayers.reduce((sum, layer) => sum + roundQty(Number(layer.qty) || 0), 0));
+  if (qtyToRelease < 0 || qtyToRelease > totalQty + 0.00005) {
+    throw new Error('مقدار برگشت‌های قبلی از تخصیص لایه‌های فروش اصلی بیشتر است؛ برگشت جدید متوقف شد.');
+  }
+  for (let index = remainingLayers.length - 1; index >= 0 && qtyToRelease > 0.00005; index -= 1) {
+    const layer = remainingLayers[index];
+    const layerQty = roundQty(Number(layer.qty) || 0);
+    if (layerQty <= 0.00005) continue;
+    const qtyToRemove = roundQty(Math.min(layerQty, qtyToRelease));
+    const layerCost = Math.max(0, Math.round(Number(layer.totalCostIrr) || 0));
+    const costToRemove = qtyToRemove >= layerQty - 0.00005
+      ? layerCost
+      : Math.round((layerCost * qtyToRemove) / layerQty);
+    layer.qty = roundQty(layerQty - qtyToRemove);
+    layer.totalCostIrr = Math.max(0, layerCost - costToRemove);
+    qtyToRelease = roundQty(Math.max(0, qtyToRelease - qtyToRemove));
+  }
+  if (qtyToRelease > 0.00005) {
+    throw new Error('تخصیص لایه‌های مصرف‌شده برای برگشت‌های قبلی کامل نیست؛ برگشت جدید متوقف شد.');
+  }
+  return remainingLayers.filter((layer) => layer.qty > 0.00005);
+}
+
 export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicInvoicePlanResult {
   const {
     invoiceId,
@@ -2173,32 +2207,10 @@ export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicIn
           .flatMap((invoice) => invoice.items)
           .filter((item) => item.productId === pid)
           .reduce((sum, item) => sum + roundQty(Number(item.quantity) || 0), 0);
-        let qtyToReleaseFromOriginalLayers = roundQty(previouslyReturnedQty);
-        const totalOriginalLayerQty = roundQty(
-          remainingOriginalConsumedLayers.reduce((sum, layer) => sum + roundQty(Number(layer.qty) || 0), 0)
+        remainingOriginalConsumedLayers = getUnreturnedConsumedCostLayers(
+          origSaleItem.consumedLayers,
+          previouslyReturnedQty
         );
-        if (qtyToReleaseFromOriginalLayers > totalOriginalLayerQty + 0.00005) {
-          throw new Error('مقدار برگشت‌های قبلی از تخصیص لایه‌های فروش اصلی بیشتر است؛ برگشت جدید متوقف شد.');
-        }
-        // Earlier partial returns restore the last-consumed FIFO layers first.
-        // Remove those quantities/costs before calculating this return, otherwise
-        // each partial return would repeatedly restore the same expensive layers.
-        for (let layerIndex = remainingOriginalConsumedLayers.length - 1;
-          layerIndex >= 0 && qtyToReleaseFromOriginalLayers > 0.00005;
-          layerIndex -= 1) {
-          const layer = remainingOriginalConsumedLayers[layerIndex];
-          const layerQty = roundQty(Number(layer.qty) || 0);
-          if (layerQty <= 0.00005) continue;
-          const qtyToRemove = roundQty(Math.min(layerQty, qtyToReleaseFromOriginalLayers));
-          const layerCost = Math.max(0, Math.round(Number(layer.totalCostIrr) || 0));
-          const costToRemove = qtyToRemove >= layerQty - 0.00005
-            ? layerCost
-            : Math.round((layerCost * qtyToRemove) / layerQty);
-          layer.qty = roundQty(layerQty - qtyToRemove);
-          layer.totalCostIrr = Math.max(0, layerCost - costToRemove);
-          qtyToReleaseFromOriginalLayers = roundQty(Math.max(0, qtyToReleaseFromOriginalLayers - qtyToRemove));
-        }
-        remainingOriginalConsumedLayers = remainingOriginalConsumedLayers.filter((layer) => layer.qty > 0.00005);
       }
       const explicitItemUnitCost =
         payload.invoiceType === 'sale_return'
