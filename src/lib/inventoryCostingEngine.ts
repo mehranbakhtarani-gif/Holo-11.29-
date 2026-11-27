@@ -695,6 +695,27 @@ export function recalculateInventoryLedger(input: {
       return (a.sequence ?? 0) - (b.sequence ?? 0);
     });
 
+  // Enforce cumulative sale-return limits for every costing method, not only invoice UI flows.
+  // This protects direct ledger rebuilds/imports from returning more than the referenced sale.
+  const soldQtyByRef = new Map<string, number>();
+  const returnedQtyByRef = new Map<string, number>();
+  for (const movement of sorted) {
+    if (movement.kind === 'sale') {
+      soldQtyByRef.set(movement.id, roundQty((soldQtyByRef.get(movement.id) || 0) + movement.qty));
+      continue;
+    }
+    if (movement.kind !== 'sale_return' || !movement.sourceRefId) continue;
+    const soldQty = soldQtyByRef.get(movement.sourceRefId);
+    if (soldQty === undefined) {
+      throw new Error('سند فروش مرجع برای برگشت فروش در دفتر موجودی یافت نشد.');
+    }
+    const returnedQty = roundQty((returnedQtyByRef.get(movement.sourceRefId) || 0) + movement.qty);
+    if (returnedQty > soldQty + 0.00005) {
+      throw new Error('مجموع برگشت فروش (' + roundQty2(returnedQty) + ') از مقدار فروش مرجع (' + roundQty2(soldQty) + ') بیشتر است.');
+    }
+    returnedQtyByRef.set(movement.sourceRefId, returnedQty);
+  }
+
   // -------- PERIODIC WEIGHTED AVERAGE MODE --------
   if (costingMethod === 'periodic_average') {
     let availableQty = roundQty(openingQty);
