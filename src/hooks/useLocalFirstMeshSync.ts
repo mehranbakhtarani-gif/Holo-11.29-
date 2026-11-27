@@ -547,6 +547,9 @@ export function useLocalFirstMeshSync() {
             }
           }
 
+          // Do not advance clocks or import peer state if recovery began during merge work.
+          if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return [];
+
           // 3) Advance vector clock deterministically
           const nextClock: Record<string, number> = { ...vectorClockRef.current };
           for (const [k, v] of Object.entries(remoteClock || {})) {
@@ -560,6 +563,7 @@ export function useLocalFirstMeshSync() {
           saveVectorClock(nextClock);
 
           if (anyChanged) {
+            if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return [];
             // Anti-loop guard: suppress local mutation echo during remote import
             isRemoteUpdateRef.current = true;
             try {
