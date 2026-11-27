@@ -1,5 +1,5 @@
 import type { CloudBackupMeta } from './firebaseCloudBackup';
-import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope, type EncryptedBackupEnvelope } from './offlineFirstCore';
+import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
 import { requireBackupSessionPassphrase } from './backupSession';
 import {
   buildStandaloneLocalDiagnostics,
@@ -935,11 +935,13 @@ export async function pushSnapshotToSupabase(params: {
       ok: true,
       data,
     };
-  } catch {
+  } catch (err) {
     return {
       ok: false,
-      error: 'عدم دسترسی به سرور Supabase (تغییرات در صف آفلاین ذخیره ماند).',
-      code: 'NETWORK_ERROR',
+      error: err instanceof Error && err.message.includes('قفل پشتیبان')
+        ? err.message
+        : 'عدم دسترسی به سرور Supabase (تغییرات در صف آفلاین ذخیره ماند).',
+      code: err instanceof Error && err.message.includes('قفل پشتیبان') ? 'BACKUP_LOCKED' : 'NETWORK_ERROR',
     };
   }
 }
