@@ -1257,12 +1257,14 @@ export function useLocalFirstMeshSync() {
   }, [isOnline, regrantFolderPermission, refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const clearSyncedOutbox = useCallback(async () => {
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
     await clearSyncedDexieOutboxItems();
     await refreshOutboxAndLogs();
     showToast('آیتم‌های تحویل‌شده از صف آفلاین پاکسازی شدند.');
   }, [refreshOutboxAndLogs, showToast]);
 
   const clearAllOutbox = useCallback(async () => {
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
     await clearAllDexieOutboxItems();
     await refreshOutboxAndLogs();
     showToast('تمام صف محلی sync_outbox پاکسازی شد.');
