@@ -11,6 +11,7 @@ import {
   runLiveServerAndSupabaseTest,
   saveSupabaseAutoBackupEnabled,
 } from '../src/lib/dualCloudSync';
+import { unlockBackupSession, lockBackupSession } from '../src/lib/backupSession';
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -155,6 +156,7 @@ async function run() {
       const deleted = await deleteSupabaseBackup(null, 'sbw_test__bak__12345678');
       assert.equal(deleted.ok, true);
 
+      unlockBackupSession('supabase-test-passphrase');
       const sync = await pushSnapshotToSupabase({
         idToken: null,
         deviceId: 'dev_test',
@@ -171,6 +173,7 @@ async function run() {
       assert.equal(sync.ok, true);
       assert.equal(sync.data?.serverRevision, 6);
     } finally {
+      lockBackupSession();
       globalThis.fetch = origFetch;
     }
   });
