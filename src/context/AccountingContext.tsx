@@ -3908,16 +3908,33 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } else {
         if (user) {
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            throw new Error('ابطال پیش‌فاکتور در فضای ابری به کنترل نسخه Firestore نیاز دارد؛ در حالت آفلاین هیچ تغییری اعمال نشد. پس از اتصال مجدد دوباره تلاش کنید.');
+          }
           try {
-            await updateDoc(doc(db, 'invoices', invoiceId), {
-              status: 'cancelled',
-              _version: (inv._version ?? 1) + 1,
-              updatedByDevice: deviceId.slice(0, 64),
-              updatedAt: serverTimestamp(),
+            const invoiceRef = doc(db, 'invoices', invoiceId);
+            const outcome = await runTransaction(db, async (tx) => {
+              const liveSnapshot = await tx.get(invoiceRef);
+              if (!liveSnapshot.exists() || liveSnapshot.data().status === 'cancelled') return 'already-cancelled' as const;
+              const liveVersion = Number(liveSnapshot.data()._version) || 1;
+              if (liveVersion !== (inv._version ?? 1)) {
+                throw new Error('نسخه پیش‌فاکتور هم‌زمان در دستگاه دیگری تغییر کرده است؛ اطلاعات را تازه‌سازی و دوباره ابطال کنید.');
+              }
+              tx.update(invoiceRef, {
+                status: 'cancelled',
+                _version: liveVersion + 1,
+                updatedByDevice: deviceId.slice(0, 64),
+                updatedAt: serverTimestamp(),
+              });
+              return 'cancelled' as const;
             });
+            if (outcome === 'already-cancelled') {
+              showToast('این پیش‌فاکتور قبلاً توسط دستگاه دیگری ابطال شده است.');
+              return;
+            }
           } catch (err) {
             handleFirestoreError(err, OperationType.UPDATE, `invoices/${invoiceId}`);
-            return;
+            throw err;
           }
         } else {
           const cancelledProforma: Invoice = {
