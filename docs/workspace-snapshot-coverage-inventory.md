@@ -137,3 +137,7 @@ Remaining controls before phase-4 exit:
 - Include attachment envelopes in the unified encrypted workspace backup/export/restore contract; the separate Document Vault database is not yet covered by the operational workspace shadow.
 - Evaluate whether attachment metadata (file names, entity labels, notes, uploader identity) needs field-level encryption; these fields remain queryable in plaintext to support listing and RBAC.
 - Document shared passphrase/key recovery requirements across devices. A device that lacks the passphrase cannot decrypt attachment content.
+
+The Document Vault now exposes a validated encrypted attachment bundle export/restore API. Export refuses to include any legacy plaintext row and authenticates every encrypted payload before returning the bundle. Restore validates the entire bundle (metadata allowlists, size limits, envelope authentication, MIME agreement, and SHA-256) before writing; IndexedDB restore uses one read-write transaction. The bundle format is `holoo-apex-encrypted-document-vault` schema 1.
+
+This is a secure attachment-level backup primitive, not yet the unified workspace backup integration. Existing `exportBackupJson` and cloud-sync payloads remain separate; callers must not claim that a general workspace backup contains Document Vault files until those flows explicitly compose this bundle.
