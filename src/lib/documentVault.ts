@@ -214,12 +214,15 @@ export async function saveDocumentAttachment(params: {
   if (!params.entityId.trim()) {
     return { ok: false, error: 'شناسه سند یا عملیات مرتبط الزامی است.' };
   }
-  if (getBase64DataUrlByteLength(params.dataUrl, mime) === null) {
-    return { ok: false, error: 'قالب محتوای فایل معتبر نیست.' };
+  const actualBytes = getBase64DataUrlByteLength(params.dataUrl, mime);
+  if (actualBytes === null) {
+    return { ok: false, error: 'قالب Base64 یا محتوای فایل معتبر نیست.' };
   }
-
-  const estimatedBytes =
-    params.sizeBytes ?? Math.round((params.dataUrl.length * 3) / 4);
+  if (params.sizeBytes !== undefined &&
+      (!Number.isSafeInteger(params.sizeBytes) || params.sizeBytes !== actualBytes)) {
+    return { ok: false, error: 'اندازه اعلام‌شده فایل با محتوای واقعی پیوست مطابقت ندارد.' };
+  }
+  const estimatedBytes = actualBytes;
   if (estimatedBytes <= 0 || estimatedBytes > MAX_ATTACHMENT_BYTES) {
     return {
       ok: false,
