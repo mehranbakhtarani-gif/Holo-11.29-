@@ -51,9 +51,11 @@ import { SystemResetCenter } from './SystemResetCenter';
 import { useInvoiceSettings } from '../lib/invoiceSettings';
 import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
-import { exportEncryptedDocumentAttachmentBundle, restoreEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
-import { decryptAndVerifyBackupEnvelope, encryptBackupEnvelope } from '../lib/offlineFirstCore';
+import { exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
+import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
 import { requireBackupSessionPassphrase } from '../lib/backupSession';
+import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
+import { getActiveOperationalRestoreJournal, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -127,6 +129,35 @@ export const SettingsView: React.FC<{
     operationalDbStats,
     showToast,
   } = useAccounting();
+
+  const [pendingRestoreJournal, setPendingRestoreJournal] = useState<OperationalRestoreJournalRecord | null>(null);
+  const [restoreJournalReadError, setRestoreJournalReadError] = useState<string | null>(null);
+  const [restoreResumeBusy, setRestoreResumeBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getActiveOperationalRestoreJournal()
+      .then((journal) => { if (active) { setPendingRestoreJournal(journal); setRestoreJournalReadError(null); } })
+      .catch((error) => { if (active) setRestoreJournalReadError(error instanceof Error ? error.message : 'وضعیت بازیابی قابل بررسی نیست.'); });
+    return () => { active = false; };
+  }, []);
+
+  const handleResumeInterruptedRestore = async () => {
+    if (!backupSessionUnlocked || restoreResumeBusy) return;
+    setRestoreResumeBusy(true);
+    try {
+      const result = await resumePendingCompleteBackupRestore();
+      if (result) showToast(`بازیابی ناتمام تکمیل شد: ${result.restoredWorkspaceRecords} رکورد و ${result.restoredAttachments} پیوست.`);
+      else showToast('مرحلهٔ staging ناقص و بدون تغییر داده‌های اصلی پاک‌سازی شد.', 'warning');
+      window.location.reload();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ادامه بازیابی ناموفق بود؛ داده‌ها قفل باقی می‌مانند.', 'error');
+      const journal = await getActiveOperationalRestoreJournal().catch(() => null);
+      setPendingRestoreJournal(journal);
+    } finally {
+      setRestoreResumeBusy(false);
+    }
+  };
 
   const [profilePhotoBusy, setProfilePhotoBusy] = useState(false);
   const profilePhotoInputRef = useRef<HTMLInputElement | null>(null);
@@ -520,71 +551,46 @@ export const SettingsView: React.FC<{
       if (typeof reader.result !== 'string') return;
       try {
         const parsed = JSON.parse(reader.result) as Record<string, unknown>;
-        if (parsed.format === 'holoo-apex-complete-backup' &&
-            (parsed.schemaVersion === 1 || parsed.schemaVersion === 2)) {
+        if (parsed.format === 'holoo-apex-complete-backup' && parsed.schemaVersion === 2) {
           if (!backupSessionUnlocked) {
             showToast('برای بازیابی بسته یکپارچه ابتدا قفل پشتیبان را با همان رمز باز کنید.', 'error');
             return;
           }
-          if (!parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
-            showToast('بخش پیوست‌های بسته پشتیبان وجود ندارد یا معتبر نیست.', 'error');
-            return;
-          }
-
-          let workspaceJson: string;
-          if (parsed.schemaVersion === 2) {
-            if (!parsed.workspaceEnvelope || typeof parsed.workspaceEnvelope !== 'object') {
-              showToast('پاکت رمزگذاری‌شده اطلاعات حسابداری در بسته وجود ندارد.', 'error');
-              return;
-            }
-            const verified = await decryptAndVerifyBackupEnvelope(
-              JSON.stringify(parsed.workspaceEnvelope),
-              requireBackupSessionPassphrase()
-            );
-            if (!verified.ok || !verified.snapshotJson) {
-              throw new Error(verified.error || 'رمزگشایی اطلاعات حسابداری ناموفق بود.');
-            }
-            workspaceJson = verified.snapshotJson;
-          } else {
-            if (!parsed.workspace || typeof parsed.workspace !== 'object') {
-              showToast('اطلاعات حسابداری بسته قدیمی معتبر نیست.', 'error');
-              return;
-            }
-            const legacyAccepted = window.confirm(
-              'این بسته نسخه قدیمی است و اطلاعات حسابداری آن رمزگذاری نشده است. فقط در صورت اعتماد به فایل و پذیرش این محدودیت ادامه دهید.'
-            );
-            if (!legacyAccepted) return;
-            workspaceJson = JSON.stringify(parsed.workspace);
-          }
-
-          const workspace = JSON.parse(workspaceJson) as Record<string, unknown>;
-          if (!Array.isArray(workspace.accounts) || !Array.isArray(workspace.vouchers) ||
-              !(workspace.accounts as unknown[]).some((account) =>
-                !!account && typeof account === 'object' &&
-                typeof (account as Record<string, unknown>).code === 'string' &&
-                typeof (account as Record<string, unknown>).title === 'string'
-              )) {
-            showToast('ساختار اطلاعات حسابداری در بسته معتبر نیست.', 'error');
-            return;
-          }
           const proceed = window.confirm(
-            'بازیابی پیوست‌ها و اطلاعات حسابداری در دو مخزن مستقل انجام می‌شود و هنوز تراکنش اتمیک بین آن‌ها وجود ندارد. اگر مرحله دوم شکست بخورد، ممکن است بازیابی ناقص بماند. آیا ادامه می‌دهید؟'
+            'بازیابی مقاوم در برابر قطع برنامه آغاز می‌شود. اطلاعات حسابداری و پیوست‌ها در دو پایگاه مستقل، با ژورنال پایدار و امکان ادامه پس از راه‌اندازی مجدد اعمال می‌شوند. آیا ادامه می‌دهید؟'
           );
           if (!proceed) return;
-          // Attachment restore validates the full bundle before its single IndexedDB transaction.
-          // Workspace import follows afterward; cross-store rollback is not yet atomic.
-          const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(
-            JSON.stringify(parsed.documentAttachments)
-          );
-          const workspaceImported = importBackupJson(workspaceJson);
-          if (!workspaceImported) {
-            showToast(`پیوست‌ها بازیابی شدند (${attachmentResult.restored})، اما ورود اطلاعات حسابداری کامل نشد؛ وضعیت را بررسی کنید.`, 'error');
-            return;
-          }
-          showToast(`بسته بازیابی شد: اطلاعات حسابداری و ${attachmentResult.restored} پیوست.`);
+          const result = await restoreCompleteBackupPackage(reader.result);
+          showToast(`بسته با موفقیت بازیابی شد: ${result.restoredWorkspaceRecords} رکورد و ${result.restoredAttachments} پیوست.`);
+          window.location.reload();
           return;
         }
-        // Backward compatibility: older workspace-only JSON backups remain importable.
+        if (parsed.format === 'holoo-apex-complete-backup' && parsed.schemaVersion === 1) {
+          if (!backupSessionUnlocked) {
+            showToast('برای بازیابی بسته یکپارچه ابتدا قفل پشتیبان را با همان رمز باز کنید.', 'error');
+            return;
+          }
+          if (!parsed.workspace || typeof parsed.workspace !== 'object' ||
+              !parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
+            showToast('ساختار بسته قدیمی معتبر نیست.', 'error');
+            return;
+          }
+          const legacyAccepted = window.confirm(
+            'این بسته نسخه قدیمی است و اطلاعات حسابداری آن رمزگذاری نشده است. بازیابی قدیمی تراکنش یکپارچه و بازیابی خودکار ندارد. فقط در صورت اعتماد به فایل ادامه دهید.'
+          );
+          if (!legacyAccepted) return;
+          showToast('بازیابی نسخه قدیمی در مسیر سازگاری انجام می‌شود؛ این مسیر تضمین بازیابی پس از crash ندارد.', 'warning');
+          const { restoreEncryptedDocumentAttachmentBundle } = await import('../lib/documentVault');
+          const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(JSON.stringify(parsed.documentAttachments));
+          const workspaceImported = importBackupJson(JSON.stringify(parsed.workspace));
+          if (!workspaceImported) {
+            showToast(`پیوست‌ها بازیابی شدند (${attachmentResult.restored})، اما ورود اطلاعات حسابداری کامل نشد.`, 'error');
+            return;
+          }
+          showToast(`بسته قدیمی بازیابی شد: ${attachmentResult.restored} پیوست.`, 'warning');
+          window.location.reload();
+          return;
+        }
         const imported = importBackupJson(reader.result);
         if (imported) showToast('نسخه قدیمی پشتیبان بازیابی شد؛ پیوست‌های بایگانی در این فایل وجود ندارند.', 'warning');
       } catch (err) {
@@ -598,6 +604,23 @@ export const SettingsView: React.FC<{
 
   return (
     <div className="space-y-6 max-w-5xl">
+      {(pendingRestoreJournal || restoreJournalReadError) && (
+        <div role="alert" className="rounded-xl border border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-2">
+          <div className="font-bold text-amber-900 dark:text-amber-200">بازیابی پشتیبان ناتمام است</div>
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            {restoreJournalReadError || `وضعیت ثبت‌شده: ${pendingRestoreJournal?.state}. برای جلوگیری از تغییر داده‌های نیمه‌بازیابی‌شده، عملیات فضای کاری مسدود است.`}
+          </p>
+          <button
+            type="button"
+            disabled={!backupSessionUnlocked || restoreResumeBusy || !!restoreJournalReadError}
+            onClick={handleResumeInterruptedRestore}
+            className="rounded-lg bg-amber-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+          >
+            {restoreResumeBusy ? 'در حال ادامه بازیابی…' : 'ادامه یا پاک‌سازی امن بازیابی'}
+          </button>
+          {!backupSessionUnlocked && <p className="text-xs text-amber-800 dark:text-amber-300">ابتدا قفل پشتیبان را با همان رمز باز کنید.</p>}
+        </div>
+      )}
       <div>
         <h1 className="text-xl font-bold text-slate-900 dark:text-white">
           تنظیمات شرکتی، طراحی قالب فاکتور، پشتیبان‌گیری و نصب اپلیکیشن
