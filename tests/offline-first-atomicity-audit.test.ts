@@ -379,6 +379,8 @@ async function runTests() {
   assert.ok(saleReturnBody.includes('const liveReturns: Invoice[]'));
   assert.ok(saleReturnBody.includes('transactionExistingInvoices'));
   assert.ok(saleReturnBody.includes('returnDoc.data().ownerId === ownerId'));
+  assert.ok(saleReturnBody.includes('limit(401)'));
+  assert.ok(saleReturnBody.includes('returnsSnap.size > 400'));
   assert.match(saleReturnBody, /if \(isOfflineNow\) \{[\s\S]*assertSaleReturnRequiresAtomicCloud\(\)/);
   assert.match(saleReturnBody, /if \(isFirestoreOfflineError\(err\)\) \{[\s\S]*assertSaleReturnRequiresAtomicCloud\(\)/);
   console.log('✓ Sale returns revalidate original invoice and all prior returns inside one live Firestore transaction; offline/local paths fail closed');
