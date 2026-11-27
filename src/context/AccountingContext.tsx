@@ -2932,6 +2932,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'cheques', chequeId), payload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `cheques/${chequeId}`);
+          throw err;
         }
       } else {
         setCheques((prev) => prev.map((c) => (c.id === chequeId ? { ...c, ...patch } : c)));
