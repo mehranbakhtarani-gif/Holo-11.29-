@@ -187,6 +187,28 @@ function getBase64DataUrlByteLength(dataUrl: string, mimeType: string): number |
   return Number.isSafeInteger(bytes) && bytes > 0 && bytes <= MAX_ATTACHMENT_BYTES ? bytes : null;
 }
 
+function buildAttachmentMetadataBinding(meta: DocumentAttachmentMeta) {
+  return {
+    id: meta.id,
+    entityType: meta.entityType,
+    entityId: meta.entityId,
+    entityLabel: meta.entityLabel,
+    fileName: meta.fileName,
+    mimeType: meta.mimeType,
+    sizeBytes: meta.sizeBytes,
+    sha256: meta.sha256,
+    sensitivity: meta.sensitivity,
+    uploadedAt: meta.uploadedAt,
+    uploadedBy: meta.uploadedBy,
+    uploadedByRole: meta.uploadedByRole,
+    notes: meta.notes ?? null,
+  };
+}
+
+async function computeAttachmentMetadataSha256(meta: DocumentAttachmentMeta): Promise<string> {
+  return computeSha256Hex(JSON.stringify(buildAttachmentMetadataBinding(meta)));
+}
+
 function sanitizeFileName(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim().slice(0, 120) || 'document';
 }
@@ -255,7 +277,13 @@ export async function saveDocumentAttachment(params: {
   };
   let encryptedEnvelope: string;
   try {
-    const envelope = await encryptBackupEnvelope(JSON.stringify({ dataUrl: params.dataUrl, mimeType: mime, sha256 }), passphrase);
+    const metadataSha256 = await computeAttachmentMetadataSha256(meta);
+    const envelope = await encryptBackupEnvelope(JSON.stringify({
+      dataUrl: params.dataUrl,
+      mimeType: mime,
+      sha256,
+      metadataSha256,
+    }), passphrase);
     encryptedEnvelope = JSON.stringify(envelope);
   } catch (err) {
     return { ok: false, error: `رمزگذاری پیوست ناموفق بود؛ فایل ذخیره نشد. ${err instanceof Error ? err.message : ''}`.trim() };
