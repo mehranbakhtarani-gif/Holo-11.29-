@@ -34,6 +34,17 @@ export interface CompleteBackupRestoreResult {
   restoredWorkspaceRecords: number;
 }
 
+function announceRestoreBarrier(active: boolean): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('holoo:restore-barrier', { detail: { active } }));
+  }
+  if (typeof BroadcastChannel !== 'undefined') {
+    const channel = new BroadcastChannel('holoo-complete-restore');
+    channel.postMessage({ active });
+    channel.close();
+  }
+}
+
 function createRestoreId(): string {
   const bytes = new Uint8Array(20);
   if (!globalThis.crypto?.getRandomValues) throw new Error('مولد امن شناسه بازیابی در دسترس نیست.');
@@ -125,6 +136,7 @@ export async function restoreCompleteBackupPackage(
   let commitIntentWritten = false;
   try {
     await createOperationalRestoreJournal(journal);
+    announceRestoreBarrier(true);
     await transitionOperationalRestoreJournal(restoreId, ['staging'], 'commit_requested', {});
     commitIntentWritten = true;
     const workspaceResult = await applyOperationalRestoreJournalWorkspace(restoreId);
@@ -135,6 +147,7 @@ export async function restoreCompleteBackupPackage(
     }
     await transitionOperationalRestoreJournal(restoreId, ['workspace_applied'], 'committed', {});
     try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* committed data is authoritative; cleanup retries later */ }
+    announceRestoreBarrier(false);
     return {
       restoreId,
       restoredAttachments: attachmentResult.applied,
@@ -147,6 +160,7 @@ export async function restoreCompleteBackupPackage(
     if (!commitIntentWritten && !durableCommitIntent) {
       try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* no live data was touched */ }
       try { await discardStagingOperationalRestoreJournal(restoreId); } catch { /* journal may not have been created */ }
+      announceRestoreBarrier(false);
     } else if (durableJournal?.restoreId === restoreId) {
       await markRecoveryFailure(durableJournal, error);
     }
@@ -162,12 +176,14 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
     // Commit intent was never written; by invariant neither live database was changed.
     await discardStagedDocumentAttachmentBundle(journal.restoreId);
     await discardStagingOperationalRestoreJournal(journal.restoreId);
+    announceRestoreBarrier(false);
     return null;
   }
   if (journal.state === 'workspace_applied') {
     const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest);
     await transitionOperationalRestoreJournal(journal.restoreId, ['workspace_applied'], 'committed', {});
     try { await discardStagedDocumentAttachmentBundle(journal.restoreId); } catch { /* cleanup is retryable */ }
+    announceRestoreBarrier(false);
     return {
       restoreId: journal.restoreId,
       restoredAttachments: attachments.applied,
@@ -183,6 +199,7 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
   }
   await transitionOperationalRestoreJournal(journal.restoreId, ['workspace_applied'], 'committed', {});
   try { await discardStagedDocumentAttachmentBundle(journal.restoreId); } catch { /* cleanup is retryable */ }
+  announceRestoreBarrier(false);
   return {
     restoreId: journal.restoreId,
     restoredAttachments: attachments.applied,
