@@ -1016,6 +1016,21 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (photoData && (!photoData.startsWith('data:image/jpeg;base64,') || photoData.length > 200_000)) {
         throw new Error('تصویر باید JPEG و حداکثر ۱۵۰ کیلوبایت باشد.');
       }
+
+      // For authenticated users, persist to Firestore before reporting success.
+      // Do not leave an optimistic local photo behind if the cloud write fails.
+      if (user) {
+        try {
+          await updateDoc(doc(db, 'users', user.uid), {
+            profilePhotoData: photoData || deleteField(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+          throw err;
+        }
+      }
+
       const next = { ...profile, profilePhotoData: photoData || undefined };
       setProfile(next);
       try {
@@ -1025,17 +1040,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           else window.localStorage.removeItem(key);
         }
       } catch {
-        // Firestore remains the durable store when local storage is unavailable.
-      }
-      if (user) {
-        try {
-          await updateDoc(doc(db, 'users', user.uid), {
-            profilePhotoData: photoData || deleteField(),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
-        }
+        // The in-memory profile remains available for this session.
       }
       showToast(photoData ? 'عکس پروفایل ذخیره شد.' : 'عکس پروفایل حذف شد.');
     },
