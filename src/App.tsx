@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
 import {
   Activity,
@@ -8,6 +8,7 @@ import {
   BellOff,
   BellRing,
   Calculator,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -170,6 +171,7 @@ export default function App() {
   const {
     user,
     profile,
+    updateProfilePhoto,
     accounts,
     parties,
     cheques,
@@ -304,6 +306,49 @@ export default function App() {
   const [showChequePopover, setShowChequePopover] = useState(false);
   const [showCloudPopover, setShowCloudPopover] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAvatarFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('لطفاً یک فایل تصویری انتخاب کنید.');
+      return;
+    }
+    try {
+      const imageUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('خواندن تصویر ناموفق بود.'));
+        reader.onerror = () => reject(new Error('خواندن تصویر ناموفق بود.'));
+        reader.readAsDataURL(file);
+      });
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error('فایل تصویر معتبر نیست.'));
+        element.src = imageUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('پردازش تصویر در این مرورگر پشتیبانی نمی‌شود.');
+      const side = Math.min(image.width, image.height);
+      context.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, 256, 256);
+      let quality = 0.82;
+      let photoData = canvas.toDataURL('image/jpeg', quality);
+      while (photoData.length > 200_000 && quality > 0.45) {
+        quality -= 0.08;
+        photoData = canvas.toDataURL('image/jpeg', quality);
+      }
+      if (photoData.length > 200_000) throw new Error('حجم عکس انتخابی بیش از حد مجاز است.');
+      await updateProfilePhoto(photoData);
+      setAvatarError(false);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ذخیره عکس پروفایل ناموفق بود.');
+    }
+  }, [showToast, updateProfilePhoto]);
 
   const combinedPendingQueueCount = localMesh.pendingOutboxCount + pendingQueueCount;
 
@@ -1872,34 +1917,62 @@ export default function App() {
             <span className="hidden sm:block h-5 w-px bg-slate-200 dark:bg-white/10 mx-0.5" aria-hidden="true" />
 
             {/* User Profile Avatar & Name */}
-            <button
-              type="button"
-              onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
-              title="پروفایل کاربر و مدیریت دسترسی‌ها"
-              className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
-            >
-              {!avatarError ? (
-                <img
-                  src={financeDirectorAvatar}
-                  alt={activeOperator.fullName}
-                  referrerPolicy="no-referrer"
-                  onError={() => setAvatarError(true)}
-                  className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-white/15"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
-                  {activeOperator.fullName.slice(0, 1)}
-                </div>
-              )}
-              <div className="hidden xl:flex flex-col text-right leading-tight">
-                <span className="text-xs font-semibold text-[#0F172A] dark:text-white whitespace-nowrap">
-                  {activeOperator.fullName}
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              aria-label="انتخاب عکس پروفایل"
+              onChange={handleAvatarFileChange}
+            />
+            <div className="relative flex items-center">
+              <button
+                type="button"
+                onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
+                title="پروفایل کاربر و مدیریت دسترسی‌ها"
+                className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+              >
+                <span className="relative block w-8 h-8 shrink-0">
+                  {profile.profilePhotoData && !avatarError ? (
+                    <img
+                      src={profile.profilePhotoData}
+                      alt={`عکس پروفایل ${profile.displayName || activeOperator.fullName}`}
+                      onError={() => setAvatarError(true)}
+                      className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-white/15"
+                    />
+                  ) : !avatarError ? (
+                    <img
+                      src={financeDirectorAvatar}
+                      alt={activeOperator.fullName}
+                      referrerPolicy="no-referrer"
+                      onError={() => setAvatarError(true)}
+                      className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-white/15"
+                    />
+                  ) : (
+                    <span className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
+                      {(profile.displayName || activeOperator.fullName).slice(0, 1)}
+                    </span>
+                  )}
                 </span>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                  {RBAC_ROLE_LABELS[activeOperator.role].split('(')[0].trim()}
+                <span className="hidden xl:flex flex-col text-right leading-tight">
+                  <span className="text-xs font-semibold text-[#0F172A] dark:text-white whitespace-nowrap">
+                    {activeOperator.fullName}
+                  </span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    {RBAC_ROLE_LABELS[activeOperator.role].split('(')[0].trim()}
+                  </span>
                 </span>
-              </div>
-            </button>
+              </button>
+              <button
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+                title="انتخاب یا تغییر عکس پروفایل"
+                aria-label="تغییر عکس پروفایل"
+                className="absolute -bottom-0.5 left-0 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 dark:border-[#161B26] dark:bg-indigo-500 dark:hover:bg-indigo-400"
+              >
+                <Camera className="h-2.5 w-2.5" />
+              </button>
+            </div>
 
             {/* Logout / Cloud Sign-In Action */}
             {isCloudMode ? (
