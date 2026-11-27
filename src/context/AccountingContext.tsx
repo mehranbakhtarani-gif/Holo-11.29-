@@ -5054,7 +5054,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           ...voucherBase,
           integrityHash: computeVoucherIntegrityHash(voucherBase),
         };
-        await commitDepreciationOperationalTx({ assetUpdates, voucher: sealedVoucher });
+        const committed = await commitDepreciationOperationalTx({ assetUpdates, voucher: sealedVoucher });
+        if (!committed) {
+          throw new Error('پایگاه عملیاتی محلی در دسترس نیست؛ هیچ تغییری در دارایی‌ها یا سند استهلاک اعمال نشد.');
+        }
         const updated = new Map(assetUpdates.map((item) => [item.id, item.accumulatedDepreciation]));
         setAssets((prev) =>
           prev.map((asset) =>
