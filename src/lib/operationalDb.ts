@@ -1064,6 +1064,143 @@ export async function isInboxOperationProcessed(operationId: string): Promise<bo
 }
 
 /** Atomic Stocktaking Adjustment commit in Operational IndexedDB (products + permanent voucher) */
+/** Atomically commits a local cheque status transition and its optional ledger voucher. */
+export async function commitChequeStatusOperationalTx(
+  payload: { cheque: Cheque; voucher?: Voucher | null },
+  options?: { dbOverride?: IDBDatabase }
+): Promise<boolean> {
+  const usingOverride = Boolean(options?.dbOverride);
+  if (!usingOverride && !isIndexedDbAvailable()) return false;
+  const cheque = payload?.cheque;
+  if (
+    !cheque ||
+    typeof cheque.id !== 'string' ||
+    !cheque.id.trim() ||
+    !Number.isSafeInteger(cheque.amount) ||
+    cheque.amount <= 0 ||
+    typeof cheque.status !== 'string' ||
+    !cheque.status.trim()
+  ) {
+    throw new Error('ATOMIC_CHEQUE_INVALID: اطلاعات چک برای تغییر وضعیت معتبر نیست.');
+  }
+
+  const voucher = payload.voucher;
+  if (voucher) {
+    if (typeof voucher.id !== 'string' || !voucher.id.trim() || !Array.isArray(voucher.lines) || voucher.lines.length < 2) {
+      throw new Error('ATOMIC_CHEQUE_INVALID_VOUCHER: سند تغییر وضعیت چک معتبر نیست.');
+    }
+    let debit = 0;
+    let credit = 0;
+    for (const line of voucher.lines) {
+      if (
+        !Number.isSafeInteger(line?.debit) || Number(line.debit) < 0 ||
+        !Number.isSafeInteger(line?.credit) || Number(line.credit) < 0 ||
+        (Number(line.debit) > 0 && Number(line.credit) > 0)
+      ) {
+        throw new Error('ATOMIC_CHEQUE_INVALID_VOUCHER_LINE: ردیف سند چک نامعتبر است.');
+      }
+      debit += Number(line.debit);
+      credit += Number(line.credit);
+      if (!Number.isSafeInteger(debit) || !Number.isSafeInteger(credit)) {
+        throw new Error('ATOMIC_CHEQUE_INVALID_VOUCHER_TOTAL: جمع سند چک خارج از محدوده امن است.');
+      }
+    }
+    if (debit <= 0 || debit !== credit) {
+      throw new Error('ATOMIC_CHEQUE_UNBALANCED_VOUCHER: سند تغییر وضعیت چک تراز نیست.');
+    }
+  }
+
+  const db = options?.dbOverride ?? (await openOperationalDb());
+  const committedAt = new Date().toISOString();
+  const closeIfOwned = () => {
+    if (!usingOverride) {
+      try { db.close(); } catch { /* ignore close errors */ }
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    let tx: IDBTransaction | null = null;
+    let settled = false;
+    const abortAndReject = (error: unknown) => {
+      if (tx) {
+        try { tx.abort(); } catch { /* ignore abort race */ }
+      }
+      if (!settled) {
+        settled = true;
+        closeIfOwned();
+        reject(error instanceof Error ? error : new Error(String(error || 'Atomic cheque transition rollback')));
+      }
+    };
+
+    try {
+      tx = db.transaction(['meta', 'cheques', 'vouchers'], 'readwrite');
+      const chequeReq = tx.objectStore('cheques').put(cheque);
+      chequeReq.onerror = () => abortAndReject(chequeReq.error ?? new Error('Cheque status write failed'));
+      if (voucher) {
+        const voucherReq = tx.objectStore('vouchers').put(voucher);
+        voucherReq.onerror = () => abortAndReject(voucherReq.error ?? new Error('Cheque transition voucher write failed'));
+      }
+
+      const metaStore = tx.objectStore('meta');
+      const revisionReq = metaStore.get('workspace_meta');
+      revisionReq.onsuccess = () => {
+        try {
+          const existing = revisionReq.result as { localRevision?: number } | undefined;
+          const revision = Number(existing?.localRevision ?? 0);
+          if (!Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER) {
+            throw new Error('ATOMIC_CHEQUE_INVALID_REVISION: شماره بازبینی فضای کاری معتبر نیست.');
+          }
+          const metaReq = metaStore.put({
+            key: 'workspace_meta',
+            localRevision: revision + 1,
+            updatedAt: committedAt,
+            schemaVersion: OP_DB_VERSION,
+          });
+          metaReq.onerror = () => abortAndReject(metaReq.error ?? new Error('Cheque transition revision write failed'));
+        } catch (error) {
+          abortAndReject(error);
+        }
+      };
+      revisionReq.onerror = () => abortAndReject(revisionReq.error ?? new Error('Cheque transition revision read failed'));
+
+      tx.oncomplete = () => {
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          resolve(true);
+        }
+      };
+      tx.onerror = () => {
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic cheque transition commit failed'));
+        }
+      };
+      tx.onabort = () => {
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic cheque transition aborted'));
+        }
+      };
+    } catch (error) {
+      resetOperationalDiffCache();
+      if (tx) {
+        try { tx.abort(); } catch { /* ignore abort race */ }
+      }
+      closeIfOwned();
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    }
+  });
+}
+
 export async function commitStockAdjustmentOperationalTx(
   payload: {
     updatedProducts: Product[];
