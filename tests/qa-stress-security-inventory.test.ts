@@ -19,7 +19,7 @@ import {
   RBAC_ROLE_PRESETS,
 } from '../src/lib/enterpriseAccounting';
 import { allocateProportionalIrr, mulQtyByIrr, percentOfIrr } from '../src/lib/moneyMath';
-import { applyInventoryMovementStep } from '../src/lib/inventoryCostingEngine';
+import { applyInventoryMovementStep, recalculateInventoryLedger } from '../src/lib/inventoryCostingEngine';
 import { auditPendingApprovalItems } from '../src/lib/smartAutomationEngine';
 import { fuzzyFilterAndRank } from '../src/lib/fuzzySearch';
 import {
@@ -43,6 +43,30 @@ function logPass(name: string, detail?: string) {
 }
 
 console.log('Running QA Stress, Inventory Integration, Accounting Math & Security Suite...');
+/* ============================================================================
+ * INVENTORY LEDGER CUMULATIVE SALE-RETURN GUARD
+ * ========================================================================== */
+{
+  for (const costingMethod of ['fifo', 'moving_average', 'periodic_average'] as const) {
+    assert.throws(
+      () => recalculateInventoryLedger({
+        productId: 'return-guard-product',
+        costingMethod,
+        openingQty: 10,
+        openingValueIrr: 1_000,
+        movements: [
+          { id: 'sale-guard-1', date: '1405/01/02', kind: 'sale', productId: 'return-guard-product', qty: 5 },
+          { id: 'return-guard-1', date: '1405/01/03', kind: 'sale_return', productId: 'return-guard-product', qty: 3, sourceRefId: 'sale-guard-1' },
+          { id: 'return-guard-2', date: '1405/01/04', kind: 'sale_return', productId: 'return-guard-product', qty: 3, sourceRefId: 'sale-guard-1' },
+        ],
+      }),
+      /مجموع برگشت فروش/,
+      costingMethod + ' must reject cumulative returns exceeding the source sale'
+    );
+  }
+  logPass('Inventory ledger cumulative sale-return guard', 'FIFO, moving average and periodic average all reject over-returns');
+}
+
 
 /* ============================================================================
  * SALE RETURN CUMULATIVE QUANTITY GUARD
