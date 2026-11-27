@@ -1899,6 +1899,13 @@ export async function savePreUpdateSafetyBackup(
   ) {
     throw new Error('نسخه پشتیبان پیش از به‌روزرسانی باید پاکت AES-256-GCM معتبر داشته باشد.');
   }
+  const verifiedEnvelope = await decryptAndVerifyBackupEnvelope(
+    rec.envelopeJson,
+    requireBackupSessionPassphrase()
+  );
+  if (!verifiedEnvelope.ok) {
+    throw new Error('نسخه پشتیبان پیش از به‌روزرسانی از نظر رمزنگاری یا یکپارچگی معتبر نیست.');
+  }
   const db = await openOperationalDb();
   try {
     await new Promise<void>((resolve, reject) => {
