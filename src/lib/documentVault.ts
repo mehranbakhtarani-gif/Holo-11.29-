@@ -617,7 +617,7 @@ export async function stageEncryptedDocumentAttachmentBundle(
     let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
     try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
     catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
-    if (typeof payload.dataUrl !== 'string' || !payload.dataUrl.toLowerCase().startsWith(`data:${candidate.mimeType};base64,`) ||
+    if (typeof payload.dataUrl !== 'string' || getBase64DataUrlByteLength(payload.dataUrl, candidate.mimeType) === null ||
         payload.mimeType !== candidate.mimeType || payload.sha256 !== candidate.sha256 ||
         await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
       throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
