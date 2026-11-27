@@ -422,6 +422,16 @@ async function runTests() {
     /commitDepreciationOperationalTx/,
     'offline depreciation must use one IndexedDB transaction for asset balances and the permanent voucher'
   );
+  const cloudDepreciationIdx = accountingCtxSrc.indexOf('const postDepreciationVoucher');
+  const cloudDepreciationEnd = accountingCtxSrc.indexOf('const postMonthlyPayrollVoucher', cloudDepreciationIdx);
+  const cloudDepreciationBody = accountingCtxSrc.slice(cloudDepreciationIdx, cloudDepreciationEnd);
+  assert.match(cloudDepreciationBody, /live\.ownerId !== ownerId/);
+  assert.match(cloudDepreciationBody, /Number\.isSafeInteger\(liveAsset\.purchaseCost\)/);
+  assert.match(cloudDepreciationBody, /Number\.isSafeInteger\(liveAsset\.accumulatedDepreciation\)/);
+  assert.match(cloudDepreciationBody, /Number\.isSafeInteger\(dep\)/);
+  assert.match(cloudDepreciationBody, /Number\.isSafeInteger\(totalDep\)/);
+  console.log('✓ 1b. Cloud depreciation validates asset ownership and safe integer accounting amounts');
+
   const yearEndIdx = accountingCtxSrc.indexOf('const runYearEndClosing = useCallback');
   const yearEndEnd = accountingCtxSrc.indexOf('// ---------------- MULTI-CURRENCY & DAILY EXCHANGE RATES', yearEndIdx);
   assert.ok(yearEndIdx !== -1 && yearEndEnd > yearEndIdx);
