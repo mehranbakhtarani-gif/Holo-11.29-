@@ -86,6 +86,7 @@ export interface CompanyProfile {
   uid: string;
   displayName: string;
   email?: string;
+  profilePhotoData?: string;
   companyName: string;
   economicCode?: string;
   nationalId?: string;

@@ -55,7 +55,7 @@ service cloud.firestore {
     // --- Entity Validation Blueprints (Anti-Update-Gap) ---
     function isValidUserProfile(data) {
       return data.keys().hasAll(['uid', 'displayName', 'companyName', 'fiscalYear', 'currencyUnit', 'role', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'profilePhotoData', 'role', 'createdAt', 'updatedAt'])
         && data.uid == request.auth.uid
         && isValidId(data.uid)
         && isNonEmptyString(data.displayName, 120)
@@ -65,6 +65,7 @@ service cloud.firestore {
         && isOptionalString(data, 'nationalId', 32)
         && isNonEmptyString(data.fiscalYear, 16)
         && data.currencyUnit in ['IRR', 'IRT']
+        && isOptionalString(data, 'profilePhotoData', 200000)
         && data.role == 'accountant'
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
