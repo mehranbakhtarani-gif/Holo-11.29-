@@ -2,11 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
 import { useAccounting } from '../context/AccountingContext';
 import { formatMoney, getTodayShamsi, toPersianDigits } from '../lib/format';
-import {
-  buildLocalFxResponseFromRates,
-  detectOptionalBackendServer,
-  isJsonHttpResponse,
-} from '../lib/staticRuntimeGuard';
+import { buildLocalFxResponseFromRates, isJsonHttpResponse } from '../lib/staticRuntimeGuard';
 import { ActiveModule } from '../types/accounting';
 
 interface LiveFxItem {
@@ -32,6 +28,7 @@ interface LiveFxResponse {
 }
 
 const DISPLAY_ORDER: ('USD' | 'CNY' | 'AED' | 'EUR')[] = ['USD', 'CNY', 'AED', 'EUR'];
+const LIVE_FX_API_BASE_URL = 'https://holoo-apex-api.mehranbakhtarani.workers.dev';
 const CACHED_FX_STORAGE_KEY = 'holoo_apex_cached_live_fx_v1';
 
 interface CachedLiveFxPayload extends LiveFxResponse {
@@ -78,9 +75,7 @@ export const LiveFxTickerCard: React.FC<{
   const fetchRates = useCallback(async (force = false) => {
     const cached = loadCachedFx();
     const localFallback = cached || buildLocalFxResponseFromRates(exchangeRates);
-    const hasBackend = await detectOptionalBackendServer();
-
-    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !hasBackend) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setData(localFallback);
       setIsOfflineFallback(true);
       setError(null);
@@ -92,7 +87,9 @@ export const LiveFxTickerCard: React.FC<{
     try {
       if (force) setRefreshing(true);
       setError(null);
-      const res = await fetch(force ? '/api/live-fx?refresh=1' : '/api/live-fx');
+      const endpoint = new URL('/api/live-fx', LIVE_FX_API_BASE_URL);
+      if (force) endpoint.searchParams.set('refresh', '1');
+      const res = await fetch(endpoint.toString(), { method: 'GET', cache: force ? 'no-store' : 'default' });
       if (!res.ok || !isJsonHttpResponse(res)) throw new Error('دریافت نرخ زنده ناموفق بود.');
       const json = (await res.json()) as LiveFxResponse;
       if (Array.isArray(json.items) && json.items.length > 0) {
