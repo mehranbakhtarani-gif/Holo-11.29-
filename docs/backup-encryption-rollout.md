@@ -55,3 +55,21 @@ Choose the key lifecycle:
 - **Platform-protected device key:** enables unattended backups on a supported device, but requires platform-specific secure storage and a separate recovery plan.
 
 Do not store a passphrase or encryption key in localStorage, ordinary IndexedDB, Firestore, or source code.
+
+## Implementation progress (2026-11-27)
+
+- Local backup snapshots written through `saveLocalSnapshot` are now persisted as AES-256-GCM envelopes. The passphrase is required from the in-memory backup session vault; it is not persisted.
+- Legacy plaintext close snapshots are no longer promoted into IndexedDB. They remain read-only restore/migration inputs.
+- The synchronous page-unload path no longer writes plaintext. It intentionally leaves the last completed encrypted checkpoint untouched.
+- Firebase cloud backup writes now store an encrypted envelope string, and Firestore rules reject new plaintext snapshot-map documents.
+- Supabase workspace sync now encrypts snapshots in the client before transmission. The server validates the encrypted envelope wrapper and only adds synchronization metadata outside the ciphertext. Client restore and conflict paths decrypt before importing or comparing.
+- Cloud backup and restore entry points are gated on the session vault being unlocked.
+
+## Remaining security gates
+
+- Operational IndexedDB entity stores (accounts, vouchers, invoices, products, parties, cheques, audit logs, and sync records) are still plaintext. Encrypting these stores requires a coordinated schema migration and changes to every atomic transaction/read path; it is not safe to claim at-rest protection for the operational database yet.
+- Legacy plaintext Firebase/Supabase/local backups remain readable for migration/restore compatibility. New writes are encrypted; legacy data must not be treated as encrypted.
+- Supabase rows created by older releases remain plaintext until explicitly migrated or replaced by new encrypted snapshots.
+- Firestore documents are capped conservatively at 900 KiB for encrypted envelopes. Supabase payloads currently retain the existing API size ceiling; large encrypted backups still need a chunked/object-storage design.
+- The app must be tested with the same passphrase across devices. Losing the passphrase means encrypted backups cannot be recovered.
+- Automated verification must pass after the latest changes before this rollout can be considered validated.
