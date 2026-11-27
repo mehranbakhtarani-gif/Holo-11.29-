@@ -177,6 +177,9 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   const versionRef = useRef(1);
   const cloudWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeCloudUidRef = useRef<string | null>(isCloudMode ? user?.uid ?? null : null);
+  const pendingCloudMutationsRef = useRef(0);
+  activeCloudUidRef.current = isCloudMode ? user?.uid ?? null : null;
   const hasPresenceDocRef = useRef(false);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -256,8 +259,10 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       previous: WorkspaceExtensionsState = next
     ) => {
       if (isOperationalRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
+      const cloudUid = user.uid;
+      if (activeCloudUidRef.current !== cloudUid) return;
 
-      const docRef = doc(db, 'workspaceExtensions', user.uid);
+      const docRef = doc(db, 'workspaceExtensions', cloudUid);
       const changedKeys = getChangedWorkspaceExtensionKeys(previous, next);
       const bounded = stripUndefinedDeep({
         reservedInvoices: next.reservedInvoices.slice(0, 50),
@@ -277,10 +282,12 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       });
 
       const write = async () => {
-        if (isOperationalRestoreBarrierActive()) return;
+        if (isOperationalRestoreBarrierActive() || activeCloudUidRef.current !== cloudUid) return;
         try {
           const committedVersion = await runTransaction(db, async (transaction) => {
+            if (activeCloudUidRef.current !== cloudUid) throw new Error('Workspace account changed before cloud write');
             const snap = await transaction.get(docRef);
+            if (activeCloudUidRef.current !== cloudUid) throw new Error('Workspace account changed during cloud write');
             if (!snap.exists()) {
               transaction.set(docRef, {
                 ownerId: user.uid,
@@ -320,9 +327,10 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
           versionRef.current = Math.max(versionRef.current, committedVersion);
         } catch (err) {
+          if (activeCloudUidRef.current !== cloudUid && err instanceof Error && err.message.includes('Workspace account changed')) return;
           if (!isFirestoreOfflineError(err)) {
             try {
-              handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${user.uid}`);
+              handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${cloudUid}`);
             } catch {
               // logged cleanly
             }
@@ -330,7 +338,10 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         }
       };
 
-      const queuedWrite = cloudWriteQueueRef.current.then(write, write);
+      pendingCloudMutationsRef.current += 1;
+      const queuedWrite = cloudWriteQueueRef.current.then(write, write).finally(() => {
+        pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
+      });
       cloudWriteQueueRef.current = queuedWrite;
       await queuedWrite;
     },
@@ -347,7 +358,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     const unsub = onSnapshot(
       docRef,
       (snap) => {
-        if (isOperationalRestoreBarrierActive()) return;
+        if (isOperationalRestoreBarrierActive() || activeCloudUidRef.current !== user.uid) return;
+        if (pendingCloudMutationsRef.current > 0) return;
         if (!snap.exists()) {
           // Bootstrap cloud extensions from current local workspace
           void pushToCloud(stateRef.current, stateRef.current);
