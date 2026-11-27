@@ -1,4 +1,4 @@
-import { getActiveOperationalRestoreJournal } from '../lib/operationalDb';
+import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive } from '../lib/operationalDb';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAccounting } from '../context/AccountingContext';
 import {
@@ -106,6 +106,7 @@ function saveLastFirebaseBackupAt(stamp: string): void {
 }
 
 async function isRestoreRecoveryBlockingSync(): Promise<boolean> {
+  if (isOperationalRestoreBarrierActive()) return true;
   try {
     return Boolean(await getActiveOperationalRestoreJournal());
   } catch {
