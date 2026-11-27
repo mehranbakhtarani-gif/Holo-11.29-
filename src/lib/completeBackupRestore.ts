@@ -256,7 +256,7 @@ async function resumePendingCompleteBackupRestoreUnlocked(): Promise<CompleteBac
  * releases the lock and the next tab can safely recover a pre-commit journal.
  * Browsers without Web Locks fail closed rather than risk concurrent restore.
  */
-async function withCompleteRestoreLock<T>(operation: () => Promise<T>): Promise<T> {
+export async function withCompleteRestoreLock<T>(operation: () => Promise<T>): Promise<T> {
   if (typeof window === 'undefined') return operation();
   if (typeof navigator === 'undefined' || !navigator.locks?.request) {
     throw new Error('قفل انحصاری چندتب برای بازیابی پشتیبان در این مرورگر در دسترس نیست؛ عملیات برای حفظ یکپارچگی داده متوقف شد.');
