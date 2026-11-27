@@ -30,10 +30,20 @@ export interface WorkspaceExtensionMergeResult {
   conflicts: string[];
 }
 
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, canonicalize(value[key])])
+    );
+  }
+  return value;
+}
+
 function sameValue(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   try {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
   } catch {
     return false;
   }
