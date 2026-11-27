@@ -409,8 +409,8 @@ async function main() {
     assert.equal(summary.totalConflictingDocs, 1);
   });
 
-  // 20, 21, 22, 23, 24. Controlled PWA Update Backup, IDB v3 Schema, Storage Full, Cache Eviction & Multi-User Isolation
-  await runCase('Scenarios 20-24: Pre-update safety backup, IDB v3 migration stores, storage critical alert, cache fallback & multi-user isolation', async () => {
+  // 20, 21, 22, 23, 24. Controlled PWA Update Backup, IDB v4 Schema, Storage Full, Cache Eviction & Multi-User Isolation
+  await runCase('Scenarios 20-24: Pre-update safety backup, IDB v4 migration stores, storage critical alert, cache fallback & multi-user isolation', async () => {
     // 20. Pre-update safety backup runs before SW activation
     let backupSaved = false;
     const updRes = await safeApplySwUpdateWithBackup(async () => {
@@ -427,8 +427,8 @@ async function main() {
     assert.equal(backupFailure.applied, false);
     assert.ok(backupFailure.error?.includes('پشتیبان ایمنی'));
 
-    // 21. IndexedDB v3 operational schema includes all required stores non-destructively
-    assert.equal(OP_DB_VERSION, 3);
+    // 21. IndexedDB v4 operational schema includes all required stores non-destructively
+    assert.equal(OP_DB_VERSION, 4);
     for (const requiredStore of [
       'accounts',
       'parties',
@@ -442,6 +442,7 @@ async function main() {
       'syncOutbox',
       'syncInbox',
       'localProfiles',
+      'secureWorkspace',
       'warehouses',
       'taxReports',
       'preUpdateBackups',
