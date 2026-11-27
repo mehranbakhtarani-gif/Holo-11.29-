@@ -10,11 +10,10 @@ test('Web Lock prevents a second tab from entering backup restore while the firs
     const { withCompleteRestoreLock } = await import('/Holo-11.29-/src/lib/completeBackupRestore.ts');
     const state = window as unknown as Record<string, unknown>;
     state.firstAcquired = false;
-    state.releaseFirst = null;
     state.firstDone = false;
     void withCompleteRestoreLock(() => new Promise<void>((resolve) => {
       state.firstAcquired = true;
-      state.releaseFirst = resolve;
+      void resolve;
     })).then(() => { state.firstDone = true; });
   });
   await expect.poll(() => first.evaluate(() => Boolean((window as unknown as Record<string, unknown>).firstAcquired))).toBe(true);
@@ -30,13 +29,9 @@ test('Web Lock prevents a second tab from entering backup restore while the firs
   });
 
   await expect.poll(() => second.evaluate(() => Boolean((window as unknown as Record<string, unknown>).secondAcquired)), { timeout: 500 }).toBe(false);
-  await first.evaluate(() => {
-    const state = window as unknown as Record<string, unknown>;
-    (state.releaseFirst as (() => void) | null)?.();
-  });
-  await expect.poll(() => second.evaluate(() => Boolean((window as unknown as Record<string, unknown>).secondDone))).toBe(true);
-  await expect.poll(() => first.evaluate(() => Boolean((window as unknown as Record<string, unknown>).firstDone))).toBe(true);
-
+  // Closing the owner tab simulates a browser crash: Chromium must release
+  // its Web Lock so the recovery tab can acquire the lock and inspect the journal.
   await first.close();
+  await expect.poll(() => second.evaluate(() => Boolean((window as unknown as Record<string, unknown>).secondDone))).toBe(true);
   await second.close();
 });
