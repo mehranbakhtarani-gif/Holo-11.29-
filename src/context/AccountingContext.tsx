@@ -6074,6 +6074,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         showToast('نقش فعال مجوز صدور فاکتور فروش را ندارد.');
         return;
       }
+      // SAFETY GATE: order status and invoice creation are currently separate commits.
+      // Keep this workflow closed until invoice + order linkage share one atomic,
+      // idempotent Firestore/IndexedDB transaction.
+      const safetyMessage = 'تبدیل سفارش به فاکتور تا زمان اتمیک‌شدن ثبت فاکتور و پیوند سفارش متوقف است؛ هیچ تغییری اعمال نشد.';
+      showToast(safetyMessage, 'error');
+      throw new Error(safetyMessage);
       const order = salesOrders.find((o) => o.id === orderId);
       if (!order || order.status === 'invoiced') {
         showToast('این سفارش قبلاً به فاکتور فروش تبدیل شده است.');
