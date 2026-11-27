@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { commitInvoiceOperationalTx } from '../src/lib/operationalDb';
+import { commitInvoiceOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
 import type { Cheque, Invoice, Product, Voucher } from '../src/types/accounting';
 
 /**
@@ -400,6 +400,64 @@ async function runTests() {
   // 2. ATOMIC COMMIT HAPPY PATH (Create Invoice: Inventory + Ledger + Treasury + Invoice)
   // =========================================================================
   const { initialProduct, updatedProduct, balancedVoucher, cheque, invoice } = makeSampleEntities();
+
+  // =========================================================================
+  // 2. ATOMIC STOCK ADJUSTMENT VALIDATION + ROLLBACK
+  // =========================================================================
+  const stockSim = createTransactionalIdbSimulator({
+    products: [initialProduct],
+    meta: [{ key: 'workspace_meta', localRevision: 12 }],
+  });
+  const stockCommitted = await commitStockAdjustmentOperationalTx(
+    { updatedProducts: [updatedProduct], voucher: balancedVoucher },
+    { dbOverride: stockSim.db }
+  );
+  assert.equal(stockCommitted, true);
+  assert.equal(stockSim.stores.products.get('prod_1').stock, 8);
+  assert.equal(stockSim.stores.vouchers.get('vch_sale_1').id, 'vch_sale_1');
+  assert.equal(stockSim.stores.meta.get('workspace_meta').localRevision, 13);
+  console.log('✓ 2. Stock adjustment commits inventory, ledger and revision atomically');
+
+  const stockRollbackSim = createTransactionalIdbSimulator({
+    products: [initialProduct],
+    meta: [{ key: 'workspace_meta', localRevision: 20 }],
+  });
+  stockRollbackSim.setFailure({
+    failOnStore: 'vouchers',
+    failMode: 'async_error',
+    errorMessage: 'ConstraintError: stock voucher write rejected',
+  });
+  await assert.rejects(
+    () => commitStockAdjustmentOperationalTx(
+      { updatedProducts: [updatedProduct], voucher: balancedVoucher },
+      { dbOverride: stockRollbackSim.db }
+    ),
+    /stock voucher write rejected/
+  );
+  assert.equal(stockRollbackSim.getStats().abortCount, 1);
+  assert.equal(stockRollbackSim.stores.products.get('prod_1').stock, 10);
+  assert.equal(stockRollbackSim.stores.vouchers.size, 0);
+  assert.equal(stockRollbackSim.stores.meta.get('workspace_meta').localRevision, 20);
+  console.log('✓ 2a. Stock adjustment rolls back inventory when ledger persistence fails');
+
+  const invalidStockVoucher: Voucher = {
+    ...balancedVoucher,
+    id: 'vch_invalid_stock',
+    lines: [
+      { accountCode: '10301', accountTitle: 'انبار', description: 'نامعتبر', debit: -1, credit: 0 },
+      { accountCode: '40101', accountTitle: 'تعدیل', description: 'نامعتبر', debit: 0, credit: 1 },
+    ],
+  };
+  await assert.rejects(
+    () => commitStockAdjustmentOperationalTx(
+      { updatedProducts: [updatedProduct], voucher: invalidStockVoucher },
+      { dbOverride: stockSim.db }
+    ),
+    /ATOMIC_STOCK_INVALID_VOUCHER_LINE/
+  );
+  assert.equal(stockSim.stores.products.get('prod_1').stock, 8, 'Invalid voucher must not change stock');
+  console.log('✓ 2b. Invalid stock voucher is rejected before any write');
+
   const sim = createTransactionalIdbSimulator({ products: [initialProduct] });
 
   const okCreate = await commitInvoiceOperationalTx(
