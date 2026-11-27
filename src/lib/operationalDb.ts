@@ -629,6 +629,29 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
   }
 }
 
+export function parseOperationalWorkspaceSnapshot(snapshotJson: string): OperationalWorkspaceData {
+  let parsed: Partial<OperationalWorkspaceData>;
+  try {
+    parsed = JSON.parse(snapshotJson) as Partial<OperationalWorkspaceData>;
+  } catch {
+    throw new Error('محتوای فضای کاری رمزگذاری‌شده JSON معتبر نیست.');
+  }
+  if (
+    !parsed.profile || !Array.isArray(parsed.accounts) || parsed.accounts.length === 0 ||
+    !Array.isArray(parsed.parties) || !Array.isArray(parsed.products) ||
+    !Array.isArray(parsed.vouchers) || !Array.isArray(parsed.invoices) ||
+    !Array.isArray(parsed.cheques) || !Array.isArray(parsed.employees) ||
+    !Array.isArray(parsed.assets) || !Array.isArray(parsed.costCenters) ||
+    !Array.isArray(parsed.currencies) || !Array.isArray(parsed.exchangeRates) ||
+    !Array.isArray(parsed.importDossiers) || !Array.isArray(parsed.salesOrders) ||
+    !Array.isArray(parsed.subcontractJobs) || !Array.isArray(parsed.rbacOperators) ||
+    !Array.isArray(parsed.auditLogs)
+  ) {
+    throw new Error('ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار است.');
+  }
+  return parsed as OperationalWorkspaceData;
+}
+
 /**
  * Non-destructive phase-1 migration preparation:
  * encrypts and verifies a complete workspace snapshot into a dedicated store.
@@ -723,21 +746,10 @@ export async function loadPreparedEncryptedOperationalWorkspace(
   if (!result.ok || !result.snapshotJson) {
     throw new Error(result.error || 'رمزگشایی فضای کاری مهاجرت‌شده ناموفق بود.');
   }
-  const parsed = JSON.parse(result.snapshotJson) as Partial<OperationalWorkspaceData>;
-  if (
-    !parsed.profile || !Array.isArray(parsed.accounts) || parsed.accounts.length === 0 ||
-    !Array.isArray(parsed.parties) || !Array.isArray(parsed.products) ||
-    !Array.isArray(parsed.vouchers) || !Array.isArray(parsed.invoices) ||
-    !Array.isArray(parsed.cheques) || !Array.isArray(parsed.employees) ||
-    !Array.isArray(parsed.assets) || !Array.isArray(parsed.costCenters) ||
-    !Array.isArray(parsed.currencies) || !Array.isArray(parsed.exchangeRates) ||
-    !Array.isArray(parsed.importDossiers) || !Array.isArray(parsed.salesOrders) ||
-    !Array.isArray(parsed.subcontractJobs) || !Array.isArray(parsed.rbacOperators) ||
-    !Array.isArray(parsed.auditLogs)
-  ) {
-    throw new Error('ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار است.');
+  if (result.sha256 !== record.plaintextSha256) {
+    throw new Error('اثر انگشت نسخه عملیاتی رمزگذاری‌شده با فراداده آن مطابقت ندارد.');
   }
-  return parsed as OperationalWorkspaceData;
+  return parseOperationalWorkspaceSnapshot(result.snapshotJson);
 }
 
 export async function getPreparedEncryptedOperationalWorkspaceMeta(
