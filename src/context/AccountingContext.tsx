@@ -1965,6 +1965,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return v.voucherNumber !== nextNum;
     });
 
+    // Firestore writeBatch is atomic only within one commit. Never split a
+    // renumber operation into multiple commits that could leave duplicate/gapped numbers.
+    if (user && changedVouchers.length > 450) {
+      const message = 'تعداد اسناد نیازمند شماره‌گذاری بیش از سقف یک تراکنش امن است؛ هیچ تغییری اعمال نشد.';
+      showToast(message, 'error');
+      throw new Error(message);
+    }
+
     if (user) {
       try {
         // Chunk Firestore writeBatch strictly below the 500-operation Firestore limit
