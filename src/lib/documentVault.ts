@@ -885,11 +885,18 @@ export async function applyStagedDocumentAttachmentBundle(
           fail('manifest staging پیوست‌ها برای اعمال معتبر نیست.');
           return;
         }
-        const live = tx.objectStore(VAULT_STORE);
-        live.clear();
-        rows.forEach((row) => live.put(row.record));
-        appliedCount = rows.length;
-        manifestStore.put({ ...manifest, state: 'applied', appliedAt: manifest.appliedAt ?? new Date().toISOString() });
+        try {
+          const live = tx.objectStore(VAULT_STORE);
+          live.clear();
+          rows.forEach((row) => live.put(row.record));
+          appliedCount = rows.length;
+          manifestStore.put({ ...manifest, state: 'applied', appliedAt: manifest.appliedAt ?? new Date().toISOString() });
+        } catch (error) {
+          // A transaction can become inactive synchronously (for example, if
+          // IndexedDB aborts while clearing the live store). Surface that as a
+          // rejected restore operation instead of leaking an uncaught event error.
+          fail(error instanceof Error ? error.message : 'تراکنش اعمال پیوست‌ها پیش از ثبت کامل متوقف شد.');
+        }
       };
       manifestRequest.onsuccess = applyIfReady;
       rowsRequest.onsuccess = applyIfReady;
