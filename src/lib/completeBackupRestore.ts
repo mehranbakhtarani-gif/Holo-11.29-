@@ -101,7 +101,7 @@ async function markRecoveryFailure(
  * commit intent; each database applies its own replacement atomically and the
  * operational journal coordinates crash recovery between those commits.
  */
-export async function restoreCompleteBackupPackage(
+async function restoreCompleteBackupPackageUnlocked(
   packageJson: string,
   options: CompleteBackupRestoreOptions = {}
 ): Promise<CompleteBackupRestoreResult> {
@@ -208,18 +208,18 @@ export async function restoreCompleteBackupPackage(
 }
 
 /** Resume an interrupted commit after the user unlocks the backup vault. */
-export async function resumePendingCompleteBackupRestore(): Promise<CompleteBackupRestoreResult | null> {
+async function resumePendingCompleteBackupRestoreUnlocked(): Promise<CompleteBackupRestoreResult | null> {
   const journal = await getActiveOperationalRestoreJournal();
   if (!journal) return null;
   announceRestoreBarrier(true);
   if (journal.state === 'staging') {
-    // A second tab cannot distinguish a live preparation from a crashed one by
-    // journal state alone. Never auto-delete staging here: the owner tab may
-    // still be writing attachment rows. Keep the app fail-closed for explicit
-    // recovery rather than risk deleting another tab's active restore.
-    throw new Error(
-      'یک عملیات آماده‌سازی بازیابی ثبت شده است. برای جلوگیری از حذف staging فعال در تب دیگر، پاک‌سازی خودکار انجام نشد؛ ابتدا باید وضعیت تب آغازکننده مشخص شود.'
-    );
+    // The exclusive Web Lock proves no other tab is still preparing this restore.
+    // A crashed pre-commit attempt has not touched live stores, so its staging
+    // rows and journal can be discarded safely before normal startup resumes.
+    await discardStagedDocumentAttachmentBundle(journal.restoreId);
+    await discardStagingOperationalRestoreJournal(journal.restoreId);
+    announceRestoreBarrier(false);
+    return null;
   }
   if (journal.state === 'workspace_applied') {
     const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
@@ -247,4 +247,34 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
     restoredAttachments: attachments.applied,
     restoredWorkspaceRecords: workspace.recordCount,
   };
+}
+
+
+/**
+ * Serialize restore preparation and recovery across tabs. Web Locks are held
+ * for the complete two-database operation; if a tab crashes, the browser
+ * releases the lock and the next tab can safely recover a pre-commit journal.
+ * Browsers without Web Locks fail closed rather than risk concurrent restore.
+ */
+async function withCompleteRestoreLock<T>(operation: () => Promise<T>): Promise<T> {
+  if (typeof window === 'undefined') return operation();
+  if (typeof navigator === 'undefined' || !navigator.locks?.request) {
+    throw new Error('قفل انحصاری چندتب برای بازیابی پشتیبان در این مرورگر در دسترس نیست؛ عملیات برای حفظ یکپارچگی داده متوقف شد.');
+  }
+  return navigator.locks.request(
+    'holoo-complete-backup-restore',
+    { mode: 'exclusive' },
+    operation
+  );
+}
+
+export function restoreCompleteBackupPackage(
+  packageJson: string,
+  options: CompleteBackupRestoreOptions = {}
+): Promise<CompleteBackupRestoreResult> {
+  return withCompleteRestoreLock(() => restoreCompleteBackupPackageUnlocked(packageJson, options));
+}
+
+export function resumePendingCompleteBackupRestore(): Promise<CompleteBackupRestoreResult | null> {
+  return withCompleteRestoreLock(() => resumePendingCompleteBackupRestoreUnlocked());
 }
