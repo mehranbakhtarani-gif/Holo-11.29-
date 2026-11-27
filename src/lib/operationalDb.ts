@@ -798,8 +798,10 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
       localRevision: wsMeta?.localRevision ?? 1,
       updatedAt: wsMeta?.updatedAt,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    // A failed read is not an empty workspace: propagate it so callers cannot
+    // silently hydrate fallback/demo data over an unreadable operational DB.
+    throw error;
   }
 }
 
