@@ -672,7 +672,7 @@ export function useLocalFirstMeshSync() {
     connector.start();
 
     const handleVisibility = () => {
-      if (!isOnline || !connectorRef.current) return;
+      if (!isOnline || restoreBarrierActive || isOperationalRestoreBarrierActive() || !connectorRef.current) return;
       if (document.visibilityState === 'visible' && navigator.onLine) {
         connectorRef.current.connectToAllPeers();
       } else if (document.visibilityState === 'hidden' && navigator.onLine) {
@@ -681,12 +681,12 @@ export function useLocalFirstMeshSync() {
       }
     };
     const handlePageHide = () => {
-      if (isOnline && connectorRef.current && navigator.onLine) {
+      if (!restoreBarrierActive && !isOperationalRestoreBarrierActive() && isOnline && connectorRef.current && navigator.onLine) {
         void connectorRef.current.flushBatchedUpdates(false);
       }
     };
     const handleOnline = () => {
-      if (!isOnline || !connectorRef.current) return;
+      if (!isOnline || restoreBarrierActive || isOperationalRestoreBarrierActive() || !connectorRef.current) return;
       connectorRef.current.start();
       window.setTimeout(() => {
         if (isOnline) {
@@ -769,10 +769,14 @@ export function useLocalFirstMeshSync() {
   );
 
   useEffect(() => {
-    if (restoreBarrierActive) return;
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
     const timer = window.setTimeout(() => {
+      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
       void (async () => {
+        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
         const built = buildTaggedSnapshot();
+
+        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
 
         // First boot: seed Dexie liveRecords silently without creating a bogus outbox mutation
         if (!didBootMirrorRef.current) {
@@ -783,7 +787,7 @@ export function useLocalFirstMeshSync() {
           return;
         }
 
-        if (isRemoteUpdateRef.current) return;
+        if (restoreBarrierActive || isOperationalRestoreBarrierActive() || isRemoteUpdateRef.current) return;
         if (built.payloadHash === lastObservedFingerprintRef.current) return;
         lastObservedFingerprintRef.current = built.payloadHash;
 
@@ -855,6 +859,7 @@ export function useLocalFirstMeshSync() {
   // ==================== USER ACTIONS ====================
 
   const selectLocalFolder = useCallback(async () => {
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     setIsFolderBusy(true);
     try {
       const res = await pickLocalStorageDirectory();
@@ -912,6 +917,7 @@ export function useLocalFirstMeshSync() {
   }, [buildTaggedSnapshot, logActivity, refreshOutboxAndLogs, showToast]);
 
   const regrantFolderPermission = useCallback(async () => {
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     const handle = dirHandleRef.current;
     if (!handle) {
       return selectLocalFolder();
@@ -955,6 +961,7 @@ export function useLocalFirstMeshSync() {
   ]);
 
   const mirrorNowToFolder = useCallback(async () => {
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     if (!dirHandleRef.current) {
       return selectLocalFolder();
     }
@@ -976,6 +983,7 @@ export function useLocalFirstMeshSync() {
   }, [selectLocalFolder, buildTaggedSnapshot, writeSnapshotToLocalFolder, showToast]);
 
   const restoreFromSelectedFolder = useCallback(async () => {
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('بازیابی از پوشه محلی تا پایان بازیابی پشتیبان دیگر متوقف است.'); return false; }
     let handle = dirHandleRef.current;
     if (!handle) {
       const picked = await pickLocalStorageDirectory();
@@ -1174,7 +1182,7 @@ export function useLocalFirstMeshSync() {
 
   const retryOutboxItem = useCallback(
     async (operationId: string) => {
-      if (restoreBarrierActive) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
+      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
       const items = await listDexieOutboxItems();
       const target = items.find((i) => i.operationId === operationId);
       if (!target) return;
@@ -1220,11 +1228,11 @@ export function useLocalFirstMeshSync() {
       }
       await refreshOutboxAndLogs();
     },
-    [isOnline, regrantFolderPermission, refreshOutboxAndLogs, showToast]
+    [isOnline, regrantFolderPermission, refreshOutboxAndLogs, restoreBarrierActive, showToast]
   );
 
   const retryAllPendingOutbox = useCallback(async () => {
-    if (restoreBarrierActive) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
+    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
     const items = await listDexieOutboxItems();
     const pendingFolder = items.some((i) => i.target === 'local_folder' && i.status !== 'synced');
     const pendingP2P = items.some((i) => i.target === 'p2p_mesh' && i.status !== 'synced');
@@ -1237,7 +1245,7 @@ export function useLocalFirstMeshSync() {
       await connectorRef.current.broadcastStateToConnectedPeers();
     }
     await refreshOutboxAndLogs();
-  }, [isOnline, regrantFolderPermission, refreshOutboxAndLogs]);
+  }, [isOnline, regrantFolderPermission, refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const clearSyncedOutbox = useCallback(async () => {
     await clearSyncedDexieOutboxItems();
