@@ -1147,7 +1147,7 @@ export function useDualCloudSync() {
       sbInFlightRef.current = true;
       setIsSupabaseSyncing(true);
       try {
-        const res = await pullSnapshotFromSupabase(supabaseSessionToken, backupId);
+        const res = await pullSnapshotFromSupabase(supabaseSessionToken, backupId, !silent);
         if (!res.ok) {
           setLastSupabaseError(res.error || 'خطا در دریافت از Supabase');
           if (!silent) showToast(res.error || 'خطا در دریافت از Supabase');
