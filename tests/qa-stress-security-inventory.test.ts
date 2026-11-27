@@ -43,6 +43,88 @@ function logPass(name: string, detail?: string) {
 console.log('Running QA Stress, Inventory Integration, Accounting Math & Security Suite...');
 
 /* ============================================================================
+ * SALE RETURN CUMULATIVE QUANTITY GUARD
+ * ========================================================================== */
+{
+  const ownerId = 'qa_sale_return_owner';
+  const originalSale: Invoice = {
+    id: 'sale_original_1',
+    ownerId,
+    invoiceNumber: 'SAL-ORIGINAL-1',
+    invoiceType: 'sale',
+    date: '1405/01/10',
+    partyId: 'customer_1',
+    partyName: 'مشتری آزمون',
+    warehouse: 'انبار مرکزی',
+    subtotal: 1_000,
+    discount: 0,
+    vatAmount: 0,
+    grandTotal: 1_000,
+    paidCash: 1_000,
+    paidBank: 0,
+    paidCheque: 0,
+    creditAmount: 0,
+    status: 'settled',
+    items: [{
+      productId: 'product_return_1',
+      sku: 'RET-1',
+      productName: 'کالای آزمون',
+      unit: 'عدد',
+      quantity: 10,
+      unitPrice: 100,
+      discount: 0,
+      vatAmount: 0,
+      lineTotal: 1_000,
+      unitCostSnapshot: 50,
+      totalCostIrr: 500,
+    }],
+  };
+  const previousReturn: Invoice = {
+    ...originalSale,
+    id: 'sale_return_previous_1',
+    invoiceNumber: 'RET-PREV-1',
+    invoiceType: 'sale_return',
+    sourceInvoiceId: originalSale.id,
+    subtotal: 500,
+    grandTotal: 500,
+    paidCash: 500,
+    items: [{ ...originalSale.items[0], quantity: 5, unitPrice: 100, lineTotal: 500 }],
+  };
+  const overReturnPayload: Omit<Invoice, 'id' | 'ownerId' | 'voucherId'> = {
+    invoiceNumber: 'RET-OVER-1',
+    invoiceType: 'sale_return',
+    sourceInvoiceId: originalSale.id,
+    date: '1405/01/12',
+    partyId: originalSale.partyId,
+    partyName: originalSale.partyName,
+    warehouse: originalSale.warehouse,
+    subtotal: 600,
+    discount: 0,
+    vatAmount: 0,
+    grandTotal: 600,
+    paidCash: 600,
+    paidBank: 0,
+    paidCheque: 0,
+    creditAmount: 0,
+    status: 'settled',
+    items: [{ ...originalSale.items[0], quantity: 6, unitPrice: 100, lineTotal: 600 }],
+  };
+  assert.throws(() => planAtomicInvoiceCommit({
+    invoiceId: 'sale_return_new_1',
+    voucherId: 'voucher_return_new_1',
+    nextVoucherNumber: 3,
+    ownerId,
+    deviceId: 'qa_runner',
+    payload: overReturnPayload,
+    products: [],
+    originalInvoice: originalSale,
+    existingInvoices: [originalSale, previousReturn],
+  }), /مانده مجاز: 5/);
+  logPass('Cumulative sale-return guard', 'rejects a second partial return that would exceed the original sold quantity');
+}
+
+
+/* ============================================================================
  * 1. HIGH-VOLUME PERFORMANCE & STRESS BENCHMARK (25,000 Vouchers, 10,000 Invoices, 2,500 Products)
  * ========================================================================== */
 {
