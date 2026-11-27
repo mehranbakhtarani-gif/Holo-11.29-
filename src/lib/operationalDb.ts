@@ -984,19 +984,21 @@ export async function clearPendingSyncOutboxOperations(): Promise<void> {
 /** Records a processed inbound sync operation in durable syncInbox for duplicate detection */
 export async function recordInboxOperation(rec: SyncInboxRecord): Promise<void> {
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: inbound sync deduplication record was not persisted.');
+  const db = await openOperationalDb();
   try {
-    const db = await openOperationalDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(['syncInbox'], 'readwrite');
       tx.objectStore('syncInbox').put(rec);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error ?? new Error('Inbound sync deduplication write failed'));
+      tx.onabort = () => reject(tx.error ?? new Error('Inbound sync deduplication write aborted'));
     });
-    db.close();
   } catch (err) {
     // A missing durable deduplication record can cause an already-applied remote
     // operation to be replayed. Surface storage failures instead of reporting success.
     throw err instanceof Error ? err : new Error('Failed to persist inbound sync deduplication record');
+  } finally {
+    db.close();
   }
 }
 
