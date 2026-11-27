@@ -189,7 +189,7 @@ export interface OperationalRestoreJournalRecord {
 const RESTORE_JOURNAL_STORE = 'restoreJournal';
 const RESTORE_JOURNAL_TERMINAL_STATES: RestoreJournalState[] = ['committed'];
 
-function isValidRestoreJournalRecord(value: unknown): value is OperationalRestoreJournalRecord {
+export function isValidOperationalRestoreJournalRecord(value: unknown): value is OperationalRestoreJournalRecord {
   if (!value || typeof value !== 'object') return false;
   const row = value as Partial<OperationalRestoreJournalRecord>;
   return typeof row.restoreId === 'string' && /^[a-zA-Z0-9_-]{12,100}$/.test(row.restoreId) &&
@@ -217,7 +217,7 @@ export async function getActiveOperationalRestoreJournal(): Promise<OperationalR
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
       const request = tx.objectStore(RESTORE_JOURNAL_STORE).getAll();
       request.onsuccess = () => {
-        const rows = (request.result as unknown[]).filter(isValidRestoreJournalRecord);
+        const rows = (request.result as unknown[]).filter(isValidOperationalRestoreJournalRecord);
         const active = rows.filter((row) => !RESTORE_JOURNAL_TERMINAL_STATES.includes(row.state))
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         resolve(active[0] ?? null);
@@ -234,7 +234,7 @@ export async function getActiveOperationalRestoreJournal(): Promise<OperationalR
 export async function createOperationalRestoreJournal(
   record: OperationalRestoreJournalRecord
 ): Promise<void> {
-  if (!isValidRestoreJournalRecord(record) || record.state !== 'staging') {
+  if (!isValidOperationalRestoreJournalRecord(record) || record.state !== 'staging') {
     throw new Error('ساختار اولیه ژورنال بازیابی معتبر نیست.');
   }
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای ثبت ژورنال بازیابی در دسترس نیست.');
@@ -278,7 +278,7 @@ export async function transitionOperationalRestoreJournal(
       const get = store.get(restoreId);
       get.onsuccess = () => {
         const current = get.result as OperationalRestoreJournalRecord | undefined;
-        if (!current || !isValidRestoreJournalRecord(current) || !expectedStates.includes(current.state)) {
+        if (!current || !isValidOperationalRestoreJournalRecord(current) || !expectedStates.includes(current.state)) {
           tx.abort();
           return;
         }
