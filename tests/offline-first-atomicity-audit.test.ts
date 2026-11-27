@@ -521,6 +521,22 @@ async function runTests() {
   const cancelInvoiceIdx = accountingCtxSrc.indexOf('const cancelInvoice = useCallback');
   const convertProformaIdx = accountingCtxSrc.indexOf('const convertProformaToSale = useCallback');
   assert.ok(createInvoiceIdx !== -1 && cancelInvoiceIdx !== -1 && convertProformaIdx !== -1);
+  const createInvoiceBody = accountingCtxSrc.slice(createInvoiceIdx, cancelInvoiceIdx);
+  assert.match(
+    createInvoiceBody,
+    /sha256HexSync\(\`\$\{ownerId\}:invoice:\$\{payload\.invoiceType\}:\$\{payload\.invoiceNumber\.trim\(\)\}\`\)/,
+    'Cloud invoice identity must be deterministic per owner, type, and invoice number'
+  );
+  assert.match(
+    createInvoiceBody,
+    /tx\.get\(invoiceRef\)[\s\S]*invoiceSnap\.exists\(\)/,
+    'Cloud invoice transaction must read and reject an existing deterministic invoice document'
+  );
+  assert.match(
+    accountingCtxSrc,
+    /payload\.referenceId && !payload\.allowDuplicate[\s\S]*sha256HexSync/,
+    'Referenced voucher IDs must be deterministic unless duplicate creation is explicitly allowed'
+  );
 
   assert.match(
     accountingCtxSrc.slice(createInvoiceIdx, cancelInvoiceIdx),
