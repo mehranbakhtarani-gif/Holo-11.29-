@@ -1224,6 +1224,10 @@ export async function commitDepreciationOperationalTx(
     assetUpdates: Array<{
       id: string;
       expectedAccumulatedDepreciation: number;
+      expectedPurchaseCost: number;
+      expectedSalvageValue: number;
+      expectedUsefulLifeYears: number;
+      expectedPurchaseDate: string;
       depreciationAmount: number;
       accumulatedDepreciation: number;
     }>;
@@ -1246,6 +1250,15 @@ export async function commitDepreciationOperationalTx(
       seenAssetIds.has(update.id) ||
       !Number.isSafeInteger(update.expectedAccumulatedDepreciation) ||
       update.expectedAccumulatedDepreciation < 0 ||
+      !Number.isSafeInteger(update.expectedPurchaseCost) ||
+      update.expectedPurchaseCost <= 0 ||
+      !Number.isSafeInteger(update.expectedSalvageValue) ||
+      update.expectedSalvageValue < 0 ||
+      update.expectedSalvageValue > update.expectedPurchaseCost ||
+      !Number.isFinite(update.expectedUsefulLifeYears) ||
+      update.expectedUsefulLifeYears <= 0 ||
+      typeof update.expectedPurchaseDate !== 'string' ||
+      !update.expectedPurchaseDate.trim() ||
       !Number.isSafeInteger(update.depreciationAmount) ||
       update.depreciationAmount <= 0 ||
       !Number.isSafeInteger(update.accumulatedDepreciation) ||
@@ -1322,7 +1335,6 @@ export async function commitDepreciationOperationalTx(
         if (settled || --remainingReads !== 0) return;
         try {
           const currentVoucher = (tx as IDBTransaction).objectStore('vouchers');
-          // The voucher existence check is captured separately below; all reads must finish before writes.
           if (voucherExists) {
             throw new Error('ATOMIC_DEPRECIATION_DUPLICATE_VOUCHER: سند استهلاک این دوره قبلاً ثبت شده است.');
           }
@@ -1332,7 +1344,12 @@ export async function commitDepreciationOperationalTx(
               throw new Error(`ATOMIC_DEPRECIATION_ASSET_NOT_FOUND: دارایی ${update.id} در پایگاه محلی پیدا نشد.`);
             }
             if (
+              live.ownerId !== voucher.ownerId ||
               live.accumulatedDepreciation !== update.expectedAccumulatedDepreciation ||
+              live.purchaseCost !== update.expectedPurchaseCost ||
+              live.salvageValue !== update.expectedSalvageValue ||
+              live.usefulLifeYears !== update.expectedUsefulLifeYears ||
+              live.purchaseDate !== update.expectedPurchaseDate ||
               !Number.isSafeInteger(live.purchaseCost) ||
               live.purchaseCost <= 0 ||
               !Number.isSafeInteger(live.salvageValue) ||
