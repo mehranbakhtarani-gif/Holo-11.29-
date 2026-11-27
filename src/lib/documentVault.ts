@@ -63,8 +63,10 @@ export const ALLOWED_ATTACHMENT_MIMES = new Set([
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
 const VAULT_DB_NAME = 'holoo_apex_document_vault_v1';
-const VAULT_DB_VERSION = 1;
+const VAULT_DB_VERSION = 2;
 const VAULT_STORE = 'attachments';
+const VAULT_RESTORE_STAGING_STORE = 'restoreStaging';
+const VAULT_RESTORE_MANIFESTS_STORE = 'restoreManifests';
 
 // In-memory storage is permitted only in non-browser test runtimes. A browser must never
 // report a durable attachment write when IndexedDB is unavailable or has failed.
@@ -103,6 +105,13 @@ function openVaultDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(VAULT_STORE)) {
         const store = db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
         store.createIndex('entityKey', ['entityType', 'entityId'], { unique: false });
+      }
+      if (!db.objectStoreNames.contains(VAULT_RESTORE_STAGING_STORE)) {
+        const staging = db.createObjectStore(VAULT_RESTORE_STAGING_STORE, { keyPath: ['restoreId', 'attachmentId'] });
+        staging.createIndex('restoreId', 'restoreId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(VAULT_RESTORE_MANIFESTS_STORE)) {
+        db.createObjectStore(VAULT_RESTORE_MANIFESTS_STORE, { keyPath: 'restoreId' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -476,6 +485,191 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
     throw new Error('بازیابی پایدار اسناد در این مرورگر در دسترس نیست.');
   }
   return { restored: validated.length };
+}
+
+
+export interface StagedDocumentRestoreManifest {
+  restoreId: string;
+  packageDigest: string;
+  manifestDigest: string;
+  rowCount: number;
+  state: 'staged' | 'applied';
+  stagedAt: string;
+  appliedAt?: string;
+}
+
+function validateRestoreId(restoreId: string): void {
+  if (!/^[a-zA-Z0-9_-]{12,100}$/.test(restoreId)) {
+    throw new Error('شناسه بازیابی معتبر نیست.');
+  }
+}
+
+/**
+ * Validate and stage encrypted attachment rows without touching the live attachments store.
+ * Staging and manifest are committed in one transaction in the Document Vault database.
+ */
+export async function stageEncryptedDocumentAttachmentBundle(
+  restoreId: string,
+  bundleJson: string,
+  packageDigest: string
+): Promise<StagedDocumentRestoreManifest> {
+  validateRestoreId(restoreId);
+  if (!/^[a-f0-9]{64}$/i.test(packageDigest)) throw new Error('اثر انگشت بسته پشتیبان معتبر نیست.');
+  if (!isBackupSessionUnlocked()) throw new Error('برای staging پیوست‌ها ابتدا قفل پشتیبان را باز کنید.');
+  const passphrase = requireBackupSessionPassphrase();
+  let bundle: EncryptedDocumentAttachmentBundle;
+  try { bundle = JSON.parse(bundleJson) as EncryptedDocumentAttachmentBundle; }
+  catch { throw new Error('ساختار بسته پیوست‌های رمزگذاری‌شده معتبر نیست.'); }
+  if (!bundle || bundle.format !== 'holoo-apex-encrypted-document-vault' || bundle.schemaVersion !== 1 ||
+      !Array.isArray(bundle.attachments)) throw new Error('نسخه یا ساختار بسته پیوست‌ها پشتیبانی نمی‌شود.');
+
+  const seen = new Set<string>();
+  const validated: StoredDocumentAttachmentRecord[] = [];
+  for (const candidate of bundle.attachments) {
+    if (!candidate || typeof candidate.id !== 'string' || !candidate.id.trim() ||
+        seen.has(candidate.id) || 'dataUrl' in candidate ||
+        typeof candidate.fileName !== 'string' || !candidate.fileName.trim() ||
+        typeof candidate.mimeType !== 'string' || !ALLOWED_ATTACHMENT_MIMES.has(candidate.mimeType) ||
+        typeof candidate.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.sha256) ||
+        typeof candidate.encryptedEnvelope !== 'string' || candidate.encryptedEnvelope.length > 15 * 1024 * 1024 ||
+        !['invoice', 'voucher', 'cheque', 'contract', 'operation'].includes(candidate.entityType) ||
+        typeof candidate.entityId !== 'string' || !candidate.entityId.trim() ||
+        typeof candidate.entityLabel !== 'string' ||
+        !['standard', 'confidential', 'restricted'].includes(candidate.sensitivity) ||
+        !Number.isSafeInteger(candidate.sizeBytes) || candidate.sizeBytes <= 0 || candidate.sizeBytes > MAX_ATTACHMENT_BYTES ||
+        typeof candidate.uploadedAt !== 'string' || !Number.isFinite(Date.parse(candidate.uploadedAt)) ||
+        typeof candidate.uploadedBy !== 'string' || !candidate.uploadedBy.trim() ||
+        !['finance_manager', 'accountant', 'warehouse_keeper', 'sales_officer', 'treasurer', 'auditor_readonly'].includes(candidate.uploadedByRole) ||
+        (candidate.notes !== undefined && typeof candidate.notes !== 'string')) {
+      throw new Error('فراداده یکی از پیوست‌های بسته نامعتبر یا تکراری است.');
+    }
+    seen.add(candidate.id);
+    const verified = await decryptAndVerifyBackupEnvelope(candidate.encryptedEnvelope, passphrase);
+    if (!verified.ok || !verified.snapshotJson) throw new Error(verified.error || 'رمزگشایی یکی از پیوست‌ها ناموفق بود.');
+    let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
+    try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
+    catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
+    if (typeof payload.dataUrl !== 'string' || !payload.dataUrl.toLowerCase().startsWith(`data:${candidate.mimeType};base64,`) ||
+        payload.mimeType !== candidate.mimeType || payload.sha256 !== candidate.sha256 ||
+        await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
+      throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
+    }
+    const { dataUrl: _plaintext, ...encryptedRecord } = candidate;
+    validated.push(encryptedRecord);
+  }
+
+  const manifestDigest = await computeSha256Hex(JSON.stringify(validated));
+  const manifest: StagedDocumentRestoreManifest = {
+    restoreId, packageDigest, manifestDigest, rowCount: validated.length,
+    state: 'staged', stagedAt: new Date().toISOString(),
+  };
+  if (!isIdbAvailable()) throw new Error('ذخیره staging پایدار پیوست‌ها در این محیط در دسترس نیست.');
+  const db = await openVaultDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readwrite');
+      const staging = tx.objectStore(VAULT_RESTORE_STAGING_STORE);
+      const index = staging.index('restoreId');
+      const remove = index.openKeyCursor(IDBKeyRange.only(restoreId));
+      remove.onsuccess = () => {
+        const cursor = remove.result;
+        if (cursor) { staging.delete(cursor.primaryKey); cursor.continue(); }
+        else {
+          validated.forEach((row) => staging.put({ restoreId, attachmentId: row.id, record: row }));
+          tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE).put(manifest);
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error('ثبت staging پیوست‌ها ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش staging پیوست‌ها لغو شد.'));
+    });
+  } finally { db.close(); }
+  return manifest;
+}
+
+/** Verify staged attachment count and digest without exposing ciphertext to callers. */
+export async function verifyStagedDocumentAttachmentBundle(
+  restoreId: string,
+  expectedPackageDigest: string
+): Promise<StagedDocumentRestoreManifest> {
+  validateRestoreId(restoreId);
+  if (!isIdbAvailable()) throw new Error('خواندن staging پیوست‌ها در این محیط در دسترس نیست.');
+  const db = await openVaultDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readonly');
+      const manifestRequest = tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE).get(restoreId);
+      const rowsRequest = tx.objectStore(VAULT_RESTORE_STAGING_STORE).index('restoreId').getAll(restoreId);
+      let manifest: StagedDocumentRestoreManifest | null = null;
+      let rows: Array<{ restoreId: string; attachmentId: string; record: StoredDocumentAttachmentRecord }> = [];
+      manifestRequest.onsuccess = () => { manifest = manifestRequest.result ?? null; };
+      rowsRequest.onsuccess = () => { rows = rowsRequest.result ?? []; };
+      tx.oncomplete = async () => {
+        if (!manifest || manifest.packageDigest !== expectedPackageDigest || manifest.state !== 'staged' ||
+            rows.length !== manifest.rowCount) {
+          reject(new Error('manifest staging پیوست‌ها با بسته بازیابی مطابقت ندارد.'));
+          return;
+        }
+        const digest = await computeSha256Hex(JSON.stringify(rows.map((row) => row.record)));
+        if (digest !== manifest.manifestDigest) {
+          reject(new Error('اثر انگشت staging پیوست‌ها معتبر نیست.'));
+          return;
+        }
+        resolve(manifest);
+      };
+      tx.onerror = () => reject(tx.error ?? new Error('بررسی staging پیوست‌ها ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش بررسی staging پیوست‌ها لغو شد.'));
+    });
+  } finally { db.close(); }
+}
+
+/**
+ * Idempotently replace the live vault from verified staged rows. The manifest's
+ * applied marker and attachment replacement share one IndexedDB transaction.
+ */
+export async function applyStagedDocumentAttachmentBundle(
+  restoreId: string,
+  expectedPackageDigest: string
+): Promise<{ applied: number }> {
+  validateRestoreId(restoreId);
+  if (!isIdbAvailable()) throw new Error('اعمال staging پیوست‌ها در این محیط در دسترس نیست.');
+  const db = await openVaultDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([VAULT_STORE, VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readwrite');
+      const manifestStore = tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE);
+      const manifestRequest = manifestStore.get(restoreId);
+      const rowsRequest = tx.objectStore(VAULT_RESTORE_STAGING_STORE).index('restoreId').getAll(restoreId);
+      let appliedCount = 0;
+      let ready = 0;
+      const fail = (message: string) => {
+        try { tx.abort(); } catch { /* transaction already completed */ }
+        reject(new Error(message));
+      };
+      const applyIfReady = () => {
+        ready += 1;
+        if (ready !== 2) return;
+        const manifest = manifestRequest.result as StagedDocumentRestoreManifest | undefined;
+        const rows = (rowsRequest.result ?? []) as Array<{ restoreId: string; attachmentId: string; record: StoredDocumentAttachmentRecord }>;
+        if (!manifest || manifest.packageDigest !== expectedPackageDigest ||
+            (manifest.state !== 'staged' && manifest.state !== 'applied') ||
+            rows.length !== manifest.rowCount) {
+          fail('manifest staging پیوست‌ها برای اعمال معتبر نیست.');
+          return;
+        }
+        const live = tx.objectStore(VAULT_STORE);
+        live.clear();
+        rows.forEach((row) => live.put(row.record));
+        appliedCount = rows.length;
+        manifestStore.put({ ...manifest, state: 'applied', appliedAt: manifest.appliedAt ?? new Date().toISOString() });
+      };
+      manifestRequest.onsuccess = applyIfReady;
+      rowsRequest.onsuccess = applyIfReady;
+      tx.oncomplete = () => resolve({ applied: appliedCount });
+      tx.onerror = () => reject(tx.error ?? new Error('اعمال پیوست‌های staging ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش اعمال پیوست‌های staging لغو شد.'));
+    });
+  } finally { db.close(); }
 }
 
 /** Test/diagnostics helper to verify tampering detection without altering production DB */
