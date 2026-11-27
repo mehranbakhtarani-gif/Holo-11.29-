@@ -323,6 +323,17 @@ async function runTests() {
   );
   console.log('✓ Subcontract completion fails closed until its multi-entity posting is atomic');
 
+  const finalizeVoucherIdx = accountingCtxSrc.indexOf('const finalizeVoucher = useCallback');
+  assert.ok(finalizeVoucherIdx !== -1, 'finalizeVoucher must exist');
+  const finalizeVoucherGuard = accountingCtxSrc.slice(finalizeVoucherIdx, finalizeVoucherIdx + 3600);
+  assert.match(
+    finalizeVoucherGuard,
+    /isOfflineNow[\\s\\S]*قطعی‌سازی سند به تأیید تراکنش ابری نیاز دارد[\\s\\S]*هیچ تغییری اعمال نشد/,
+    'Cloud voucher finalization must fail closed while offline instead of reporting a queued local write as committed'
+  );
+  console.log('✓ Cloud voucher finalization fails closed while offline');
+
+
 
   const forbiddenDirectNetworkPatterns: Array<{ label: string; regex: RegExp }> = [
     { label: 'raw fetch()', regex: /\bfetch\s*\(/ },
