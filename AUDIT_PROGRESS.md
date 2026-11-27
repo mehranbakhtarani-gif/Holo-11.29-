@@ -53,12 +53,16 @@
 | `AUD-015` | بحرانی | `src/context/AccountingContext.tsx` | ابطال فاکتور فروش در حالت آفلاین یا پس از خطای شبکه به Batch مبتنی بر snapshot قدیمی fallback می‌کرد؛ این مسیر کنترل نسخه و تعارض را دور می‌زد و در retry می‌توانست موجودی/سند معکوس را ناسازگار کند. ابطال پیش‌فاکتور ابری نیز با update مستقیم، کنترل نسخه نداشت. | مسیرهای ابطال فاکتور فروش و پیش‌فاکتور ابری اکنون در حالت آفلاین fail-closed هستند؛ مسیر آنلاین با Firestore transaction وضعیت و نسخه زنده سند را پیش از نوشتن بررسی می‌کند. Batch آفلاین فاقد precondition حذف شد؛ مسیر محلی همچنان از commit اتمیک IndexedDB استفاده می‌کند. | assertionهای ایستا برای ممنوعیت Batch آفلاین، کنترل نسخه و fail-closed در `offline-first-atomicity-audit.test.ts` |
 | `AUD-016` | بحرانی | `src/context/AccountingContext.tsx` | تعدیل موجودی تک‌کالا و انبارگردانی گروهی در حالت آفلاین یا خطای شبکه به Batch فاقد کنترل نسخه fallback می‌کردند؛ انبارگردانی گروهی حتی پس از خواندن نسخه زنده، delta محاسبه‌شده از snapshot قدیمی را می‌نوشت. | مسیرهای ابری در حالت آفلاین fail-closed هستند؛ تعدیل تک‌کالا از سند زنده و مالکیت تأییدشده محاسبه می‌شود؛ انبارگردانی گروهی مالکیت و `_version` هر کالا را با revision مبنای محاسبه تطبیق می‌دهد و در تعارض کل تراکنش را متوقف می‌کند. | assertionهای ایستا برای fail-closed، مالکیت، revision و حذف Batch آفلاین در `offline-first-atomicity-audit.test.ts` |
 | `AUD-017` | بحرانی | `src/context/AccountingContext.tsx` | تکمیل پیمانکاری ابتدا موجودی ماده خام و وضعیت حواله را تغییر می‌داد، سپس محصول نهایی و سند حسابداری را جداگانه ایجاد می‌کرد؛ rollback بعدی best-effort بود و نمی‌توانست اتمیک بودن را تضمین کند. | تکمیل پیمانکاری تا زمان انتقال کسر موجودی، ثبت محصول نهایی، سند دائمی و وضعیت حواله به یک تراکنش اتمیک و idempotent، به‌صورت fail-closed مسدود شد. | assertion ایستا در `offline-first-atomicity-audit.test.ts` برای وجود safety gate پیش از هر mutation |
+| `AUD-018` | بالا | `src/context/AccountingContext.tsx` | شماره‌گذاری مجدد اسناد ابری در بیش از ۴۵۰ تغییر، چند `writeBatch` مستقل commit می‌کرد؛ شکست یک batch می‌توانست شماره‌گذاری نیمه‌کاره و تکراری/دارای شکاف باقی بگذارد. | عملیات ابری بیش از ۴۵۰ تغییر را پیش از هر نوشتن رد می‌کند؛ تا زمان طراحی پروتکل چندمرحله‌ای قابل بازیابی، تنها یک batch اتمیک مجاز است. | assertion ایستا برای guard سقف ۴۵۰ در `offline-first-atomicity-audit.test.ts` |
+
 
 ---
 
-## ۳. نتایج اجرای کل مجموعه‌های تست خودکار (۱۴ از ۱۴ موفق)
+## ۳. آخرین baseline ثبت‌شده تست‌ها (۱۴ از ۱۴؛ اجرای جدید CI در حال بررسی)
 
 تمامی مجموعه‌های زیر در محیط Node.js (`tsx`) بدون هیچ خطا یا تست غیرفعال اجرا شدند:
+> این ۱۴ مجموعه، baseline موفق ثبت‌شده در اجرای قبلی هستند. پس از تغییرات اخیر، CI مربوط به HEAD شاخه باید دوباره کامل شود؛ تا پایان موفق TypeScript، تست‌ها، Firestore Emulator و Production build، این baseline به‌معنای تأیید نسخه فعلی نیست.
+
 1. `tests/accounting-security-recovery.test.ts` — موفق
 2. `tests/billion-upgrades.test.ts` — موفق
 3. `tests/enterprise-mesh-atomicity-audit.test.ts` — **12/12 موفق**
