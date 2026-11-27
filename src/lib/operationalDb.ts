@@ -27,6 +27,28 @@ import {
   Voucher,
 } from '../types/accounting';
 
+let forcedOperationalRestoreBarrier = false;
+
+export function setOperationalRestoreBarrier(active: boolean): void {
+  forcedOperationalRestoreBarrier = active;
+}
+
+export function isOperationalRestoreBarrierActive(): boolean {
+  return forcedOperationalRestoreBarrier;
+}
+
+if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+  const restoreBarrierChannel = new BroadcastChannel('holoo-complete-restore');
+  restoreBarrierChannel.onmessage = (event) => {
+    if (event.data?.reload === true) {
+      forcedOperationalRestoreBarrier = true;
+      window.location.reload();
+      return;
+    }
+    forcedOperationalRestoreBarrier = event.data?.active !== false;
+  };
+}
+
 const OP_DB_NAME = 'holoo_apex_operational_db_v1';
 export const OP_DB_VERSION = 5;
 
@@ -552,7 +574,7 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
       const journalRequest = journalTx.objectStore(RESTORE_JOURNAL_STORE).getAll();
       journalRequest.onsuccess = () => {
         const rows = (journalRequest.result as unknown[]) ?? [];
-        const barrierActive = rows.some((row) =>
+        const barrierActive = forcedOperationalRestoreBarrier || rows.some((row) =>
           !isValidOperationalRestoreJournalRecord(row) ||
           !RESTORE_JOURNAL_TERMINAL_STATES.includes((row as OperationalRestoreJournalRecord).state)
         );
