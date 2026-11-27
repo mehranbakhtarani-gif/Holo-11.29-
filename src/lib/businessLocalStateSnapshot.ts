@@ -76,7 +76,7 @@ function validateExtensionState(value: unknown): void {
   const arrayFields = [
     'reservedInvoices', 'favoriteMenus', 'pettyCashItems', 'recurringTemplates',
     'bankLoans', 'dyeLots', 'warehouseSlips', 'bomFormulas', 'installmentPlans',
-    'volumeDiscountRules', 'fiscalArchives',
+    'volumeDiscountRules', 'fiscalArchives', 'warehouseTransfers',
   ];
   for (const field of arrayFields) {
     if (value[field] !== undefined && !Array.isArray(value[field])) {
@@ -92,6 +92,15 @@ function validateExtensionState(value: unknown): void {
       (typeof value.pettyCashCeilingIrr !== 'number' ||
        !Number.isFinite(value.pettyCashCeilingIrr) || value.pettyCashCeilingIrr < 0)) {
     throw new Error('سقف تنخواه در snapshot معتبر نیست.');
+  }
+  if (Array.isArray(value.warehouseTransfers) &&
+      (value.warehouseTransfers.length > 250 || !value.warehouseTransfers.every((entry) =>
+        isRecord(entry) && typeof entry.id === 'string' && entry.id.trim().length > 0 &&
+        typeof entry.productId === 'string' && entry.productId.trim().length > 0 &&
+        typeof entry.fromWarehouse === 'string' && typeof entry.toWarehouse === 'string' &&
+        typeof entry.qty === 'number' && Number.isFinite(entry.qty) && entry.qty > 0 &&
+        ['in_transit', 'received', 'cancelled'].includes(String(entry.status))))) {
+    throw new Error('انتقال‌های بین انبار در snapshot افزونه‌های فضای کاری ناقص یا نامعتبرند.');
   }
   if (Array.isArray(value.favoriteMenus) &&
       !value.favoriteMenus.every((entry) => typeof entry === 'string')) {
