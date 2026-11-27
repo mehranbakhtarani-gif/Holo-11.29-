@@ -348,7 +348,7 @@ export function executeTrackedWarehouseTransfer(params: {
   }));
 
   const combinedLayers = [...otherLayers, ...plan.remainingSourceLayers, ...movedLayers];
-  const totalQty = roundQtyFixed(combinedLayers.reduce((s, l) => s + l.remainingQty, 0), 2);
+  const totalQty = roundQty(combinedLayers.reduce((s, l) => s + l.remainingQty, 0));
   const totalValIrr = sumIrr(combinedLayers.map((l) => l.totalCostIrr));
 
   const updatedProduct: Product = {
