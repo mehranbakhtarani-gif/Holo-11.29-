@@ -83,7 +83,11 @@ export interface SyncOutboxOperation {
   workspaceId: string;
   deviceId: string;
   clientRevision: number;
+  baseRevision?: number;
+  entityKind?: FinancialCollectionKind;
+  entityId?: string;
   payloadHash: string;
+  payload?: Record<string, unknown>;
   createdAt: string;
   retryCount: number;
   nextRetryAt?: string;
@@ -613,23 +617,22 @@ export async function enqueueSyncOutboxOperation(op: SyncOutboxOperation): Promi
       tx.onerror = () => reject(tx.error);
     });
     db.close();
-  } catch {
-    // Ignore silently
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('Failed to persist sync outbox operation');
   }
 }
 
 export async function listPendingSyncOutboxOperations(): Promise<SyncOutboxOperation[]> {
-  if (!isIndexedDbAvailable()) return [];
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: cannot safely read durable sync outbox');
+  const db = await openOperationalDb();
   try {
-    const db = await openOperationalDb();
     const tx = db.transaction('syncOutbox', 'readonly');
     const all = await readAllFromStore<SyncOutboxOperation>(tx, 'syncOutbox');
-    db.close();
     return all
       .filter((item) => item.status === 'pending')
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  } catch {
-    return [];
+  } finally {
+    db.close();
   }
 }
 
@@ -658,8 +661,8 @@ export async function markSyncOutboxOperationStatus(
       tx.onerror = () => reject(tx.error);
     });
     db.close();
-  } catch {
-    // Ignore silently
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('Failed to update sync outbox operation status');
   }
 }
 
