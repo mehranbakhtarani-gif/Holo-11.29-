@@ -840,6 +840,25 @@ export function recalculateInventoryLedger(input: {
           cogsOrCostIrr: costIrr,
           purchaseReturnVarianceIrr: 0,
         });
+      } else if (m.kind === 'transfer_out' || m.kind === 'transfer_in') {
+        // Transfers are value-neutral at the product-wide ledger level. Keep them
+        // visible in the Kardex without changing aggregate quantity, value, or P&L.
+        kardex.push({
+          movementId: m.id,
+          date: m.date,
+          kind: m.kind,
+          productId,
+          warehouse: m.warehouse || warehouse,
+          inQty: m.kind === 'transfer_in' ? q : 0,
+          outQty: m.kind === 'transfer_out' ? q : 0,
+          balanceQty: roundQty2(runningQty),
+          unitCostIrr: periodicUnitCostIrr,
+          inValueIrr: 0,
+          outValueIrr: 0,
+          balanceValueIrr: runningVal,
+          cogsOrCostIrr: 0,
+          purchaseReturnVarianceIrr: 0,
+        });
       } else if (m.kind === 'sale_return') {
         const costIrr = Math.round(periodicExactAvg * q);
         runningQty = roundQty(runningQty + q);
