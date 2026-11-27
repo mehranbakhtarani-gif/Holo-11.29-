@@ -311,6 +311,19 @@ async function runTests() {
   const viteConfigSrc = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
   const accountingCtxSrc = fs.readFileSync(path.join(root, 'src/context/AccountingContext.tsx'), 'utf8');
 
+  // Subcontract completion must remain blocked until raw stock, finished product,
+  // permanent voucher and job status share one atomic transaction.
+  const subcontractCompletionIdx = accountingCtxSrc.indexOf('const completeSubcontractJob = useCallback');
+  assert.ok(subcontractCompletionIdx !== -1, 'completeSubcontractJob must exist');
+  const subcontractCompletionGuard = accountingCtxSrc.slice(subcontractCompletionIdx, subcontractCompletionIdx + 900);
+  assert.match(
+    subcontractCompletionGuard,
+    /SAFETY GATE[\\s\\S]*showToast[\\s\\S]*return;/,
+    'Non-atomic subcontract completion must fail closed before any inventory or voucher mutation'
+  );
+  console.log('✓ Subcontract completion fails closed until its multi-entity posting is atomic');
+
+
   const forbiddenDirectNetworkPatterns: Array<{ label: string; regex: RegExp }> = [
     { label: 'raw fetch()', regex: /\bfetch\s*\(/ },
     { label: 'XMLHttpRequest', regex: /\bXMLHttpRequest\b/ },
