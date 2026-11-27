@@ -1272,6 +1272,10 @@ export async function commitDepreciationOperationalTx(
     !voucher ||
     typeof voucher.id !== 'string' ||
     !voucher.id.trim() ||
+    typeof voucher.ownerId !== 'string' ||
+    !voucher.ownerId.trim() ||
+    !Number.isSafeInteger(voucher.voucherNumber) ||
+    voucher.voucherNumber <= 0 ||
     voucher.status !== 'permanent' ||
     voucher.voucherType !== 'depreciation' ||
     typeof voucher.referenceId !== 'string' ||
