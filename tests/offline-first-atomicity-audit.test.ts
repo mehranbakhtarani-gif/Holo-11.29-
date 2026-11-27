@@ -847,7 +847,16 @@ async function runTests() {
         depreciationAmount: 1_800_000,
         accumulatedDepreciation: 11_800_000,
       }],
-      voucher: { ...depreciationVoucher, id: 'vch_dep_mismatch', totalDebit: 1_900_000, totalCredit: 1_900_000 },
+      voucher: {
+        ...depreciationVoucher,
+        id: 'vch_dep_mismatch',
+        totalDebit: 1_900_000,
+        totalCredit: 1_900_000,
+        lines: [
+          { ...depreciationVoucher.lines[0], debit: 1_900_000 },
+          { ...depreciationVoucher.lines[1], credit: 1_900_000 },
+        ],
+      },
     }, { dbOverride: mismatchDepreciationSim.db }),
     /ATOMIC_DEPRECIATION_ASSET_VOUCHER_MISMATCH/
   );
