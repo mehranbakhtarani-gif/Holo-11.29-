@@ -273,9 +273,16 @@ export async function createOperationalRestoreJournal(
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
       const store = tx.objectStore(RESTORE_JOURNAL_STORE);
-      const get = store.get(record.restoreId);
+      const get = store.getAll();
       get.onsuccess = () => {
-        if (get.result) {
+        const existingRows = (get.result as unknown[]) ?? [];
+        const hasInvalidOrActive = existingRows.some((row) =>
+          !isValidOperationalRestoreJournalRecord(row) ||
+          !RESTORE_JOURNAL_TERMINAL_STATES.includes((row as OperationalRestoreJournalRecord).state)
+        );
+        if (hasInvalidOrActive || existingRows.some((row) =>
+          (row as OperationalRestoreJournalRecord).restoreId === record.restoreId
+        )) {
           tx.abort();
           return;
         }
