@@ -3,6 +3,7 @@ import {
   createOperationalRestoreJournal,
   discardStagingOperationalRestoreJournal,
   getActiveOperationalRestoreJournal,
+  setOperationalRestoreBarrier,
   parseOperationalWorkspaceSnapshot,
   countOperationalWorkspaceRecords,
   transitionOperationalRestoreJournal,
@@ -34,13 +35,17 @@ export interface CompleteBackupRestoreResult {
   restoredWorkspaceRecords: number;
 }
 
-function announceRestoreBarrier(active: boolean): void {
+function announceRestoreBarrier(active: boolean, reload = false): void {
+  const effectiveActive = reload ? true : active;
+  setOperationalRestoreBarrier(effectiveActive);
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('holoo:restore-barrier', { detail: { active } }));
+    window.dispatchEvent(new CustomEvent('holoo:restore-barrier', {
+      detail: { active: effectiveActive, reload },
+    }));
   }
   if (typeof BroadcastChannel !== 'undefined') {
     const channel = new BroadcastChannel('holoo-complete-restore');
-    channel.postMessage({ active });
+    channel.postMessage({ active: effectiveActive, reload });
     channel.close();
   }
 }
@@ -105,49 +110,56 @@ export async function restoreCompleteBackupPackage(
   const attachmentBundleJson = JSON.stringify(parsed.documentAttachments);
   const restoreId = createRestoreId();
 
-  // Stage attachments first. This is non-live data; an orphaned stage after a
-  // crash before journal creation is harmless and can be garbage-collected.
-  const stagedManifest = await stageEncryptedDocumentAttachmentBundle(
-    restoreId,
-    attachmentBundleJson,
-    packageDigest
-  );
-  await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
-
-  const now = new Date().toISOString();
-  const journal: OperationalRestoreJournalRecord = {
-    restoreId,
-    workspaceId: typeof workspace.profile?.uid === 'string' && workspace.profile.uid
-      ? workspace.profile.uid
-      : 'local_workspace',
-    packageDigest,
-    workspaceEnvelopeJson,
-    workspacePlaintextSha256: verified.sha256,
-    workspaceSchemaVersion: 2,
-    workspaceRecordCount,
-    attachmentManifestDigest: stagedManifest.manifestDigest,
-    attachmentCount: stagedManifest.rowCount,
-    packageSchemaVersion: 2,
-    state: 'staging',
-    createdAt: now,
-    updatedAt: now,
-  };
-
+  // Freeze local persistence and all sync paths before any staging work begins.
+  announceRestoreBarrier(true);
+  let staged = false;
   let commitIntentWritten = false;
   try {
+    const stagedManifest = await stageEncryptedDocumentAttachmentBundle(
+      restoreId,
+      attachmentBundleJson,
+      packageDigest
+    );
+    staged = true;
+    await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
+
+    const now = new Date().toISOString();
+    const journal: OperationalRestoreJournalRecord = {
+      restoreId,
+      workspaceId: workspace.profile.uid || 'local_workspace',
+      packageDigest,
+      workspaceEnvelopeJson,
+      workspacePlaintextSha256: verified.sha256,
+      workspaceSchemaVersion: 2,
+      workspaceRecordCount,
+      attachmentManifestDigest: stagedManifest.manifestDigest,
+      attachmentCount: stagedManifest.rowCount,
+      packageSchemaVersion: 2,
+      state: 'staging',
+      createdAt: now,
+      updatedAt: now,
+    };
+
     await createOperationalRestoreJournal(journal);
-    announceRestoreBarrier(true);
     await transitionOperationalRestoreJournal(restoreId, ['staging'], 'commit_requested', {});
     commitIntentWritten = true;
+
     const workspaceResult = await applyOperationalRestoreJournalWorkspace(restoreId);
-    const attachmentResult = await applyStagedDocumentAttachmentBundle(restoreId, packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
+    const attachmentResult = await applyStagedDocumentAttachmentBundle(
+      restoreId,
+      packageDigest,
+      journal.attachmentManifestDigest,
+      journal.attachmentCount
+    );
     const active = await getActiveOperationalRestoreJournal();
     if (!active || active.restoreId !== restoreId || active.state !== 'workspace_applied') {
       throw new Error('وضعیت ژورنال پس از اعمال دو بخش قابل تأیید نیست.');
     }
     await transitionOperationalRestoreJournal(restoreId, ['workspace_applied'], 'committed', {});
     try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* committed data is authoritative; cleanup retries later */ }
-    announceRestoreBarrier(false);
+    // Keep the current tab blocked until it reloads from the committed workspace.
+    // Other tabs receive reload=true and must reload rather than continue stale state.
+    announceRestoreBarrier(true, true);
     return {
       restoreId,
       restoredAttachments: attachmentResult.applied,
@@ -158,7 +170,9 @@ export async function restoreCompleteBackupPackage(
     const durableCommitIntent = durableJournal?.restoreId === restoreId &&
       durableJournal.state !== 'staging' && durableJournal.state !== 'committed';
     if (!commitIntentWritten && !durableCommitIntent) {
-      try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* no live data was touched */ }
+      if (staged) {
+        try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* no live data was touched */ }
+      }
       try { await discardStagingOperationalRestoreJournal(restoreId); } catch { /* journal may not have been created */ }
       announceRestoreBarrier(false);
     } else if (durableJournal?.restoreId === restoreId) {
