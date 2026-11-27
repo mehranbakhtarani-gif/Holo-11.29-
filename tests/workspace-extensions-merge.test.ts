@@ -101,4 +101,10 @@ const scalarConflict = mergeWorkspaceExtensionField(100, 120, 130);
 assert.equal(scalarConflict.ok, false,
   'concurrent edits to the same scalar must be rejected');
 
+const pollutedMap = JSON.parse('{"__proto__":{"polluted":true},"safeKey":{"state":"ok"}}');
+const pollutedMerge = mergeWorkspaceExtensionField({}, pollutedMap, {});
+assert.equal(pollutedMerge.ok, false,
+  'prototype-sensitive map keys must be rejected at the workspace merge boundary');
+
+
 console.log('Workspace extension merge and concurrent patch tests passed');
