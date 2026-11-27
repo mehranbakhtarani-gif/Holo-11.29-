@@ -85,6 +85,7 @@ async function run() {
     migrationState: 'prepared' as const,
   };
   assert.equal(validateEncryptedOperationalWorkspaceRecordMetadata(validMetadata, 'workspace-1'), true);
+  assert.equal(validateEncryptedOperationalWorkspaceRecordMetadata({ ...validMetadata, schemaVersion: 1 }, 'workspace-1'), false);
   assert.equal(validateEncryptedOperationalWorkspaceRecordMetadata(validMetadata, 'another-workspace'), false);
   assert.equal(
     validateEncryptedOperationalWorkspaceRecordMetadata({ ...validMetadata, recordCount: -1 }, 'workspace-1'),
