@@ -1706,6 +1706,7 @@ export function useDualCloudSync() {
   }, []);
 
   const clearPendingOutbox = useCallback(() => {
+    if (isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همگام‌سازی تا پایان بازیابی متوقف است.'); return; }
     clearOfflineOutbox();
     setOutbox([]);
     pendingOperationRef.current = null;
