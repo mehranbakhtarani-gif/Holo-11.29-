@@ -106,7 +106,6 @@ import {
 } from '../lib/operationalDb';
 import {
   deleteLocalSnapshot,
-  downloadBackupFileToDevice,
   downloadEncryptedBackupFileToDevice,
   getAutoBackupOnClosePref,
   getDeviceLabel,
