@@ -163,6 +163,34 @@ async function run() {
       discount: -1,
     })));
 
+    // New cloud backups must contain an encrypted envelope, never a plaintext snapshot map.
+    const encryptedCloudBackup = {
+      ownerId: 'company_a',
+      revision: 1,
+      reason: 'manual_push',
+      deviceId: 'device_a',
+      deviceLabel: 'Finance workstation',
+      companyName: 'Test company',
+      fiscalYear: '1405',
+      savedAtMs: Date.now(),
+      savedAtShamsi: '1405/01/01',
+      voucherCount: 1,
+      invoiceCount: 1,
+      productCount: 1,
+      sizeKb: 4,
+      snapshotEnvelope: 'eyJmb3JtYXQiOiJob2xvby1hcGV4LWVuY3J5cHRlZC1iYWNrdXAifQ==',
+      encryption: 'PBKDF2-SHA256+AES-256-GCM',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await assertSucceeds(setDoc(doc(ownerA, 'cloudBackups', 'encrypted_backup'), encryptedCloudBackup));
+    await assertFails(setDoc(doc(ownerA, 'cloudBackups', 'plaintext_backup'), {
+      ...encryptedCloudBackup,
+      snapshotEnvelope: undefined,
+      encryption: undefined,
+      snapshot: { accounts: [{ code: '101', balance: 500 }] },
+    }));
+
     // Unknown collections remain denied by the global default-deny rule.
     await assertFails(setDoc(doc(ownerA, 'unexpectedCollection', 'unexpected'), {
       ownerId: 'company_a',
