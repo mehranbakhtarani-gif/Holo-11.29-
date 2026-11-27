@@ -140,7 +140,7 @@ export async function restoreCompleteBackupPackage(
     await transitionOperationalRestoreJournal(restoreId, ['staging'], 'commit_requested', {});
     commitIntentWritten = true;
     const workspaceResult = await applyOperationalRestoreJournalWorkspace(restoreId);
-    const attachmentResult = await applyStagedDocumentAttachmentBundle(restoreId, packageDigest);
+    const attachmentResult = await applyStagedDocumentAttachmentBundle(restoreId, packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
     const active = await getActiveOperationalRestoreJournal();
     if (!active || active.restoreId !== restoreId || active.state !== 'workspace_applied') {
       throw new Error('وضعیت ژورنال پس از اعمال دو بخش قابل تأیید نیست.');
@@ -180,7 +180,7 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
     return null;
   }
   if (journal.state === 'workspace_applied') {
-    const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest);
+    const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
     await transitionOperationalRestoreJournal(journal.restoreId, ['workspace_applied'], 'committed', {});
     try { await discardStagedDocumentAttachmentBundle(journal.restoreId); } catch { /* cleanup is retryable */ }
     announceRestoreBarrier(false);
