@@ -2101,7 +2101,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           if (patch.originCountry !== undefined) payload.originCountry = patch.originCountry.trim().slice(0, 64);
           if (patch.buyPrice !== undefined) payload.buyPrice = Math.max(0, Number(patch.buyPrice) || 0);
           if (patch.sellPrice !== undefined) payload.sellPrice = Math.max(0, Number(patch.sellPrice) || 0);
-          if (patch.stock !== undefined) payload.stock = Number((Number(patch.stock) || 0).toFixed(2));
+          if (patch.stock !== undefined) payload.stock = Number((Number(patch.stock) || 0).toFixed(4));
           if (patch.reorderPoint !== undefined) payload.reorderPoint = Math.max(0, Number(patch.reorderPoint) || 0);
           if (patch.vatExempt !== undefined) payload.vatExempt = Boolean(patch.vatExempt);
           if (patch.costingMethod !== undefined) payload.costingMethod = patch.costingMethod;
