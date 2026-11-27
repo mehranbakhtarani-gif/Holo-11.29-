@@ -56,7 +56,12 @@ import {
   ProductApexMeta,
   ReservedInvoice,
 } from '../lib/smartIntelligence';
-import { ActiveModule } from '../types/accounting';
+import { ActiveModule, Product } from '../types/accounting';
+import {
+  executeTrackedWarehouseTransfer,
+  receiveTrackedWarehouseTransfer,
+  TrackedWarehouseTransfer,
+} from '../lib/multiWarehouseEngine';
 
 const LOCAL_EXT_STORAGE_KEY = 'holoo_apex96_workspace_extensions_v2';
 
@@ -75,6 +80,7 @@ export interface WorkspaceExtensionsState {
   volumeDiscountRules: VolumeDiscountRule[];
   moadianLinks: Record<string, MoadianInvoiceMeta>;
   fiscalArchives: FiscalYearArchive[];
+  warehouseTransfers: TrackedWarehouseTransfer[];
 }
 
 function stripUndefinedDeep<T>(value: T): T {
@@ -145,6 +151,7 @@ function loadInitialExtensions(): WorkspaceExtensionsState {
     moadianLinks:
       saved.moadianLinks && typeof saved.moadianLinks === 'object' ? saved.moadianLinks : {},
     fiscalArchives: Array.isArray(saved.fiscalArchives) ? saved.fiscalArchives : [],
+    warehouseTransfers: Array.isArray(saved.warehouseTransfers) ? saved.warehouseTransfers : [],
   };
 }
 
@@ -164,6 +171,11 @@ interface WorkspaceExtensionsContextValue extends WorkspaceExtensionsState {
   setPresenceModule: (mod: ActiveModule) => void;
   setEditingLock: (recordKey: string, recordLabel?: string) => void;
   getConflictingDevices: (recordKey: string) => DevicePresenceRecord[];
+  createTrackedWarehouseTransfer: (params: {
+    productId: string; fromWarehouse: string; toWarehouse: string; qty: number;
+    transferNumber: string; mode: 'immediate' | 'in_transit'; date: string;
+  }) => Promise<TrackedWarehouseTransfer>;
+  receiveTrackedWarehouseTransfer: (transferId: string, receivedDate: string) => Promise<TrackedWarehouseTransfer>;
 }
 
 const WorkspaceExtensionsContext = createContext<WorkspaceExtensionsContextValue | null>(null);
@@ -171,7 +183,7 @@ const WorkspaceExtensionsContext = createContext<WorkspaceExtensionsContextValue
 export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products } = useAccounting();
+  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products, updateProduct } = useAccounting();
 
   const [state, setState] = useState<WorkspaceExtensionsState>(() => loadInitialExtensions());
   const [onlineDevices, setOnlineDevices] = useState<DevicePresenceRecord[]>([]);
@@ -285,6 +297,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         volumeDiscountRules: next.volumeDiscountRules.slice(0, 50),
         moadianLinks: Object.fromEntries(Object.entries(next.moadianLinks).slice(0, 500)),
         fiscalArchives: next.fiscalArchives.slice(0, 25),
+        warehouseTransfers: next.warehouseTransfers.slice(0, 250),
       });
 
       const write = async () => {
@@ -437,6 +450,9 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             fiscalArchives: Array.isArray(data.fiscalArchives)
               ? data.fiscalArchives
               : prev.fiscalArchives,
+            warehouseTransfers: Array.isArray(data.warehouseTransfers)
+              ? data.warehouseTransfers
+              : prev.warehouseTransfers,
           };
         persistLocalMirror(merged);
         stateRef.current = merged;
@@ -633,6 +649,153 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     [updateExtensions]
   );
 
+  const persistTransferState = useCallback((nextTransfers: TrackedWarehouseTransfer[]) => {
+    const previous = stateRef.current;
+    const next = { ...previous, warehouseTransfers: nextTransfers };
+    persistLocalMirror(next);
+    stateRef.current = next;
+    setState(next);
+  }, [persistLocalMirror]);
+
+  const createTrackedWarehouseTransfer = useCallback(async (params: {
+    productId: string; fromWarehouse: string; toWarehouse: string; qty: number;
+    transferNumber: string; mode: 'immediate' | 'in_transit'; date: string;
+  }): Promise<TrackedWarehouseTransfer> => {
+    if (isOperationalRestoreBarrierActive()) throw new Error('عملیات انتقال تا پایان بازیابی متوقف است.');
+    const localProduct = products.find((item) => item.id === params.productId);
+    if (!localProduct) throw new Error('کالای انتخاب‌شده یافت نشد.');
+    const cloudUid = isCloudMode ? user?.uid : null;
+    if (isCloudMode && !cloudUid) throw new Error('حساب ابری فعال نیست؛ انتقال ثبت نشد.');
+
+    pendingCloudMutationsRef.current += 1;
+    try {
+      let result: ReturnType<typeof executeTrackedWarehouseTransfer> | undefined;
+      if (cloudUid) {
+        const productRef = doc(db, 'products', params.productId);
+        const extensionRef = doc(db, 'workspaceExtensions', cloudUid);
+        await runTransaction(db, async (transaction) => {
+          if (activeCloudUidRef.current !== cloudUid) throw new Error('حساب کاربری هنگام انتقال تغییر کرد.');
+          const [productSnap, extensionSnap] = await Promise.all([
+            transaction.get(productRef), transaction.get(extensionRef),
+          ]);
+          if (!productSnap.exists()) throw new Error('کالای مبدا در پایگاه ابری وجود ندارد.');
+          const remoteProduct = { ...productSnap.data(), id: params.productId } as Product;
+          const extensionData = extensionSnap.exists() ? extensionSnap.data() : {};
+          const existing = Array.isArray(extensionData.warehouseTransfers)
+            ? extensionData.warehouseTransfers as TrackedWarehouseTransfer[] : [];
+          result = executeTrackedWarehouseTransfer({
+            product: remoteProduct, ...params, existingTransfers: existing,
+            defaultCostingMethod: remoteProduct.costingMethod || 'moving_average',
+            operatorName: activeOperator?.name,
+          });
+          transaction.update(productRef, {
+            stock: Number(result.updatedProduct.stock.toFixed(4)),
+            inventoryValueIrr: Math.round(result.updatedProduct.inventoryValueIrr || 0),
+            costLayers: result.updatedProduct.costLayers || [],
+            updatedAt: serverTimestamp(),
+          });
+          const nextVersion = Math.max(0, Number(extensionData._version) || 0) + 1;
+          transaction.set(extensionRef, {
+            ownerId: cloudUid,
+            warehouseTransfers: [...existing, result.transferRecord].slice(-250),
+            _version: nextVersion,
+            updatedByDevice: deviceLabel.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+        });
+      } else {
+        result = executeTrackedWarehouseTransfer({
+          product: localProduct, ...params,
+          existingTransfers: stateRef.current.warehouseTransfers,
+          defaultCostingMethod: localProduct.costingMethod || 'moving_average',
+          operatorName: activeOperator?.name,
+        });
+        await updateProduct(params.productId, {
+          stock: result.updatedProduct.stock,
+          inventoryValueIrr: result.updatedProduct.inventoryValueIrr,
+          costLayers: result.updatedProduct.costLayers,
+        });
+      }
+      if (!result) throw new Error('نتیجه انتقال تولید نشد.');
+      const nextTransfers = cloudUid
+        ? [...stateRef.current.warehouseTransfers.filter((item) => item.id !== result!.transferRecord.id), result.transferRecord].slice(-250)
+        : [...stateRef.current.warehouseTransfers, result.transferRecord].slice(-250);
+      persistTransferState(nextTransfers);
+      return result.transferRecord;
+    } finally {
+      pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
+    }
+  }, [products, isCloudMode, user?.uid, activeOperator?.name, deviceLabel, updateProduct, persistTransferState]);
+
+  const receiveTrackedWarehouseTransfer = useCallback(async (
+    transferId: string, receivedDate: string
+  ): Promise<TrackedWarehouseTransfer> => {
+    if (isOperationalRestoreBarrierActive()) throw new Error('عملیات دریافت تا پایان بازیابی متوقف است.');
+    const transfer = stateRef.current.warehouseTransfers.find((item) => item.id === transferId);
+    if (!transfer) throw new Error('سند انتقال یافت نشد.');
+    const localProduct = products.find((item) => item.id === transfer.productId);
+    if (!localProduct) throw new Error('کالای انتقال یافت نشد.');
+    const cloudUid = isCloudMode ? user?.uid : null;
+    if (isCloudMode && !cloudUid) throw new Error('حساب ابری فعال نیست؛ دریافت ثبت نشد.');
+
+    pendingCloudMutationsRef.current += 1;
+    try {
+      let updatedTransfer: TrackedWarehouseTransfer | undefined;
+      if (cloudUid) {
+        const productRef = doc(db, 'products', transfer.productId);
+        const extensionRef = doc(db, 'workspaceExtensions', cloudUid);
+        await runTransaction(db, async (transaction) => {
+          if (activeCloudUidRef.current !== cloudUid) throw new Error('حساب کاربری هنگام دریافت تغییر کرد.');
+          const [productSnap, extensionSnap] = await Promise.all([
+            transaction.get(productRef), transaction.get(extensionRef),
+          ]);
+          if (!productSnap.exists() || !extensionSnap.exists()) throw new Error('کالای انتقال یا دفتر انتقال ابری یافت نشد.');
+          const extensionData = extensionSnap.data();
+          const remoteTransfers = Array.isArray(extensionData.warehouseTransfers)
+            ? extensionData.warehouseTransfers as TrackedWarehouseTransfer[] : [];
+          const remoteTransfer = remoteTransfers.find((item) => item.id === transferId);
+          if (!remoteTransfer || remoteTransfer.status !== 'in_transit') {
+            throw new Error('انتقال در راه وجود ندارد یا قبلاً دریافت شده است.');
+          }
+          const remoteProduct = { ...productSnap.data(), id: transfer.productId } as Product;
+          const received = receiveTrackedWarehouseTransfer({
+            product: remoteProduct, transfer: remoteTransfer, receivedDate,
+          });
+          updatedTransfer = received.transferRecord;
+          transaction.update(productRef, {
+            stock: Number(received.updatedProduct.stock.toFixed(4)),
+            inventoryValueIrr: Math.round(received.updatedProduct.inventoryValueIrr || 0),
+            costLayers: received.updatedProduct.costLayers || [],
+            updatedAt: serverTimestamp(),
+          });
+          transaction.update(extensionRef, {
+            warehouseTransfers: remoteTransfers.map((item) => item.id === transferId ? received.transferRecord : item),
+            _version: Math.max(0, Number(extensionData._version) || 0) + 1,
+            updatedByDevice: deviceLabel.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          });
+        });
+      } else {
+        const received = receiveTrackedWarehouseTransfer({
+          product: localProduct, transfer, receivedDate,
+        });
+        updatedTransfer = received.transferRecord;
+        await updateProduct(transfer.productId, {
+          stock: received.updatedProduct.stock,
+          inventoryValueIrr: received.updatedProduct.inventoryValueIrr,
+          costLayers: received.updatedProduct.costLayers,
+        });
+      }
+      if (!updatedTransfer) throw new Error('نتیجه دریافت انتقال تولید نشد.');
+      persistTransferState(stateRef.current.warehouseTransfers.map((item) =>
+        item.id === transferId ? updatedTransfer! : item
+      ));
+      return updatedTransfer;
+    } finally {
+      pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
+    }
+  }, [products, isCloudMode, user?.uid, deviceLabel, updateProduct, persistTransferState]);
+
   const setPresenceModule = useCallback((mod: ActiveModule) => {
     setActivePresenceModule(mod);
   }, []);
@@ -675,6 +838,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       setPresenceModule,
       setEditingLock,
       getConflictingDevices,
+      createTrackedWarehouseTransfer,
+      receiveTrackedWarehouseTransfer,
     }),
     [
       state,
@@ -691,6 +856,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       setPresenceModule,
       setEditingLock,
       getConflictingDevices,
+      createTrackedWarehouseTransfer,
+      receiveTrackedWarehouseTransfer,
     ]
   );
 
