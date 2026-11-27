@@ -65,6 +65,14 @@ async function run() {
     () => parseOperationalWorkspaceSnapshot('{invalid json'),
     /JSON معتبر نیست/
   );
+  assert.throws(
+    () => parseOperationalWorkspaceSnapshot(JSON.stringify({ ...workspace, syncOutbox: 'not-an-array' })),
+    /ناقص یا ناسازگار/
+  );
+  assert.throws(
+    () => countOperationalWorkspaceRecords({ ...workspace, taxReports: null as unknown as typeof workspace.taxReports }),
+    /مجموعه رکوردهای فضای کاری/
+  );
 
   const validMetadata = {
     workspaceId: 'workspace-1',
