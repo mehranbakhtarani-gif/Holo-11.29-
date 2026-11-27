@@ -4314,6 +4314,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- CORPORATE MODULES CRUD ----------------
   const addEmployee = useCallback(
     async (emp: Omit<Employee, 'id' | 'ownerId'>) => {
+      if (!assertPermission('canManageSettings')) throw new Error('عدم دسترسی برای ثبت اطلاعات پرسنل.');
       const id = generateSafeId('emp');
       const full: Employee = { ...emp, id, ownerId };
       if (user) {
@@ -4335,17 +4336,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `employees/${id}`);
+          throw err;
         }
       } else {
         setEmployees((prev) => [...prev, full]);
       }
       showToast(`پرسنل «${emp.fullName}» به لیست حقوق و دستمزد افزوده شد.`);
     },
-    [ownerId, user, showToast]
+    [ownerId, user, showToast, assertPermission]
   );
 
   const updateEmployee = useCallback(
     async (empId: string, patch: Partial<Omit<Employee, 'id' | 'ownerId' | 'personnelCode'>>) => {
+      if (!assertPermission('canManageSettings')) throw new Error('عدم دسترسی برای ویرایش اطلاعات پرسنل.');
       if (user) {
         try {
           const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -4361,29 +4364,34 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'employees', empId), payload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `employees/${empId}`);
+          throw err;
         }
       } else {
         setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, ...patch } : e)));
       }
       showToast('مشخصات و حکم کارگزینی پرسنل ویرایش شد.');
     },
-    [user, showToast]
+    [user, showToast, assertPermission]
   );
 
   const deleteEmployee = useCallback(
     async (empId: string) => {
+      if (!assertPermission('canManageSettings') || !assertPermission('canDeleteRecords')) {
+        throw new Error('عدم دسترسی برای حذف اطلاعات پرسنل.');
+      }
       if (user) {
         try {
           await deleteDoc(doc(db, 'employees', empId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `employees/${empId}`);
+          throw err;
         }
       } else {
         setEmployees((prev) => prev.filter((e) => e.id !== empId));
       }
       showToast('پرسنل از لیست فعال حذف شد.');
     },
-    [user, showToast]
+    [user, showToast, assertPermission]
   );
 
   const postMonthlyPayrollVoucher = useCallback(
@@ -4611,6 +4619,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const addFixedAsset = useCallback(
     async (asset: Omit<FixedAsset, 'id' | 'ownerId'>) => {
+      if (!assertPermission('canManageSettings')) throw new Error('عدم دسترسی برای ثبت دارایی ثابت.');
       const id = generateSafeId('ast');
       const full: FixedAsset = { ...asset, id, ownerId };
       if (user) {
@@ -4630,17 +4639,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `assets/${id}`);
+          throw err;
         }
       } else {
         setAssets((prev) => [...prev, full]);
       }
       showToast(`دارایی ثابت «${asset.title}» ثبت شد.`);
     },
-    [ownerId, user, showToast]
+    [ownerId, user, showToast, assertPermission]
   );
 
   const updateFixedAsset = useCallback(
     async (assetId: string, patch: Partial<Omit<FixedAsset, 'id' | 'ownerId' | 'assetCode'>>) => {
+      if (!assertPermission('canManageSettings')) throw new Error('عدم دسترسی برای ویرایش دارایی ثابت.');
       if (user) {
         try {
           const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -4654,29 +4665,34 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'assets', assetId), payload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `assets/${assetId}`);
+          throw err;
         }
       } else {
         setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, ...patch } : a)));
       }
       showToast('مشخصات دارایی ثابت ویرایش شد.');
     },
-    [user, showToast]
+    [user, showToast, assertPermission]
   );
 
   const deleteFixedAsset = useCallback(
     async (assetId: string) => {
+      if (!assertPermission('canManageSettings') || !assertPermission('canDeleteRecords')) {
+        throw new Error('عدم دسترسی برای حذف دارایی ثابت.');
+      }
       if (user) {
         try {
           await deleteDoc(doc(db, 'assets', assetId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `assets/${assetId}`);
+          throw err;
         }
       } else {
         setAssets((prev) => prev.filter((a) => a.id !== assetId));
       }
       showToast('دارایی ثابت حذف شد.');
     },
-    [user, showToast]
+    [user, showToast, assertPermission]
   );
 
   const postDepreciationVoucher = useCallback(
@@ -6528,6 +6544,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `rbacOperators/${opId}`);
+          throw err;
         }
       } else {
         setRbacOperators((prev) => prev.map((o) => (o.id === opId ? { ...o, ...patch } : o)));
@@ -6550,6 +6567,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'rbacOperators', opId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `rbacOperators/${opId}`);
+          throw err;
         }
       } else {
         setRbacOperators((prev) => prev.filter((o) => o.id !== opId));
