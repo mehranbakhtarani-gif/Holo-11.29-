@@ -54,7 +54,7 @@ async function run() {
   assert.deepEqual(parseOperationalWorkspaceSnapshot(json).syncInbox, workspace.syncInbox);
   assert.throws(
     () => countOperationalWorkspaceRecords({ ...workspace, accounts: null as unknown as typeof workspace.accounts }),
-    /ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار/
+    /ساختار مجموعه رکوردهای فضای کاری معتبر نیست/
   );
 
   assert.throws(
