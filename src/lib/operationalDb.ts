@@ -217,9 +217,17 @@ export async function getActiveOperationalRestoreJournal(): Promise<OperationalR
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
       const request = tx.objectStore(RESTORE_JOURNAL_STORE).getAll();
       request.onsuccess = () => {
-        const rows = (request.result as unknown[]).filter(isValidOperationalRestoreJournalRecord);
-        const active = rows.filter((row) => !RESTORE_JOURNAL_TERMINAL_STATES.includes(row.state))
-          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const rawRows = (request.result as unknown[]) ?? [];
+        if (rawRows.some((row) => !isValidOperationalRestoreJournalRecord(row))) {
+          reject(new Error('ژورنال بازیابی خراب یا دستکاری‌شده است؛ شروع عادی برنامه مسدود شد.'));
+          return;
+        }
+        const rows = rawRows as OperationalRestoreJournalRecord[];
+        const active = rows.filter((row) => !RESTORE_JOURNAL_TERMINAL_STATES.includes(row.state));
+        if (active.length > 1) {
+          reject(new Error('بیش از یک بازیابی ناتمام ثبت شده است؛ برای جلوگیری از اختلاط داده‌ها شروع برنامه مسدود شد.'));
+          return;
+        }
         resolve(active[0] ?? null);
       };
       request.onerror = () => reject(request.error ?? new Error('خواندن ژورنال بازیابی ناموفق بود.'));
