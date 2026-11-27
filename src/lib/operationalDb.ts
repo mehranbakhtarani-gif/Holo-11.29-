@@ -391,6 +391,30 @@ export async function applyOperationalRestoreJournalWorkspace(
   }
 }
 
+/** Remove only an uncommitted staging journal; committed or commit-intent journals are immutable. */
+export async function discardStagingOperationalRestoreJournal(restoreId: string): Promise<void> {
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای پاک‌سازی ژورنال در دسترس نیست.');
+  const db = await openOperationalDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
+      const store = tx.objectStore(RESTORE_JOURNAL_STORE);
+      const request = store.get(restoreId);
+      request.onsuccess = () => {
+        const current = request.result as OperationalRestoreJournalRecord | undefined;
+        if (!current || !isValidOperationalRestoreJournalRecord(current) || current.state !== 'staging') {
+          tx.abort();
+          return;
+        }
+        store.delete(restoreId);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error('پاک‌سازی ژورنال staging ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('پاک‌سازی ژورنال staging لغو شد.'));
+    });
+  } finally { db.close(); }
+}
+
 /** Monotonic journal transition; terminal committed records cannot be reopened. */
 export async function transitionOperationalRestoreJournal(
   restoreId: string,
