@@ -21,6 +21,7 @@ const { saveDocumentAttachment } = await import('../src/lib/documentVault');
 const {
   getActiveOperationalRestoreJournal,
   isOperationalRestoreBarrierActive,
+  saveOperationalWorkspaceTx,
 } = await import('../src/lib/operationalDb');
 const { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } = await import('../src/lib/completeBackupRestore');
 
@@ -137,6 +138,11 @@ async function run() {
   assert.ok(interrupted, 'commit-intent journal must survive a crash between database commits');
   assert.equal(interrupted.state, 'failed_recovery_required');
   assert.equal(isOperationalRestoreBarrierActive(), true, 'normal workspace writes remain blocked');
+  await assert.rejects(
+    saveOperationalWorkspaceTx(workspace),
+    /ذخیره‌سازی فضای کاری تا پایان بازیابی پشتیبان متوقف است/,
+    'background operational persistence must not overwrite a restore in progress'
+  );
   assert.equal(await countLiveAttachments(), 1, 'aborted vault transaction must preserve the old attachment set');
 
   const operationalDb = await new Promise<IDBDatabase>((resolve, reject) => {
