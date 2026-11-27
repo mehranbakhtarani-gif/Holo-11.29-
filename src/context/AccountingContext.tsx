@@ -5191,6 +5191,18 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         openingVoucherId,
         'opening'
       );
+      // Never derive a missing opening voucher from a newly recalculated close plan:
+      // new postings may have occurred after the original closing voucher committed.
+      if (existingClosing && options?.createNextYearOpening && !existingOpening) {
+        throw new Error(
+          'سند اختتامیه قبلاً ثبت شده اما سند افتتاحیه متناظر وجود ندارد؛ برای جلوگیری از انتقال مانده نادرست، ابتدا سند اختتامیه موجود باید تطبیق داده شود.'
+        );
+      }
+      if (existingOpening && !existingClosing) {
+        throw new Error(
+          'سند افتتاحیه سال بعد بدون سند اختتامیه متناظر پیدا شد؛ بستن سال مالی تا زمان تطبیق اسناد متوقف شد.'
+        );
+      }
       const planningVouchers = vouchers.filter(
         (v) =>
           !(
