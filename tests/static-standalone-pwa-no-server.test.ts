@@ -57,14 +57,22 @@ async function main() {
     assert.equal(await detectOptionalBackendServer(realServerFetch), true);
   });
 
-  await runCase('2. isJsonHttpResponse strictly differentiates JSON API payloads from HTML SPA fallbacks', () => {
+  await runCase('2. live FX ticker targets the deployed Cloudflare Worker instead of the static-site origin', () => {
+    const ticker = fs.readFileSync(path.join(ROOT, 'src/components/LiveFxTickerCard.tsx'), 'utf8');
+    assert.ok(ticker.includes("https://holoo-apex-api.mehranbakhtarani.workers.dev"));
+    assert.ok(ticker.includes("new URL('/api/live-fx', LIVE_FX_API_BASE_URL)"));
+    assert.ok(!ticker.includes("fetch(force ? '/api/live-fx"));
+    assert.ok(ticker.includes("endpoint.searchParams.set('refresh', '1')"));
+  });
+
+  await runCase('3. isJsonHttpResponse strictly differentiates JSON API payloads from HTML SPA fallbacks', () => {
     const htmlResp = new Response('<html></html>', { headers: { 'content-type': 'text/html' } });
     const jsonResp = new Response('{}', { headers: { 'content-type': 'application/json' } });
     assert.equal(isJsonHttpResponse(htmlResp), false);
     assert.equal(isJsonHttpResponse(jsonResp), true);
   });
 
-  await runCase('3. buildLocalFxResponseFromRates computes USD/CNY/AED/EUR rates 100% locally without /api/live-fx', () => {
+  await runCase('4. buildLocalFxResponseFromRates computes USD/CNY/AED/EUR rates 100% locally without /api/live-fx', () => {
     const fx = buildLocalFxResponseFromRates([
       { id: 'r1', ownerId: 'u1', currencyCode: 'USD', date: '1404/03/01', rateToIrr: 800_000, rateType: 'market' },
       { id: 'r2', ownerId: 'u1', currencyCode: 'USD', date: '1404/03/05', rateToIrr: 840_000, rateType: 'market' },
@@ -79,7 +87,7 @@ async function main() {
     assert.equal(usd.changePercent, 5);
   });
 
-  await runCase('4. buildStandaloneLocalDiagnostics & localCopilotRespond operate 100% internally without server.ts', () => {
+  await runCase('5. buildStandaloneLocalDiagnostics & localCopilotRespond operate 100% internally without server.ts', () => {
     const diag = buildStandaloneLocalDiagnostics();
     assert.equal(diag.server.status, 'ok');
     assert.equal(diag.server.mode, 'standalone-static-pwa');
@@ -119,7 +127,7 @@ async function main() {
     assert.ok(aiRes.reply.length > 20);
   });
 
-  await runCase('5. Static zero-server PWA deployment configs (_redirects & vercel.json) are present', () => {
+  await runCase('6. Static zero-server PWA deployment configs (_redirects & vercel.json) are present', () => {
     const redirects = fs.readFileSync(path.join(ROOT, 'public/_redirects'), 'utf8');
     assert.ok(redirects.includes('/* /index.html 200'));
     const vercel = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')) as {
