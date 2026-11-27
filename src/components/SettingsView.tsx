@@ -51,6 +51,7 @@ import { SystemResetCenter } from './SystemResetCenter';
 import { useInvoiceSettings } from '../lib/invoiceSettings';
 import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { exportEncryptedDocumentAttachmentBundle, restoreEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -466,26 +467,73 @@ export const SettingsView: React.FC<{
     }
   };
 
-  const handleDownloadBackup = () => {
-    const json = exportBackupJson();
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const dateStamp = new Date().toISOString().slice(0, 10);
-    link.href = url;
-    link.download = `holoo-apex-backup-${profile.fiscalYear}-${dateStamp}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    showToast('فایل پشتیبان کامل حسابداری (JSON) با موفقیت دانلود شد.');
+  const handleDownloadBackup = async () => {
+    try {
+      if (!backupSessionUnlocked) {
+        showToast('برای پشتیبان یکپارچه، ابتدا قفل پشتیبان رمزگذاری‌شده را باز کنید.', 'error');
+        return;
+      }
+      const workspace = JSON.parse(exportBackupJson()) as Record<string, unknown>;
+      const attachmentBundle = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as Record<string, unknown>;
+      const packageJson = JSON.stringify({
+        format: 'holoo-apex-complete-backup',
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        workspace,
+        documentAttachments: attachmentBundle,
+      }, null, 2);
+      const blob = new Blob([packageJson], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.download = `holoo-apex-complete-backup-${profile.fiscalYear}-${dateStamp}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast('بسته پشتیبان حسابداری و پیوست‌های رمزگذاری‌شده صادر شد.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'ساخت بسته پشتیبان ناموفق بود.', 'error');
+    }
   };
 
   const handleRestoreBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        importBackupJson(reader.result);
+    reader.onload = async () => {
+      if (typeof reader.result !== 'string') return;
+      try {
+        const parsed = JSON.parse(reader.result) as Record<string, unknown>;
+        if (parsed.format === 'holoo-apex-complete-backup' && parsed.schemaVersion === 1) {
+          if (!backupSessionUnlocked) {
+            showToast('برای بازیابی بسته یکپارچه ابتدا قفل پشتیبان را با همان رمز باز کنید.', 'error');
+            return;
+          }
+          if (!parsed.workspace || typeof parsed.workspace !== 'object' ||
+              !Array.isArray((parsed.workspace as Record<string, unknown>).accounts) ||
+              !Array.isArray((parsed.workspace as Record<string, unknown>).vouchers) ||
+              !parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
+            showToast('ساختار بسته پشتیبان یکپارچه معتبر نیست.', 'error');
+            return;
+          }
+          // Attachment restore performs full envelope, metadata, MIME and digest validation
+          // before its single IndexedDB transaction. Workspace import follows only on success.
+          const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(
+            JSON.stringify(parsed.documentAttachments)
+          );
+          const workspaceImported = importBackupJson(JSON.stringify(parsed.workspace));
+          if (!workspaceImported) {
+            showToast(`پیوست‌ها بازیابی شدند (${attachmentResult.restored})، اما ورود اطلاعات حسابداری کامل نشد؛ وضعیت را بررسی کنید.`, 'error');
+            return;
+          }
+          showToast(`بسته بازیابی شد: اطلاعات حسابداری و ${attachmentResult.restored} پیوست.`);
+          return;
+        }
+        // Backward compatibility: older workspace-only JSON backups remain importable.
+        const imported = importBackupJson(reader.result);
+        if (imported) showToast('نسخه قدیمی پشتیبان بازیابی شد؛ پیوست‌های بایگانی در این فایل وجود ندارند.', 'warning');
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'بازیابی بسته پشتیبان ناموفق بود.', 'error');
       }
     };
     reader.readAsText(file);
