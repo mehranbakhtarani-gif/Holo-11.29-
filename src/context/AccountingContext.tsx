@@ -99,6 +99,7 @@ import {
 } from '../lib/audioFeedback';
 import {
   commitChequeStatusOperationalTx,
+  commitDepreciationOperationalTx,
   commitInvoiceOperationalTx,
   getOperationalDbStats,
   loadOperationalWorkspace,
@@ -4971,12 +4972,94 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           unit: profile.currencyUnit,
         });
       } else {
-        // The offline path must not create a ledger voucher and then rely on a
-        // later React persistence effect to save asset balances. Until both
-        // writes are committed in one IndexedDB transaction, fail closed.
-        throw new Error(
-          'ثبت استهلاک در حالت آفلاین موقتاً متوقف است؛ برای جلوگیری از ثبت سند بدون به‌روزرسانی اتمیک دارایی‌ها، اتصال اینترنت لازم است.'
+        const voucherId = `depv_${sha256HexSync(depreciationReferenceId).slice(0, 32)}`;
+        const sameYearMax = vouchers
+          .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fiscalYear)
+          .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
+        let totalDep = 0;
+        const assetUpdates: {
+          id: string;
+          expectedAccumulatedDepreciation: number;
+          depreciationAmount: number;
+          accumulatedDepreciation: number;
+        }[] = [];
+        assets.forEach((asset) => {
+          const dep = calculateMonthlyDepreciation(asset);
+          if (!Number.isSafeInteger(dep) || dep < 0) {
+            throw new Error(`محاسبه استهلاک دارایی ${asset.assetCode} نامعتبر است.`);
+          }
+          if (dep > 0) {
+            const nextAccum = asset.accumulatedDepreciation + dep;
+            if (
+              !Number.isSafeInteger(asset.accumulatedDepreciation) ||
+              asset.accumulatedDepreciation < 0 ||
+              !Number.isSafeInteger(nextAccum) ||
+              nextAccum > asset.purchaseCost - asset.salvageValue
+            ) {
+              throw new Error(`استهلاک انباشته دارایی ${asset.assetCode} از مبلغ استهلاک‌پذیر بیشتر می‌شود یا داده آن نامعتبر است.`);
+            }
+            totalDep += dep;
+            if (!Number.isSafeInteger(totalDep)) {
+              throw new Error('جمع استهلاک دوره از محدوده امن اعداد صحیح خارج شده است.');
+            }
+            assetUpdates.push({
+              id: asset.id,
+              expectedAccumulatedDepreciation: asset.accumulatedDepreciation,
+              depreciationAmount: dep,
+              accumulatedDepreciation: nextAccum,
+            });
+          }
+        });
+        if (totalDep <= 0) {
+          showToast('دارایی قابل استهلاک برای این دوره وجود ندارد.');
+          return;
+        }
+        const validation = validateVoucherPayload({
+          payload: {
+            date,
+            description,
+            voucherType: 'depreciation',
+            referenceId: depreciationReferenceId,
+            lines: buildLines(totalDep),
+          },
+          accounts,
+          parties,
+          existingVouchers: vouchers,
+          closedFiscalYears: profile.closedFiscalYears,
+        });
+        if (!validation.valid) {
+          throw new Error(validation.errors[0] || 'سند استهلاک نامعتبر است.');
+        }
+        const voucherBase: Voucher = {
+          id: voucherId,
+          ownerId,
+          voucherNumber: sameYearMax + 1,
+          date,
+          fiscalYear: validation.fiscalYear || fiscalYear,
+          description,
+          voucherType: 'depreciation',
+          status: 'permanent',
+          totalDebit: validation.totalDebit,
+          totalCredit: validation.totalCredit,
+          referenceId: depreciationReferenceId,
+          lines: validation.sanitizedLines.slice(0, 100),
+          _version: 1,
+          updatedByDevice: deviceId,
+        };
+        const sealedVoucher: Voucher = {
+          ...voucherBase,
+          integrityHash: computeVoucherIntegrityHash(voucherBase),
+        };
+        await commitDepreciationOperationalTx({ assetUpdates, voucher: sealedVoucher });
+        const updated = new Map(assetUpdates.map((item) => [item.id, item.accumulatedDepreciation]));
+        setAssets((prev) =>
+          prev.map((asset) =>
+            updated.has(asset.id)
+              ? { ...asset, accumulatedDepreciation: updated.get(asset.id)! }
+              : asset
+          )
         );
+        setVouchers((prev) => [...prev, sealedVoucher]);
       }
       showToast(`سند استهلاک دوره «${periodLabel}» با ثبت اتمیک دارایی‌ها و سند حسابداری صادر شد.`, 'success');
     },
