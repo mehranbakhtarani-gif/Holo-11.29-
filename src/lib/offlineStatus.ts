@@ -82,9 +82,38 @@ export async function triggerSwUpdateCheck(): Promise<boolean> {
 
 export async function applyPendingSwRefresh(): Promise<void> {
   if (updateSwFn) {
-    await updateSwFn(true);
-  } else {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+      throw new Error('سرویس به‌روزرسانی در این مرورگر در دسترس نیست.');
+    }
+
+    // Resolve only after the new worker takes control. The PWA register
+    // handler then reloads the page; a timeout keeps the banner visible
+    // instead of reporting a false success.
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+        if (error) reject(error);
+        else resolve();
+      };
+      const handleControllerChange = () => finish();
+      const timeout = window.setTimeout(
+        () => finish(new Error('فعال‌سازی نسخه جدید تأیید نشد. اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.')),
+        30000
+      );
+
+      navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+      void updateSwFn!(true).catch((err) => {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+  } else if (typeof window !== 'undefined') {
     window.location.reload();
+  } else {
+    throw new Error('امکان بازنشانی برنامه در این محیط وجود ندارد.');
   }
 }
 
@@ -100,6 +129,13 @@ export async function safeApplySwUpdateWithBackup(
   try {
     if (createSafetyBackup) {
       backupCreated = Boolean(await createSafetyBackup());
+      if (!backupCreated) {
+        return {
+          backupCreated: false,
+          applied: false,
+          error: 'پشتیبان ایمنی ذخیره نشد؛ برای جلوگیری از خطر اطلاعات، بروزرسانی انجام نشد.',
+        };
+      }
     }
     await applyPendingSwRefresh();
     return { backupCreated, applied: true };
