@@ -20,7 +20,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,6 +34,8 @@ jobs:
         run: npm run lint
       - name: Firestore rules lint
         run: npm run lint:rules
+      - name: Install Chromium for real-browser integration tests
+        run: npx playwright install --with-deps chromium
       - name: Test suite
         run: npm test
       - name: Firestore Emulator security tests
