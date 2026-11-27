@@ -2838,9 +2838,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         );
       }
 
-      if (plan.lines.length < 2) {
-        showToast(plan.description || 'وضعیت چک صیادی به‌روزرسانی شد.');
-      }
+      showToast(
+        plan.lines.length >= 2
+          ? 'وضعیت چک و سند حسابداری مرتبط به‌صورت اتمیک ثبت شد.'
+          : plan.description || 'وضعیت چک صیادی به‌روزرسانی شد.'
+      );
     },
     [cheques, vouchers, accounts, parties, profile.closedFiscalYears, ownerId, user, deviceId, showToast, assertPermission]
   );
