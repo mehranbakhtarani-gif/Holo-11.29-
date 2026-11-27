@@ -757,20 +757,29 @@ export async function loadPreparedEncryptedOperationalWorkspace(
   if (!cleanWorkspaceId || !isIndexedDbAvailable()) return null;
   const db = await openOperationalDb();
   let record: EncryptedOperationalWorkspaceRecord | undefined;
+  let currentRevision = 0;
   try {
-    const tx = db.transaction(['secureWorkspace'], 'readonly');
-    record = await new Promise((resolve, reject) => {
-      const req = tx.objectStore('secureWorkspace').get(cleanWorkspaceId);
-      req.onsuccess = () => resolve(req.result as EncryptedOperationalWorkspaceRecord | undefined);
-      req.onerror = () => reject(req.error);
-    });
+    const tx = db.transaction(['meta', 'secureWorkspace'], 'readonly');
+    const [storedRecord, workspaceMeta] = await Promise.all([
+      new Promise<EncryptedOperationalWorkspaceRecord | undefined>((resolve, reject) => {
+        const req = tx.objectStore('secureWorkspace').get(cleanWorkspaceId);
+        req.onsuccess = () => resolve(req.result as EncryptedOperationalWorkspaceRecord | undefined);
+        req.onerror = () => reject(req.error);
+      }),
+      new Promise<{ localRevision?: number } | undefined>((resolve, reject) => {
+        const req = tx.objectStore('meta').get('workspace_meta');
+        req.onsuccess = () => resolve(req.result as { localRevision?: number } | undefined);
+        req.onerror = () => reject(req.error);
+      }),
+    ]);
+    record = storedRecord;
+    currentRevision = Math.max(1, Number(workspaceMeta?.localRevision) || 1);
   } finally {
     db.close();
   }
   if (!record || record.migrationState !== 'prepared' || typeof record.envelopeJson !== 'string') return null;
 
-  const currentMeta = await getOperationalDbStats();
-  if (currentMeta.localRevision !== record.sourceRevision) {
+  if (currentRevision !== record.sourceRevision) {
     throw new Error('نسخه رمزگذاری‌شده آماده‌شده قدیمی است و با داده عملیاتی فعلی تطابق ندارد.');
   }
 
