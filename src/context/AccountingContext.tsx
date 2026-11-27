@@ -1832,23 +1832,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const voucherRef = doc(db, 'vouchers', voucherId);
         const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
         if (isOfflineNow) {
-          permanentVoucher = {
-            ...target,
-            status: 'permanent',
-            integrityHash: computeVoucherIntegrityHash(target),
-            _version: (target._version ?? 1) + 1,
-          };
-          try {
-            await updateDoc(voucherRef, {
-              status: 'permanent',
-              integrityHash: permanentVoucher.integrityHash,
-              _version: permanentVoucher._version,
-              updatedAt: serverTimestamp(),
-            });
-          } catch (err) {
-            handleFirestoreError(err, OperationType.UPDATE, `vouchers/${voucherId}`);
-            throw err;
-          }
+          throw new Error('قطعی‌سازی سند به تأیید تراکنش ابری نیاز دارد؛ در حالت آفلاین هیچ تغییری اعمال نشد.');
         } else {
           try {
             permanentVoucher = await runTransaction(db, async (tx) => {
