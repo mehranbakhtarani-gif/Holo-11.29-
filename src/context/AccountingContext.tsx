@@ -4805,8 +4805,32 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const runYearEndClosing = useCallback(
     async (options?: { createNextYearOpening?: boolean }) => {
+      if (!assertPermission('canManageSettings')) {
+        throw new Error('عدم دسترسی (RBAC) برای بستن سال مالی.');
+      }
       const fy = profile.fiscalYear;
-      const sameYearMax = vouchers
+      const closingReferenceId = `year-end-closing:${fy}`;
+      const openingReferenceId = `year-end-opening:${fy}`;
+      if (profile.closedFiscalYears?.includes(fy)) {
+        showToast(`سال مالی ${fy} قبلاً بسته و قفل شده است.`, 'warning');
+        return;
+      }
+
+      const existingClosing = vouchers.find(
+        (v) =>
+          v.voucherType === 'closing' &&
+          (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy &&
+          v.status === 'permanent'
+      );
+      const existingOpening = vouchers.find((v) => v.referenceId === openingReferenceId);
+      const planningVouchers = vouchers.filter(
+        (v) =>
+          !(
+            v.voucherType === 'closing' &&
+            (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy
+          )
+      );
+      const sameYearMax = planningVouchers
         .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy)
         .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
 
@@ -4814,7 +4838,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         plan = planYearEndClosing({
           accounts,
-          vouchers,
+          vouchers: planningVouchers,
           fiscalYear: fy,
           nextVoucherNumber: sameYearMax + 1,
           ownerId,
@@ -4824,25 +4848,29 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'خطا در عملیات بستن حساب‌های پایان سال.';
         showToast(msg, 'error');
-        return;
+        throw err;
       }
 
-      await createVoucher({
-        date: plan.closingVoucher.date,
-        description: plan.closingVoucher.description,
-        voucherType: 'closing',
-        status: 'permanent',
-        lines: plan.closingVoucher.lines,
-        allowDuplicate: true,
-      });
+      if (!existingClosing) {
+        await createVoucher({
+          date: plan.closingVoucher.date,
+          description: plan.closingVoucher.description,
+          voucherType: 'closing',
+          status: 'permanent',
+          lines: plan.closingVoucher.lines,
+          referenceId: closingReferenceId,
+          allowDuplicate: true,
+        });
+      }
 
-      if (options?.createNextYearOpening && plan.nextYearOpeningVoucher.lines.length >= 2) {
+      if (options?.createNextYearOpening && plan.nextYearOpeningVoucher.lines.length >= 2 && !existingOpening) {
         await createVoucher({
           date: plan.nextYearOpeningVoucher.date,
           description: plan.nextYearOpeningVoucher.description,
           voucherType: 'opening',
           status: 'permanent',
           lines: plan.nextYearOpeningVoucher.lines,
+          referenceId: openingReferenceId,
           allowDuplicate: true,
         });
       }
@@ -4870,6 +4898,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       createVoucher,
       updateCompanyProfile,
       showToast,
+      assertPermission,
     ]
   );
 
