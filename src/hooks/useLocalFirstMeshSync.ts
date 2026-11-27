@@ -59,7 +59,7 @@ import {
   resolveEffectiveOperatingMode,
   type OperatingMode,
 } from '../lib/offlineFirstCore';
-import { getActiveOperationalRestoreJournal, isInboxOperationProcessed, recordInboxOperation } from '../lib/operationalDb';
+import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, isInboxOperationProcessed, recordInboxOperation } from '../lib/operationalDb';
 
 const ONBOARDING_DISMISSED_KEY = 'holoo_apex_mesh_onboarding_dismissed_v1';
 const REMOTE_IMPORT_SYNC_EVENT = 'holoo:remote-import-applied';
@@ -404,7 +404,9 @@ export function useLocalFirstMeshSync() {
         relayEnvelopes,
         batchedOperationIds,
       }) => {
-        if (restoreBarrierActive) return [];
+        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return [];
+        const activeRestore = await getActiveOperationalRestoreJournal().catch(() => ({ restoreId: 'blocked' }));
+        if (activeRestore) return [];
         setIsP2PSyncing(true);
         try {
           const localBuilt = buildTaggedSnapshot();
@@ -637,7 +639,9 @@ export function useLocalFirstMeshSync() {
         }
       },
       onPeerAckReceived: async ({ fromPeerId, receivedOperationIds }) => {
-        if (restoreBarrierActive) return;
+        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
+        const activeRestore = await getActiveOperationalRestoreJournal().catch(() => ({ restoreId: 'blocked' }));
+        if (activeRestore) return;
         for (const opId of receivedOperationIds) {
           await markDexieOutboxPeerDelivered(opId, fromPeerId);
         }
