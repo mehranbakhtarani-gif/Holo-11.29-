@@ -502,8 +502,8 @@ export function useDualCloudSync() {
   );
 
   const pushToFirebaseNow = useCallback(
-      if (await isRestoreRecoveryBlockingSync()) { showToast('همگام‌سازی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (silent = false): Promise<boolean> => {
+      if (await isRestoreRecoveryBlockingSync()) { showToast('همگام‌سازی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
       if (!backupSessionUnlocked) { if (!silent) showToast('ابتدا قفل رمزنگاری پشتیبان را در تنظیمات باز کنید.'); return false; }
       if (fbInFlightRef.current) return false;
       const snapshotJson = exportBackupJson();
@@ -602,8 +602,8 @@ export function useDualCloudSync() {
   );
 
   const pullFromFirebaseNow = useCallback(
-      if (await isRestoreRecoveryBlockingSync()) { showToast('دریافت ابری تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (backupId?: string): Promise<boolean> => {
+      if (await isRestoreRecoveryBlockingSync()) { showToast('دریافت ابری تا پایان بازیابی پشتیبان متوقف است.'); return false; }
       if (!backupSessionUnlocked) { showToast('برای بازیابی پشتیبان رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.'); return false; }
       if (fbInFlightRef.current) return false;
       if (!user) {
@@ -871,8 +871,8 @@ export function useDualCloudSync() {
   }, [isOnline, refreshSupabaseStatus]);
 
   const syncSupabaseNow = useCallback(
-      if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('همگام‌سازی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (silent = false, overrideToken?: string | null): Promise<boolean> => {
+      if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('همگام‌سازی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
       if (!backupSessionUnlocked) { if (!silent) showToast('ابتدا قفل رمزنگاری پشتیبان را در تنظیمات باز کنید.'); return false; }
       if (sbInFlightRef.current) return false;
       const snapshotJson = exportBackupJson();
@@ -1149,8 +1149,8 @@ export function useDualCloudSync() {
   );
 
   const pullFromSupabase = useCallback(
-      if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('دریافت ابری تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     async (backupId?: string, silent = false): Promise<boolean> => {
+      if (await isRestoreRecoveryBlockingSync()) { if (!silent) showToast('دریافت ابری تا پایان بازیابی پشتیبان متوقف است.'); return false; }
       if (!backupSessionUnlocked) { if (!silent) showToast('برای بازیابی پشتیبان رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.'); return false; }
       if (sbInFlightRef.current) return false;
       if (!isOnline || (!supabaseSessionToken && !supabaseCookieAuthenticated)) {
