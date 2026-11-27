@@ -1864,27 +1864,53 @@ export interface PreUpdateSafetyBackupRecord {
   reason: 'pwa_update' | 'schema_migration' | 'manual_guard';
   schemaVersion: number;
   sha256: string;
-  snapshotJson: string;
+  envelopeJson: string;
   createdAt: string;
 }
 
-/** Saves an immutable pre-update / pre-migration safety backup inside IndexedDB */
+/** Saves an immutable encrypted pre-update / pre-migration safety backup inside IndexedDB. */
 export async function savePreUpdateSafetyBackup(
   rec: PreUpdateSafetyBackupRecord
 ): Promise<boolean> {
   if (!isIndexedDbAvailable()) return false;
+  if (
+    !rec || typeof rec.id !== 'string' || !rec.id.trim() ||
+    !Number.isSafeInteger(rec.schemaVersion) || rec.schemaVersion < 1 ||
+    !/^[a-f0-9]{64}$/i.test(rec.sha256) ||
+    typeof rec.envelopeJson !== 'string' || !rec.envelopeJson.trim() ||
+    typeof rec.createdAt !== 'string' || !Number.isFinite(Date.parse(rec.createdAt))
+  ) {
+    throw new Error('فراداده نسخه پشتیبان پیش از به‌روزرسانی معتبر نیست.');
+  }
+  let envelope: Record<string, unknown>;
   try {
-    const db = await openOperationalDb();
+    envelope = JSON.parse(rec.envelopeJson) as Record<string, unknown>;
+  } catch {
+    throw new Error('پاکت رمزگذاری‌شده نسخه پشتیبان معتبر نیست.');
+  }
+  if (
+    envelope.format !== 'holoo-apex-encrypted-backup' ||
+    envelope.kdf !== 'PBKDF2-SHA256' ||
+    envelope.cipher !== 'AES-256-GCM' ||
+    envelope.plaintextSha256 !== rec.sha256 ||
+    typeof envelope.ciphertextB64 !== 'string' || !envelope.ciphertextB64 ||
+    typeof envelope.saltB64 !== 'string' || !envelope.saltB64 ||
+    typeof envelope.ivB64 !== 'string' || !envelope.ivB64
+  ) {
+    throw new Error('نسخه پشتیبان پیش از به‌روزرسانی باید پاکت AES-256-GCM معتبر داشته باشد.');
+  }
+  const db = await openOperationalDb();
+  try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(['preUpdateBackups'], 'readwrite');
       tx.objectStore('preUpdateBackups').put(rec);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error ?? new Error('Pre-update backup write failed.'));
+      tx.onabort = () => reject(tx.error ?? new Error('Pre-update backup write aborted.'));
     });
-    db.close();
     return true;
-  } catch {
-    return false;
+  } finally {
+    db.close();
   }
 }
 
