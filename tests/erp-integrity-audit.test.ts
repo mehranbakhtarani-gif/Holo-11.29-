@@ -1294,6 +1294,15 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
     /رمزگشایی|خراب|معتبر/
   );
 
+  const tamperedMetadataBundle = JSON.parse(encryptedBundleJson) as {
+    attachments: Array<{ entityId: string }>;
+  };
+  tamperedMetadataBundle.attachments[0].entityId = 'invoice_other_tenant';
+  await assert.rejects(
+    () => restoreEncryptedDocumentAttachmentBundle(JSON.stringify(tamperedMetadataBundle)),
+    /اصالت فراداده/
+  );
+
   const postExportAttachment = await saveDocumentAttachment({
     entityType: 'invoice',
     entityId: 'inv_after_export',
