@@ -608,7 +608,7 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
 }
 
 export async function enqueueSyncOutboxOperation(op: SyncOutboxOperation): Promise<void> {
-  if (!isIndexedDbAvailable()) return;
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: sync outbox was not persisted.');
   try {
     const db = await openOperationalDb();
     await new Promise<void>((resolve, reject) => {
@@ -641,7 +641,7 @@ export async function markSyncOutboxOperationStatus(
   operationId: string,
   status: 'synced' | 'conflict'
 ): Promise<void> {
-  if (!isIndexedDbAvailable()) return;
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: sync outbox status was not persisted.');
   try {
     const db = await openOperationalDb();
     await new Promise<void>((resolve, reject) => {
@@ -685,7 +685,7 @@ export async function clearPendingSyncOutboxOperations(): Promise<void> {
 
 /** Records a processed inbound sync operation in durable syncInbox for duplicate detection */
 export async function recordInboxOperation(rec: SyncInboxRecord): Promise<void> {
-  if (!isIndexedDbAvailable()) return;
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: inbound sync deduplication record was not persisted.');
   try {
     const db = await openOperationalDb();
     await new Promise<void>((resolve, reject) => {
@@ -702,7 +702,7 @@ export async function recordInboxOperation(rec: SyncInboxRecord): Promise<void> 
 
 /** Checks whether an inbound operationId was already durably applied to this device */
 export async function isInboxOperationProcessed(operationId: string): Promise<boolean> {
-  if (!isIndexedDbAvailable()) return false;
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: cannot safely verify inbound sync deduplication.');
   try {
     const db = await openOperationalDb();
     const exists = await new Promise<boolean>((resolve, reject) => {
