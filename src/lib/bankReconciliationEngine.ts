@@ -643,8 +643,10 @@ export function importAllBankReconciliationSessions(sessions: unknown): number {
   }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
-  } catch {
-    // ignore storage errors in non-browser environments
+  } catch (error) {
+    if (typeof window !== 'undefined') {
+      throw new Error('ذخیره پایدار وضعیت تطبیق بانکی هنگام بازیابی ناموفق بود.');
+    }
   }
   return importedCount;
 }
