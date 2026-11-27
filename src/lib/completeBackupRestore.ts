@@ -30,6 +30,10 @@ interface CompleteBackupPackageV2 {
   documentAttachments: unknown;
 }
 
+export interface CompleteBackupRestoreOptions {
+  allowLegacyUnboundAttachmentMetadata?: boolean;
+}
+
 export interface CompleteBackupRestoreResult {
   restoreId: string;
   restoredAttachments: number;
@@ -97,7 +101,8 @@ async function markRecoveryFailure(
  * operational journal coordinates crash recovery between those commits.
  */
 export async function restoreCompleteBackupPackage(
-  packageJson: string
+  packageJson: string,
+  options: CompleteBackupRestoreOptions = {}
 ): Promise<CompleteBackupRestoreResult> {
   const passphrase = requireBackupSessionPassphrase();
   const parsed = parsePackage(packageJson);
@@ -120,7 +125,8 @@ export async function restoreCompleteBackupPackage(
     const stagedManifest = await stageEncryptedDocumentAttachmentBundle(
       restoreId,
       attachmentBundleJson,
-      packageDigest
+      packageDigest,
+      options.allowLegacyUnboundAttachmentMetadata === true
     );
     staged = true;
     await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
