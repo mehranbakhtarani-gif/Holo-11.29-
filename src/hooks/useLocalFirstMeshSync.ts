@@ -360,7 +360,7 @@ export function useLocalFirstMeshSync() {
       }
       return false;
     },
-    [activeDeviceIdentity, refreshOutboxAndLogs]
+    [activeDeviceIdentity, refreshOutboxAndLogs, restoreBarrierActive]
   );
 
   // ---- PeerJS 3-Device Mesh Lifecycle ("On-Open" + Visibility + Online Reconnect) ----
@@ -919,7 +919,7 @@ export function useLocalFirstMeshSync() {
     } finally {
       setIsFolderBusy(false);
     }
-  }, [buildTaggedSnapshot, logActivity, refreshOutboxAndLogs, showToast]);
+  }, [buildTaggedSnapshot, logActivity, refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const regrantFolderPermission = useCallback(async () => {
     if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
@@ -962,6 +962,7 @@ export function useLocalFirstMeshSync() {
     buildTaggedSnapshot,
     writeSnapshotToLocalFolder,
     refreshOutboxAndLogs,
+    restoreBarrierActive,
     showToast,
   ]);
 
@@ -985,7 +986,7 @@ export function useLocalFirstMeshSync() {
     } finally {
       setIsFolderBusy(false);
     }
-  }, [selectLocalFolder, buildTaggedSnapshot, writeSnapshotToLocalFolder, showToast]);
+  }, [selectLocalFolder, buildTaggedSnapshot, writeSnapshotToLocalFolder, restoreBarrierActive, showToast]);
 
   const restoreFromSelectedFolder = useCallback(async () => {
     if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('بازیابی از پوشه محلی تا پایان بازیابی پشتیبان دیگر متوقف است.'); return false; }
@@ -1070,6 +1071,7 @@ export function useLocalFirstMeshSync() {
     activeDeviceIdentity,
     localFolderStatus.folderName,
     logActivity,
+    restoreBarrierActive,
     showToast,
   ]);
 
@@ -1261,7 +1263,7 @@ export function useLocalFirstMeshSync() {
     await clearSyncedDexieOutboxItems();
     await refreshOutboxAndLogs();
     showToast('آیتم‌های تحویل‌شده از صف آفلاین پاکسازی شدند.');
-  }, [refreshOutboxAndLogs, showToast]);
+  }, [refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const clearAllOutbox = useCallback(async () => {
     if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
@@ -1381,6 +1383,7 @@ export function useLocalFirstMeshSync() {
       refreshOutboxAndLogs,
       logActivity,
       showToast,
+      restoreBarrierActive,
     ]
   );
 
