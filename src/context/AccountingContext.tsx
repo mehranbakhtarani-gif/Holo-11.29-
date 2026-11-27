@@ -3669,6 +3669,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 // Phase 1: ALL reads before ANY writes (Firestore transaction requirement)
                 const [invSnap, counterSnap] = await Promise.all([tx.get(invRef), tx.get(counterRef)]);
                 if (!invSnap.exists() || invSnap.data().status === 'cancelled') return true;
+                const liveInvoiceVersion = Number(invSnap.data()._version) || 1;
+                if (liveInvoiceVersion !== (inv._version ?? 1)) {
+                  throw new Error('نسخه فاکتور هم‌زمان در دستگاه دیگری تغییر کرده است؛ اطلاعات را تازه‌سازی و دوباره ابطال کنید.');
+                }
 
                 const productEntries = Array.from(plan.productDeltas.entries());
                 const productSnaps = await Promise.all(
@@ -3736,6 +3740,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
                 plan.chequeIdsToCancel.forEach((chqId, idx) => {
                   const cs = chequeSnaps[idx];
+                  const plannedCheque = cheques.find((cheque) => cheque.id === chqId);
+                  if (cs.exists() && plannedCheque && cs.data().status !== plannedCheque.status) {
+                    throw new Error(`وضعیت چک ${chqId} هم‌زمان در دستگاه دیگری تغییر کرده است؛ ابطال فاکتور متوقف شد.`);
+                  }
                   if (cs.exists() && cs.data().status !== 'cancelled') {
                     const prevNotes = typeof cs.data().notes === 'string' ? cs.data().notes : '';
                     tx.update(doc(db, 'cheques', chqId), {
