@@ -313,6 +313,7 @@ async function runTests() {
   const viteConfigSrc = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
   const accountingCtxSrc = fs.readFileSync(path.join(root, 'src/context/AccountingContext.tsx'), 'utf8');
   const operationalDbSrc = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
+  const localBackupSrc = fs.readFileSync(path.join(root, 'src/lib/localBackup.ts'), 'utf8');
   const appSrc = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
   const offlinePanelSrc = fs.readFileSync(path.join(root, 'src/components/OfflineFirstControlPanel.tsx'), 'utf8');
 
@@ -321,12 +322,12 @@ async function runTests() {
   const operationalHydrationStart = operationalDbSrc.indexOf('export async function loadOperationalWorkspace()');
   const operationalHydrationEnd = operationalDbSrc.indexOf('export function countOperationalWorkspaceRecords', operationalHydrationStart);
   const operationalHydration = operationalDbSrc.slice(operationalHydrationStart, operationalHydrationEnd);
-  const syncCloseReaderStart = operationalDbSrc.indexOf('export function readSyncCloseSnapshot()');
-  const syncCloseReaderEnd = operationalDbSrc.indexOf('export function readLegacyPlaintextSyncCloseSnapshot()', syncCloseReaderStart);
+  const syncCloseReaderStart = localBackupSrc.indexOf('export function readSyncCloseSnapshot()');
+  const syncCloseReaderEnd = localBackupSrc.indexOf('export function readLegacyPlaintextSyncCloseSnapshot()', syncCloseReaderStart);
   const syncCloseReader = operationalDbSrc.slice(syncCloseReaderStart, syncCloseReaderEnd);
   assert.match(syncCloseReader, /typeof parsed\.encryptedEnvelope === 'string'/);
   assert.doesNotMatch(syncCloseReader, /parsed\.payloadJson/);
-  assert.match(operationalDbSrc, /export function readLegacyPlaintextSyncCloseSnapshot\(\)/);
+  assert.match(localBackupSrc, /export function readLegacyPlaintextSyncCloseSnapshot\(\)/);
   assert.match(operationalHydration, /catch \(error\)[\s\S]*throw error/);
   assert.match(accountingCtxSrc, /Operational workspace hydration failed; fallback hydration was blocked/);
 
