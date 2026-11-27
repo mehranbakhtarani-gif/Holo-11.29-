@@ -700,8 +700,10 @@ runTest('7. Standalone Android/PWA assets, manifest config, IDB v2 schema & Fire
   assert.ok(rules.includes("'integrityHash'"));
 
   const opDb = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
-  assert.ok(opDb.includes('OP_DB_VERSION = 3'));
+  assert.ok(opDb.includes('OP_DB_VERSION = 4'));
   assert.ok(opDb.includes('syncInbox'));
+  assert.ok(opDb.includes('secureWorkspace'));
+  assert.ok(opDb.includes('prepareEncryptedOperationalWorkspaceMigration'));
   assert.ok(opDb.includes('commitStockAdjustmentOperationalTx'));
 
   const reportExport = fs.readFileSync(path.join(root, 'src/lib/accountingReportExport.ts'), 'utf8');
