@@ -108,6 +108,7 @@ export function useDualCloudSync() {
   const {
     user,
     profile,
+    backupSessionUnlocked,
     accounts,
     vouchers,
     invoices,
@@ -491,6 +492,7 @@ export function useDualCloudSync() {
 
   const pushToFirebaseNow = useCallback(
     async (silent = false): Promise<boolean> => {
+      if (!backupSessionUnlocked) { if (!silent) showToast('ابتدا قفل رمزنگاری پشتیبان را در تنظیمات باز کنید.'); return false; }
       if (fbInFlightRef.current) return false;
       const snapshotJson = exportBackupJson();
       const snapshotHash = fingerprintWorkspacePayload(snapshotJson);
@@ -588,6 +590,7 @@ export function useDualCloudSync() {
 
   const pullFromFirebaseNow = useCallback(
     async (backupId?: string): Promise<boolean> => {
+      if (!backupSessionUnlocked) { showToast('برای بازیابی پشتیبان رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.'); return false; }
       if (fbInFlightRef.current) return false;
       if (!user) {
         showToast('برای دریافت نسخه از Firebase ابتدا با حساب گوگل وارد شوید.');
@@ -855,6 +858,7 @@ export function useDualCloudSync() {
 
   const syncSupabaseNow = useCallback(
     async (silent = false, overrideToken?: string | null): Promise<boolean> => {
+      if (!backupSessionUnlocked) { if (!silent) showToast('ابتدا قفل رمزنگاری پشتیبان را در تنظیمات باز کنید.'); return false; }
       if (sbInFlightRef.current) return false;
       const snapshotJson = exportBackupJson();
       const snapshotHash = fingerprintWorkspacePayload(snapshotJson);
@@ -1130,6 +1134,7 @@ export function useDualCloudSync() {
 
   const pullFromSupabase = useCallback(
     async (backupId?: string, silent = false): Promise<boolean> => {
+      if (!backupSessionUnlocked) { if (!silent) showToast('برای بازیابی پشتیبان رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.'); return false; }
       if (sbInFlightRef.current) return false;
       if (!isOnline || (!supabaseSessionToken && !supabaseCookieAuthenticated)) {
         if (!silent) {
