@@ -21,7 +21,6 @@ const { saveDocumentAttachment } = await import('../src/lib/documentVault');
 const {
   getActiveOperationalRestoreJournal,
   isOperationalRestoreBarrierActive,
-  loadOperationalWorkspace,
 } = await import('../src/lib/operationalDb');
 const { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } = await import('../src/lib/completeBackupRestore');
 
@@ -131,10 +130,7 @@ async function run() {
     },
   });
 
-  await assert.rejects(
-    restoreCompleteBackupPackage(packageJson),
-    'restore must surface the injected Document Vault transaction abort'
-  );
+  await assert.rejects(restoreCompleteBackupPackage(packageJson));
   assert.equal(failNextVaultReplacement, false, 'the failure injector must fire exactly once');
 
   const interrupted = await getActiveOperationalRestoreJournal();
@@ -143,9 +139,23 @@ async function run() {
   assert.equal(isOperationalRestoreBarrierActive(), true, 'normal workspace writes remain blocked');
   assert.equal(await countLiveAttachments(), 1, 'aborted vault transaction must preserve the old attachment set');
 
-  const workspaceAfterFirstPhase = await loadOperationalWorkspace();
-  assert.equal(workspaceAfterFirstPhase?.accounts[0]?.id, 'restored-cash',
-    'the first database may commit before the second; the journal must retain forward-recovery intent');
+  const operationalDb = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDb.open('holoo_apex_operational_db_v1', 5);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    const restoredAccountId = await new Promise<unknown>((resolve, reject) => {
+      const tx = operationalDb.transaction(['accounts'], 'readonly');
+      const request = tx.objectStore('accounts').get('restored-cash');
+      request.onsuccess = () => resolve(request.result?.id);
+      request.onerror = () => reject(request.error);
+    });
+    assert.equal(restoredAccountId, 'restored-cash',
+      'the first database may commit before the second; the journal must retain forward-recovery intent');
+  } finally {
+    operationalDb.close();
+  }
 
   const resumed = await resumePendingCompleteBackupRestore();
   assert.ok(resumed, 'interrupted restore should resume');
