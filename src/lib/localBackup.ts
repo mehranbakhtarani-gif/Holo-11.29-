@@ -326,13 +326,15 @@ export async function listLocalSnapshots(): Promise<LocalBackupSnapshotMeta[]> {
   try {
     const db = await openBackupDb();
     const rows = await listLocalSnapshotsRaw(db);
-    // If sync close snapshot is newer than anything in IndexedDB, promote it into IndexedDB
-    if (syncSnap && !rows.some((r) => r.id === syncSnap.id)) {
-      await new Promise<void>((resolve) => {
+    // Only encrypted checkpoints may be promoted. Legacy plaintext close snapshots
+    // remain read-only migration sources and are never copied into new persistence.
+    if (syncSnap?.encryptedEnvelope && !rows.some((r) => r.id === syncSnap.id)) {
+      await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         tx.objectStore(STORE_NAME).put(syncSnap);
         tx.oncomplete = () => resolve();
-        tx.onerror = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('Encrypted checkpoint promotion aborted.'));
       });
       rows.unshift(syncSnap);
       rows.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
