@@ -1,4 +1,5 @@
 // Staged snapshot of holoo-apex-api. Production deployment is intentionally separate.
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 const ORIGINS=new Set(["https://mehranbakhtarani-gif.github.io"]);
 const corsHeaders=origin=>{const h={"vary":"Origin"};if(ORIGINS.has(origin)){h["access-control-allow-origin"]=origin;h["access-control-allow-credentials"]="true"}return h};
 const out=(d,s=200,o="")=>new Response(JSON.stringify(d),{status:s,headers:{"content-type":"application/json; charset=utf-8",...corsHeaders(o),"cache-control":"no-store"}});
@@ -35,4 +36,64 @@ if(u.pathname==="/api/supabase/test" && req.method==="POST"){
   return out({ok:checks.every(x=>x.ok),testedAt:new Date().toISOString(),totalLatencyMs:Math.max(1,Date.now()-started),projectRef,serverRevision:0,backupCount:0,authSource:"disconnected",keyRole:"service_role_or_secret",networkReachable:r.status!==401&&r.status!==403,rlsWriteReady:false,checks,remediations:tableReady?[]:[{id:"table_or_permissions",severity:"critical",title:"جدول یا مجوزهای Supabase آماده نیست",summary:"جدول holoo_apex_workspaces باید در پروژه وجود داشته باشد و کلید Worker اجازه دسترسی داشته باشد.",steps:["وجود جدول holoo_apex_workspaces را در Supabase بررسی کنید.","ساختار ستون owner_id را بررسی کنید."]}]},200,allow);
  }catch(e){checks.push({id:"supabase_network",title:"ارتباط با Supabase REST API",ok:false,latencyMs:Math.max(1,Date.now()-t),detail:"ارتباط شبکه برقرار نشد."});return out({ok:false,testedAt:new Date().toISOString(),totalLatencyMs:Math.max(1,Date.now()-started),projectRef,serverRevision:0,backupCount:0,authSource:"disconnected",networkReachable:false,rlsWriteReady:false,checks,error:"ارتباط با Supabase برقرار نشد."},502,allow)}
 }
+
+const SESSION_TTL=30*24*60*60*1000,SESSION_COOKIE="holoo_sb_session";
+const validWid=v=>typeof v==="string"&&/^[a-zA-Z0-9_-]{3,48}$/.test(v);
+const sessionSecret=env=>String(env.SUPABASE_SESSION_SECRET||"").trim()||createHmac("sha256","holoo-apex-supabase-session-key-v1").update(String(env.SUPABASE_SERVICE_ROLE_KEY||"")).digest("hex");
+const hashPasscode=pass=>{const saltHex=randomBytes(16).toString("hex");return{saltHex,hashHex:scryptSync(pass,saltHex,32).toString("hex")}};
+const verifyPasscode=(pass,salt,hash)=>{try{const a=scryptSync(pass,salt,32),b=Buffer.from(hash,"hex");return a.length===b.length&&timingSafeEqual(a,b)}catch{return false}};
+const signToken=(wid,env)=>{const exp=Date.now()+SESSION_TTL,payload=Buffer.from(JSON.stringify({wid,exp,v:1}),"utf8").toString("base64url"),sig=createHmac("sha256",sessionSecret(env)).update(payload).digest("base64url");return{token:"sbw1."+payload+"."+sig,expiresAt:new Date(exp).toISOString()}};
+const verifyToken=(token,env)=>{try{if(typeof token!=="string"||token.length>4096)return null;const p=token.split(".");if(p.length!==3||p[0]!=="sbw1")return null;const sig=createHmac("sha256",sessionSecret(env)).update(p[1]).digest("base64url"),a=Buffer.from(p[2]),b=Buffer.from(sig);if(a.length!==b.length||!timingSafeEqual(a,b))return null;const data=JSON.parse(Buffer.from(p[1],"base64url").toString("utf8"));if(!validWid(data.wid)||!Number.isFinite(data.exp)||Date.now()>data.exp)return null;return{uid:"sbw_"+data.wid,workspaceId:data.wid,email:data.wid+"@supabase.local",authSource:"supabase_workspace"}}catch{return null}};
+const authOwner=wid=>"__sb_auth__"+wid;
+const sbBase=env=>{const u=String(env.SUPABASE_URL||"").trim(),key=String(env.SUPABASE_SERVICE_ROLE_KEY||"").trim();try{const p=new URL(u);if(p.protocol!=="https:"||!p.hostname.endsWith(".supabase.co")||!key)return null;return{base:p.origin,key,table:/^[a-z][a-z0-9_]{2,60}$/.test(String(env.SUPABASE_TABLE_NAME||""))?String(env.SUPABASE_TABLE_NAME):"holoo_apex_workspaces"}}catch{return null}};
+const sbHeaders=(cfg,extra={})=>{const h={apikey:cfg.key,"content-type":"application/json",...extra};if(!cfg.key.startsWith("sb_secret_"))h.authorization="Bearer "+cfg.key;return h};
+const readJson=async req=>{const len=Number(req.headers.get("content-length")||0);if(len>16384)throw Error("BODY_TOO_LARGE");return await req.json()};
+const cookieToken=req=>{const raw=req.headers.get("cookie")||"";for(const part of raw.split(";")){const i=part.indexOf("=");if(i>0&&part.slice(0,i).trim()===SESSION_COOKIE){try{return decodeURIComponent(part.slice(i+1).trim())}catch{return part.slice(i+1).trim()}}}return null};
+const actorFor=(req,env)=>{const h=req.headers.get("authorization")||"";const bearer=h.startsWith("Bearer ")?h.slice(7).trim():null;return (bearer&&verifyToken(bearer,env))||verifyToken(cookieToken(req)||"",env)};
+const cookieHeader=token=>SESSION_COOKIE+"="+encodeURIComponent(token)+"; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=None; Partitioned";
+async function authRoutes(req,u,env,allow){
+ const path=u.pathname,method=req.method;
+ if(path==="/api/supabase/auth/state"&&method==="GET"){
+  const wid=(u.searchParams.get("workspaceId")||"atlasris_main").trim();if(!validWid(wid))return out({error:"شناسه فضای کاری نامعتبر است."},400,allow);
+  const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
+  try{const r=await fetch(cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent(authOwner(wid))+"&select=owner_id&limit=1",{headers:sbHeaders(cfg),signal:AbortSignal.timeout(6000)});if(!r.ok)return out({error:"خطا در بررسی وضعیت حساب مستقل Supabase."},r.status,allow);const rows=await r.json();return out({workspaceId:wid,initialized:Array.isArray(rows)&&rows.length>0},200,allow)}catch{return out({error:"ارتباط با Supabase برقرار نشد."},502,allow)}
+ }
+ if((path==="/api/supabase/auth/setup"||path==="/api/supabase/auth/login")&&method==="POST"){
+  if(req.headers.get("x-requested-with")!=="HolooApex")return out({error:"درخواست نامعتبر است (محافظ CSRF)."},403,allow);
+  const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
+  if(cfg.key.startsWith("sb_publishable_")||cfg.key.startsWith("eyJ")&&(()=>{try{return JSON.parse(Buffer.from(cfg.key.split(".")[1],"base64url").toString()).role!=="service_role"}catch{return true}})())return out({error:"کلید Worker مجوز نوشتن امن ندارد.",code:"INVALID_ANON_KEY"},403,allow);
+  let body;try{body=await readJson(req)}catch{return out({error:"بدنه درخواست نامعتبر یا بیش از حد بزرگ است."},400,allow)}
+  const wid=String(body?.workspaceId||"").trim(),pass=String(body?.passcode||"");if(!validWid(wid)||pass.length<6||pass.length>128)return out({error:"شناسه فضای کاری یا رمز عبور معتبر نیست."},400,allow);
+  const owner=authOwner(wid),url=cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent(owner)+"&select=snapshot_json&limit=1";
+  try{
+   const check=await fetch(url,{headers:sbHeaders(cfg),signal:AbortSignal.timeout(6000)});if(!check.ok)return out({error:"خطا در بررسی اطلاعات فضای کاری."},check.status,allow);
+   const rows=await check.json();const existing=rows?.[0]?.snapshot_json;
+   if(path.endsWith("/setup")){
+    if(Array.isArray(rows)&&rows.length)return out({error:"این فضای کاری قبلاً فعال شده است. با رمز ثبت‌شده وارد شوید."},409,allow);
+    const {saltHex,hashHex}=hashPasscode(pass),now=new Date().toISOString();
+    const create=await fetch(cfg.base+"/rest/v1/"+cfg.table,{method:"POST",headers:sbHeaders(cfg,{Prefer:"return=minimal"}),body:JSON.stringify({owner_id:owner,owner_email:wid+"@supabase.local",company_name:"Workspace Auth ("+wid+")",fiscal_year:"1405",revision:1,conflict_policy:"last_write_wins",last_device_id:"auth_setup",last_device_label:"Supabase Independent Auth",voucher_count:0,invoice_count:0,product_count:0,snapshot_json:{kind:"supabase_workspace_auth_v1",workspaceId:wid,saltHex,hashHex,createdAt:now},client_updated_at:now,updated_at:now}),signal:AbortSignal.timeout(8000)});
+    if(!create.ok){const t=await create.text();const m=t.match(/"code"\s*:\s*"([A-Z0-9_]+)"/);const c=m?.[1]||"HTTP_"+create.status;return out({error:"فعال‌سازی فضای کاری انجام نشد.",code:c},create.status===409?409:create.status,allow)}
+   }else{
+    const authObj=typeof existing==="string"?JSON.parse(existing):existing;if(!authObj?.saltHex||!authObj?.hashHex)return out({error:"این فضای کاری هنوز فعال نشده است."},404,allow);
+    if(!verifyPasscode(pass,authObj.saltHex,authObj.hashHex))return out({error:"رمز عبور فضای کاری اشتباه است."},401,allow);
+   }
+   const signed=signToken(wid,env);let currentRevision=0,currentUpdatedAt=null;
+   try{const rev=await fetch(cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent("sbw_"+wid)+"&select=revision,updated_at&limit=1",{headers:sbHeaders(cfg),signal:AbortSignal.timeout(5000)});if(rev.ok){const rr=await rev.json();if(rr?.[0]){currentRevision=Number(rr[0].revision)||0;currentUpdatedAt=rr[0].updated_at||null}}}catch{}
+   return new Response(JSON.stringify({ok:true,workspaceId:wid,token:signed.token,expiresAt:signed.expiresAt,currentRevision,currentUpdatedAt}),{status:200,headers:{"content-type":"application/json; charset=utf-8",...corsHeaders(allow),"cache-control":"no-store","set-cookie":cookieHeader(signed.token)}});
+  }catch(e){return out({error:"ارتباط با Supabase برقرار نشد."},502,allow)}
+ }
+ if(path==="/api/supabase/auth/me"&&method==="GET"){
+  const actor=actorFor(req,env);if(!actor)return out({authenticated:false,workspaceId:null,serverRevision:0,updatedAt:null,backupCount:0},200,allow);
+  const cfg=sbBase(env);let serverRevision=0,updatedAt=null,backupCount=0;
+  if(cfg){try{const r=await fetch(cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent(actor.uid)+"&select=revision,updated_at&limit=1",{headers:sbHeaders(cfg),signal:AbortSignal.timeout(6000)});if(r.ok){const rows=await r.json();if(rows?.[0]){serverRevision=Number(rows[0].revision)||0;updatedAt=rows[0].updated_at||null}}const b=await fetch(cfg.base+"/rest/v1/"+cfg.table+"?owner_id=like."+encodeURIComponent(actor.uid+"__bak__")+"*&select=owner_id&limit=3",{headers:sbHeaders(cfg),signal:AbortSignal.timeout(6000)});if(b.ok)backupCount=(await b.json()).length}catch{}}
+  return out({authenticated:true,authSource:"supabase_workspace",workspaceId:actor.workspaceId,serverRevision,updatedAt,backupCount},200,allow);
+ }
+ if(path==="/api/supabase/auth/logout"&&method==="POST"){
+  if(req.headers.get("x-requested-with")!=="HolooApex")return out({error:"درخواست خروج معتبر نیست."},403,allow);
+  return new Response(JSON.stringify({ok:true}),{status:200,headers:{"content-type":"application/json; charset=utf-8",...corsHeaders(allow),"set-cookie":SESSION_COOKIE+"=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None; Partitioned"}});
+ }
+ return null;
+}
+
+const authResponse=await authRoutes(req,u,env,allow);if(authResponse)return authResponse;
 if(u.pathname.startsWith("/api/ai/")||u.pathname.startsWith("/api/supabase/"))return out({error:"این API هنوز به Worker منتقل نشده است.",code:"API_NOT_MIGRATED"},501,allow);return out({error:"Not found"},404,allow)}};
