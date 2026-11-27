@@ -5037,7 +5037,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       ): Promise<boolean> => {
         const localMatch = vouchers.find(
           (v) =>
-            v.id === voucherId &&
             v.referenceId === referenceId &&
             v.voucherType === voucherType &&
             v.status === 'permanent' &&
