@@ -992,8 +992,11 @@ export async function pullSnapshotFromSupabase(
     }
     const decoded = json.snapshotJson ? await decodeSupabaseSnapshot(json.snapshotJson, allowLegacyPlaintext) : undefined;
     return { ok: true, ...json, ...(decoded ? { snapshotJson: decoded } : {}) };
-  } catch {
-    return { ok: false, error: 'ارتباط با Supabase برقرار نشد.' };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'ارتباط با Supabase برقرار نشد.',
+    };
   }
 }
 
