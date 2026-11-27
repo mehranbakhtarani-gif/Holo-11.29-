@@ -604,6 +604,10 @@ export const SettingsView: React.FC<{
             'این بسته نسخه قدیمی است و اطلاعات حسابداری آن رمزگذاری نشده است. بازیابی قدیمی تراکنش یکپارچه و بازیابی خودکار ندارد. فقط در صورت اعتماد به فایل ادامه دهید.'
           );
           if (!legacyAccepted) return;
+          const legacyAttachmentBundle = parsed.documentAttachments as Record<string, unknown>;
+          if (legacyAttachmentBundle.schemaVersion === 1 && !window.confirm(
+            'فراداده پیوست‌های این نسخه قدیمی به محتوای رمزگذاری‌شده متصل نیست. محتوا و SHA-256 بررسی می‌شوند، اما انتساب فایل به سند رمزنگاری‌شده نیست. ادامه می‌دهید؟'
+          )) return;
           showToast('بازیابی نسخه قدیمی در مسیر سازگاری انجام می‌شود؛ این مسیر تضمین بازیابی پس از crash ندارد.', 'warning');
           const { restoreEncryptedDocumentAttachmentBundle } = await import('../lib/documentVault');
           const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(JSON.stringify(parsed.documentAttachments));
