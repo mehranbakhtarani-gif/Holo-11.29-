@@ -54,7 +54,7 @@ async function run() {
   assert.equal(restored.snapshotJson, json);
   assert.equal(restored.sha256, envelope.plaintextSha256);
   assert.deepEqual(parseOperationalWorkspaceSnapshot(restored.snapshotJson!), workspace);
-  assert.equal(countOperationalWorkspaceRecords(workspace), 16);
+  assert.equal(countOperationalWorkspaceRecords(workspace), 20);
   assert.equal(
     parseOperationalWorkspaceSnapshot(restored.snapshotJson!).businessLocalState?.stores.holoo_apex96_workspace_extensions_v2,
     workspace.businessLocalState.stores.holoo_apex96_workspace_extensions_v2,
