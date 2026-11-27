@@ -1801,39 +1801,97 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         throw new Error('عدم دسترسی (RBAC) برای قطعی‌کردن سند.');
       }
       const target = vouchers.find((v) => v.id === voucherId);
-      if (target) {
-        const fy = target.fiscalYear || extractFiscalYearFromDate(target.date);
-        if (fy && profile.closedFiscalYears?.includes(fy)) {
-          showToast(`سال مالی ${fy} بسته شده است و امکان تغییر وضعیت سند وجود ندارد.`, 'error');
-          return;
-        }
-      }
       if (!target) {
         showToast('سند موردنظر در اطلاعات بارگذاری‌شده پیدا نشد؛ ابتدا اطلاعات را تازه‌سازی کنید.', 'error');
         throw new Error('Voucher not found; finalization aborted.');
       }
-      const permanentVoucher = {
-        ...target,
-        status: 'permanent' as const,
-        integrityHash: computeVoucherIntegrityHash(target),
-      };
+      const fy = target.fiscalYear || extractFiscalYearFromDate(target.date);
+      if (fy && profile.closedFiscalYears?.includes(fy)) {
+        const message = `سال مالی ${fy} بسته شده است و امکان تغییر وضعیت سند وجود ندارد.`;
+        showToast(message, 'error');
+        throw new Error(message);
+      }
+
+      let permanentVoucher: Voucher;
       if (user) {
-        try {
-          await updateDoc(doc(db, 'vouchers', voucherId), {
+        const voucherRef = doc(db, 'vouchers', voucherId);
+        const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOfflineNow) {
+          permanentVoucher = {
+            ...target,
             status: 'permanent',
-            integrityHash: permanentVoucher.integrityHash,
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `vouchers/${voucherId}`);
-          throw err;
+            integrityHash: computeVoucherIntegrityHash(target),
+            _version: (target._version ?? 1) + 1,
+          };
+          try {
+            await updateDoc(voucherRef, {
+              status: 'permanent',
+              integrityHash: permanentVoucher.integrityHash,
+              _version: permanentVoucher._version,
+              updatedAt: serverTimestamp(),
+            });
+          } catch (err) {
+            handleFirestoreError(err, OperationType.UPDATE, `vouchers/${voucherId}`);
+            throw err;
+          }
+        } else {
+          try {
+            permanentVoucher = await runTransaction(db, async (tx) => {
+              const snap = await tx.get(voucherRef);
+              if (!snap.exists()) {
+                throw new Error('سند موردنظر در فضای ابری پیدا نشد؛ قطعی‌سازی انجام نشد.');
+              }
+              const live = snap.data();
+              if (live.status === 'permanent') {
+                return {
+                  ...target,
+                  status: 'permanent',
+                  integrityHash: typeof live.integrityHash === 'string' ? live.integrityHash : computeVoucherIntegrityHash(target),
+                  _version: Number(live._version) || target._version || 1,
+                };
+              }
+              const liveVersion = Number(live._version) || 1;
+              if (liveVersion !== (target._version ?? 1)) {
+                throw new Error('سند هم‌زمان در دستگاه دیگری ویرایش شده است؛ اطلاعات را تازه‌سازی و دوباره قطعی کنید.');
+              }
+              const liveVoucher: Voucher = {
+                ...target,
+                voucherNumber: Number(live.voucherNumber),
+                date: String(live.date),
+                voucherType: live.voucherType as VoucherType,
+                totalDebit: Number(live.totalDebit),
+                totalCredit: Number(live.totalCredit),
+                lines: live.lines as VoucherLine[],
+                status: 'permanent',
+              };
+              const integrityHash = computeVoucherIntegrityHash(liveVoucher);
+              const nextVersion = liveVersion + 1;
+              tx.update(voucherRef, {
+                status: 'permanent',
+                integrityHash,
+                _version: nextVersion,
+                updatedAt: serverTimestamp(),
+              });
+              return { ...liveVoucher, integrityHash, _version: nextVersion };
+            });
+          } catch (err) {
+            handleFirestoreError(err, OperationType.UPDATE, `vouchers/${voucherId}`);
+            throw err;
+          }
         }
       } else {
+        permanentVoucher = {
+          ...target,
+          status: 'permanent',
+          integrityHash: computeVoucherIntegrityHash(target),
+          _version: (target._version ?? 1) + 1,
+        };
         setVouchers((prev) =>
-          prev.map((v) => (v.id === voucherId ? permanentVoucher : v))
+          prev.map((voucher) => (voucher.id === voucherId ? permanentVoucher : voucher))
         );
       }
-      if (target && !suppressNativeNotification) {
+
+      if (!suppressNativeNotification) {
         emitVoucherNotificationEvent({
           type: 'finalized',
           voucher: permanentVoucher,
