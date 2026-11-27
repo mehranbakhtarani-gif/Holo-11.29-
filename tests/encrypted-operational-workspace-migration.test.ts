@@ -70,7 +70,7 @@ async function run() {
     /ناقص یا ناسازگار/
   );
   assert.throws(
-    () => countOperationalWorkspaceRecords({ ...workspace, taxReports: null as unknown as typeof workspace.taxReports }),
+    () => parseOperationalWorkspaceSnapshot(JSON.stringify({ ...workspace, taxReports: null })),
     /مجموعه رکوردهای فضای کاری/
   );
 
