@@ -1184,7 +1184,7 @@ export function planWarehouseTransfer(input: {
   }
   const layerValueIrr = remainingSourceLayers.reduce((sum, layer) => sum + Math.round(layer.totalCostIrr), 0);
   if (!Number.isFinite(state.totalValueIrr) ||
-      Math.abs(layerValueIrr - Math.round(state.totalValueIrr)) > 1) {
+      layerValueIrr !== Math.round(state.totalValueIrr)) {
     throw new Error('ارزش لایه‌های بهای موجودی با ارزش ثبت‌شده انبار تطابق ندارد؛ انتقال متوقف شد.');
   }
   const transferredLayers: InventoryCostLayer[] = [];
