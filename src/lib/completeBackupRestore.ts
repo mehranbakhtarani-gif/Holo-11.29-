@@ -141,12 +141,14 @@ export async function restoreCompleteBackupPackage(
       restoredWorkspaceRecords: workspaceResult.recordCount,
     };
   } catch (error) {
-    if (!commitIntentWritten) {
+    const durableJournal = await getActiveOperationalRestoreJournal().catch(() => null);
+    const durableCommitIntent = durableJournal?.restoreId === restoreId &&
+      durableJournal.state !== 'staging' && durableJournal.state !== 'committed';
+    if (!commitIntentWritten && !durableCommitIntent) {
       try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* no live data was touched */ }
       try { await discardStagingOperationalRestoreJournal(restoreId); } catch { /* journal may not have been created */ }
-    } else {
-      const active = await getActiveOperationalRestoreJournal().catch(() => null);
-      if (active?.restoreId === restoreId) await markRecoveryFailure(active, error);
+    } else if (durableJournal?.restoreId === restoreId) {
+      await markRecoveryFailure(durableJournal, error);
     }
     throw error;
   }
