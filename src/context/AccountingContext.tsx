@@ -1128,9 +1128,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const patchKeys = Object.keys(patch) as (keyof CompanyProfile)[];
       const isDisplayCurrencyToggleOnly =
         patchKeys.length === 1 && patchKeys[0] === 'currencyUnit';
-      if (!isDisplayCurrencyToggleOnly && !assertPermission('canManageSettings')) return;
+      if (!isDisplayCurrencyToggleOnly && !assertPermission('canManageSettings')) {
+        throw new Error('عدم دسترسی (RBAC) برای تغییر تنظیمات شرکت.');
+      }
       const next = { ...profile, ...patch };
-      setProfile(next);
       if (user) {
         const path = `users/${user.uid}`;
         try {
@@ -1158,8 +1159,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'users', user.uid), cloudPatch);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, path);
+          throw err;
         }
       }
+      setProfile(next);
       showToast('مشخصات شرکتی و سال مالی ذخیره شد.');
     },
     [profile, user, showToast, assertPermission]
