@@ -30,14 +30,14 @@ async function main() {
   );
   await assert.rejects(
     () => decryptMeshPayloadAesGcm('wrong-test-secret', encryptedPayload),
-    undefined,
+    () => true,
     'wrong mesh passphrases must not decrypt state'
   );
   const tamperedPayload = encryptedPayload.slice(0, -3) +
     (encryptedPayload.at(-3) === 'A' ? 'B' : 'A') + encryptedPayload.slice(-2);
   await assert.rejects(
     () => decryptMeshPayloadAesGcm('test-only-holoo-mesh-secret', tamperedPayload),
-    undefined,
+    () => true,
     'tampered mesh ciphertext must fail AES-GCM authentication'
   );
   const passphrase = 'test-only-holoo-mesh-secret';
