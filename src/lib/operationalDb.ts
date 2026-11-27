@@ -10,6 +10,7 @@ import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offline
 import { requireBackupSessionPassphrase } from './backupSession';
 import { importAllBankReconciliationSessions } from './bankReconciliationEngine';
 import {
+  captureBusinessLocalStateSnapshot,
   countBusinessLocalStateSnapshotRecords,
   restoreBusinessLocalStateSnapshot,
   validateBusinessLocalStateSnapshot,
@@ -117,8 +118,6 @@ export interface OperationalWorkspaceData {
   updatedAt?: string;
   bankReconciliationSessions?: Record<string, unknown>;
   businessLocalState?: BusinessLocalStateSnapshot;
-  /** Complete business extension state currently mirrored in localStorage. */
-  workspaceExtensions?: Record<string, unknown>;
 }
 
 export interface SyncOutboxOperation {
@@ -1262,20 +1261,6 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
     ]);
     db.close();
 
-    let workspaceExtensions: Record<string, unknown> | undefined;
-    try {
-      const extensionJson = window.localStorage.getItem('holoo_apex96_workspace_extensions_v2');
-      if (extensionJson) {
-        const parsedExtensions: unknown = JSON.parse(extensionJson);
-        if (!parsedExtensions || typeof parsedExtensions !== 'object' || Array.isArray(parsedExtensions)) {
-          throw new Error('ساختار داده‌های تکمیلی فضای کاری معتبر نیست.');
-        }
-        workspaceExtensions = parsedExtensions as Record<string, unknown>;
-      }
-    } catch (error) {
-      throw new Error(`خواندن داده‌های تکمیلی برای نسخه رمزگذاری‌شده ناموفق بود: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
     const profileRow = metaRows.find((r) => r.key === 'profile');
     const wsMeta = metaRows.find((r) => r.key === 'workspace_meta');
     if (!profileRow?.value || accounts.length === 0) {
@@ -1305,7 +1290,7 @@ export async function loadOperationalWorkspace(): Promise<OperationalWorkspaceDa
       localProfiles,
       syncOutbox,
       syncInbox,
-      workspaceExtensions,
+      businessLocalState: captureBusinessLocalStateSnapshot(),
       localRevision: wsMeta?.localRevision ?? 1,
       updatedAt: wsMeta?.updatedAt,
     };
@@ -1326,21 +1311,10 @@ export function countOperationalWorkspaceRecords(workspace: OperationalWorkspace
     workspace.warehouses ?? [], workspace.taxReports ?? [], workspace.localProfiles ?? [],
     workspace.syncOutbox ?? [], workspace.syncInbox ?? [],
   ];
-  let extensionRecordCount = 0;
-  if (workspace.workspaceExtensions !== undefined) {
-    if (!workspace.workspaceExtensions || typeof workspace.workspaceExtensions !== 'object' || Array.isArray(workspace.workspaceExtensions)) {
-      throw new Error('ساختار داده‌های تکمیلی فضای کاری معتبر نیست.');
-    }
-    for (const value of Object.values(workspace.workspaceExtensions)) {
-      if (Array.isArray(value)) extensionRecordCount += value.length;
-      else if (value && typeof value === 'object') extensionRecordCount += Object.keys(value as Record<string, unknown>).length;
-    }
-  }
   if (!collections.every(Array.isArray)) {
     throw new Error('ساختار مجموعه رکوردهای فضای کاری معتبر نیست.');
   }
   const total = collections.reduce((sum, rows) => sum + rows.length, 0) +
-    extensionRecordCount +
     (workspace.businessLocalState ? countBusinessLocalStateSnapshotRecords(workspace.businessLocalState) : 0);
   if (!Number.isSafeInteger(total) || total < 0) {
     throw new Error('تعداد رکوردهای فضای کاری خارج از محدوده مجاز است.');
@@ -1376,9 +1350,6 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
     (parsed.localProfiles !== undefined && !Array.isArray(parsed.localProfiles)) ||
     (parsed.syncOutbox !== undefined && !Array.isArray(parsed.syncOutbox)) ||
     (parsed.syncInbox !== undefined && !Array.isArray(parsed.syncInbox)) ||
-    (parsed.workspaceExtensions !== undefined && (
-      !parsed.workspaceExtensions || typeof parsed.workspaceExtensions !== 'object' || Array.isArray(parsed.workspaceExtensions)
-    )) ||
     (parsed.businessLocalState !== undefined && (() => {
       try { validateBusinessLocalStateSnapshot(parsed.businessLocalState); return false; }
       catch { return true; }
