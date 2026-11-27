@@ -7161,12 +7161,36 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     async (snapshotId: string, allowLegacyPlaintext = false): Promise<boolean> => {
       const payload = await loadLocalSnapshotPayload(snapshotId, allowLegacyPlaintext);
       if (!payload) {
-        showToast('فایل پشتیبان انتخاب‌شده در حافظه دستگاه یافت نشد.');
+        showToast('فایل پشتیبان انتخاب‌شده در حافظه دستگاه یافت نشد یا قابل رمزگشایی نیست.', 'error');
         return false;
+      }
+      if (allowLegacyPlaintext) {
+        if (!backupSessionUnlocked) {
+          showToast('برای مهاجرت نسخه قدیمی، ابتدا قفل رمزنگاری پشتیبان را باز کنید.', 'warning');
+          return false;
+        }
+        const cur = latestBackupRef.current;
+        try {
+          const migrated = await saveLocalSnapshot({
+            payloadJson: payload,
+            reason: 'pre_migration',
+            companyName: cur.companyName,
+            ...cur.counts,
+          });
+          if (!migrated) {
+            showToast('نسخه قدیمی بازیابی نشد؛ ذخیره نسخه رمزگذاری‌شده مهاجرت ناموفق بود.', 'error');
+            return false;
+          }
+          const list = await listLocalSnapshots();
+          setLocalSnapshots(list);
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : 'ذخیره نسخه رمزگذاری‌شده مهاجرت ناموفق بود.', 'error');
+          return false;
+        }
       }
       return importBackupJson(payload);
     },
-    [importBackupJson, showToast]
+    [importBackupJson, showToast, backupSessionUnlocked]
   );
 
   const removeLocalSnapshot = useCallback(
