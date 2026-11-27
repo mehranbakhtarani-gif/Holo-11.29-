@@ -421,6 +421,12 @@ async function main() {
     // In Node without window, applyPendingSwRefresh fails safely while preserving backupCreated=true
     assert.equal(updRes.backupCreated, true);
 
+    // A failed safety backup must stop the update instead of proceeding unsafely.
+    const backupFailure = await safeApplySwUpdateWithBackup(async () => false);
+    assert.equal(backupFailure.backupCreated, false);
+    assert.equal(backupFailure.applied, false);
+    assert.ok(backupFailure.error?.includes('پشتیبان ایمنی'));
+
     // 21. IndexedDB v3 operational schema includes all required stores non-destructively
     assert.equal(OP_DB_VERSION, 3);
     for (const requiredStore of [
