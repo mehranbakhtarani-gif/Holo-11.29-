@@ -2302,7 +2302,32 @@ async function startServer() {
       if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
         throw new Error('Invalid object');
       }
-      parsedSnapshot = rawParsed as Record<string, unknown>;
+      const candidate = rawParsed as Record<string, unknown>;
+      if (candidate.kind !== 'holoo-apex-encrypted-sync-v1') {
+        throw new Error('Supabase sync requires an encrypted snapshot envelope.');
+      }
+      const envelope = candidate.envelope as Record<string, unknown> | undefined;
+      if (
+        !envelope ||
+        envelope.format !== 'holoo-apex-encrypted-backup' ||
+        envelope.kdf !== 'PBKDF2-SHA256' ||
+        envelope.cipher !== 'AES-256-GCM' ||
+        !Number.isInteger(envelope.schemaVersion) ||
+        !Number.isInteger(envelope.iterations) ||
+        Number(envelope.iterations) < 600_000 ||
+        Number(envelope.iterations) > 1_000_000 ||
+        typeof envelope.saltB64 !== 'string' ||
+        typeof envelope.ivB64 !== 'string' ||
+        typeof envelope.ciphertextB64 !== 'string' ||
+        typeof envelope.plaintextSha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/i.test(envelope.plaintextSha256) ||
+        envelope.saltB64.length > 64 ||
+        envelope.ivB64.length > 32 ||
+        envelope.ciphertextB64.length > 6_000_000
+      ) {
+        throw new Error('Invalid encrypted snapshot envelope.');
+      }
+      parsedSnapshot = candidate;
     } catch {
       res.status(400).json({ error: 'فرمت JSON اسنپ‌شات نامعتبر است.' });
       return;
