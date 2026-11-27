@@ -728,8 +728,8 @@ export function recalculateInventoryLedger(input: {
           m.totalCostIrr !== undefined
             ? Math.max(0, Math.round(m.totalCostIrr))
             : Math.max(0, Math.round(q * (m.unitCostIrr ?? 0)));
-        let inventoryCostRemovedIrr = invoiceReturnValueIrr;
-        let varianceIrr = 0;
+        let inventoryCostRemovedIrr = Math.min(availableValueIrr, invoiceReturnValueIrr);
+        let varianceIrr = invoiceReturnValueIrr - inventoryCostRemovedIrr;
         if (m.sourceRefId) {
           const sourceLayer = purchaseLayerBalances.get(m.sourceRefId);
           if (!sourceLayer || q > sourceLayer.remainingQty + 0.00005) {
