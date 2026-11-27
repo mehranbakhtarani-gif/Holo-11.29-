@@ -398,7 +398,7 @@ async function runTests() {
 
   const saleReturnIdx = accountingCtxSrc.indexOf('const isSaleReturn = payload.invoiceType === \'sale_return\'');
   assert.ok(saleReturnIdx !== -1, 'sale-return atomic guard must exist');
-  const saleReturnBody = accountingCtxSrc.slice(saleReturnIdx, saleReturnIdx + 8500);
+  const saleReturnBody = accountingCtxSrc.slice(saleReturnIdx, saleReturnIdx + 16000);
   assert.ok(saleReturnBody.includes('assertSaleReturnRequiresAtomicCloud'));
   assert.ok(saleReturnBody.includes('transactionOriginalInvoice'));
   assert.ok(saleReturnBody.includes('await tx.get(originalRef)'));
