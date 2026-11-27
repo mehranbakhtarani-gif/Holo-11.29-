@@ -1845,7 +1845,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               if (live.status === 'permanent') {
                 return {
                   ...target,
-                  status: 'permanent',
+                  status: 'permanent' as const,
                   integrityHash: typeof live.integrityHash === 'string' ? live.integrityHash : computeVoucherIntegrityHash(target),
                   _version: Number(live._version) || target._version || 1,
                 };
