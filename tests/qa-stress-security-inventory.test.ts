@@ -19,7 +19,7 @@ import {
   RBAC_ROLE_PRESETS,
 } from '../src/lib/enterpriseAccounting';
 import { allocateProportionalIrr, mulQtyByIrr, percentOfIrr } from '../src/lib/moneyMath';
-import { applyInventoryMovementStep, recalculateInventoryLedger } from '../src/lib/inventoryCostingEngine';
+import { applyInventoryMovementStep, planWarehouseTransfer, recalculateInventoryLedger } from '../src/lib/inventoryCostingEngine';
 import { auditPendingApprovalItems } from '../src/lib/smartAutomationEngine';
 import { fuzzyFilterAndRank } from '../src/lib/fuzzySearch';
 import {
@@ -43,6 +43,48 @@ function logPass(name: string, detail?: string) {
 }
 
 console.log('Running QA Stress, Inventory Integration, Accounting Math & Security Suite...');
+/* ============================================================================
+ * WAREHOUSE TRANSFER COST-LAYER RECONCILIATION
+ * ========================================================================== */
+{
+  const validState = {
+    productId: 'transfer-product',
+    costingMethod: 'fifo' as const,
+    stockQty: 5,
+    totalValueIrr: 700,
+    weightedAvgUnitCostIrr: 140,
+    layers: [{
+      layerId: 'transfer-layer-1',
+      date: '1405/01/01',
+      sourceRef: 'purchase-transfer-1',
+      warehouse: 'انبار مبدا',
+      originalQty: 5,
+      remainingQty: 5,
+      unitCostIrr: 140,
+      totalCostIrr: 700,
+    }],
+  };
+  const plan = planWarehouseTransfer({
+    state: validState, fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-valid-1', date: '1405/01/02',
+  });
+  assert.equal(plan.transferredCostIrr, 420);
+  assert.equal(plan.transferredLayers.reduce((sum, layer) => sum + layer.remainingQty, 0), 3);
+  assert.equal(plan.remainingSourceLayers.reduce((sum, layer) => sum + layer.remainingQty, 0), 2);
+  assert.equal(plan.pnlImpactIrr, 0);
+  assert.throws(() => planWarehouseTransfer({
+    state: { ...validState, layers: [] },
+    fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-invalid-1', date: '1405/01/02',
+  }), /لایه‌های بهای موجودی/);
+  assert.throws(() => planWarehouseTransfer({
+    state: { ...validState, layers: [{ ...validState.layers[0], totalCostIrr: -1 }] },
+    fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-invalid-2', date: '1405/01/02',
+  }), /لایه‌های بهای موجودی/);
+  logPass('Warehouse transfer layer reconciliation', 'valid transfers preserve cost and reject missing or invalid source layers');
+}
+
 /* ============================================================================
  * INVENTORY LEDGER CUMULATIVE SALE-RETURN GUARD
  * ========================================================================== */
