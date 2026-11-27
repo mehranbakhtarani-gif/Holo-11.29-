@@ -29,6 +29,11 @@ async function run() {
     subcontractJobs: [],
     rbacOperators: [],
     auditLogs: [],
+    warehouses: [{ id: 'wh-1', name: 'Main' }],
+    taxReports: [{ id: 'tax-1', period: '1405-01' }],
+    localProfiles: [{ workspaceId: 'workspace-1', profileId: 'local-1' }],
+    syncOutbox: [{ operationId: 'op-1', target: 'firebase', workspaceId: 'workspace-1', deviceId: 'dev-1', clientRevision: 7, payloadHash: 'abc', createdAt: '2026-11-27T00:00:00.000Z', retryCount: 0, status: 'pending' as const }],
+    syncInbox: [{ operationId: 'in-1', sourceDeviceId: 'dev-2', payloadHash: 'def', receivedAt: '2026-11-27T00:00:00.000Z' }],
     localRevision: 7,
     updatedAt: '2026-11-27T00:00:00.000Z',
   };
@@ -41,7 +46,12 @@ async function run() {
   assert.equal(restored.snapshotJson, json);
   assert.equal(restored.sha256, envelope.plaintextSha256);
   assert.deepEqual(parseOperationalWorkspaceSnapshot(restored.snapshotJson!), workspace);
-  assert.equal(countOperationalWorkspaceRecords(workspace), 1);
+  assert.equal(countOperationalWorkspaceRecords(workspace), 6);
+  assert.deepEqual(parseOperationalWorkspaceSnapshot(json).warehouses, workspace.warehouses);
+  assert.deepEqual(parseOperationalWorkspaceSnapshot(json).taxReports, workspace.taxReports);
+  assert.deepEqual(parseOperationalWorkspaceSnapshot(json).localProfiles, workspace.localProfiles);
+  assert.deepEqual(parseOperationalWorkspaceSnapshot(json).syncOutbox, workspace.syncOutbox);
+  assert.deepEqual(parseOperationalWorkspaceSnapshot(json).syncInbox, workspace.syncInbox);
   assert.throws(
     () => countOperationalWorkspaceRecords({ ...workspace, accounts: null as unknown as typeof workspace.accounts }),
     /مجموعه رکوردهای فضای کاری/
@@ -59,7 +69,7 @@ async function run() {
   const validMetadata = {
     workspaceId: 'workspace-1',
     envelopeJson: JSON.stringify(envelope),
-    schemaVersion: 1,
+    schemaVersion: 2,
     recordCount: 1,
     sourceRevision: 7,
     plaintextSha256: envelope.plaintextSha256,
