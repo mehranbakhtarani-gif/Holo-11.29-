@@ -144,6 +144,9 @@ export async function restoreCompleteBackupPackage(
     };
     await createOperationalRestoreJournal(journal);
     journalCreated = true;
+    // Re-broadcast after the durable write: tabs opened during DB initialization
+    // may have missed the initial transient announcement but are now already listening.
+    announceRestoreBarrier(true);
 
     const stagedManifest = await stageEncryptedDocumentAttachmentBundle(
       restoreId,
