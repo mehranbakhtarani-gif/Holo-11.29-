@@ -1797,7 +1797,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const finalizeVoucher = useCallback(
     async (voucherId: string, suppressNativeNotification = false) => {
-      if (!assertPermission('canFinalizeVoucher')) return;
+      if (!assertPermission('canFinalizeVoucher')) {
+        throw new Error('عدم دسترسی (RBAC) برای قطعی‌کردن سند.');
+      }
       const target = vouchers.find((v) => v.id === voucherId);
       if (target) {
         const fy = target.fiscalYear || extractFiscalYearFromDate(target.date);
@@ -2624,6 +2626,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `cheques/${id}`);
+          throw err;
         }
       } else {
         setCheques((prev) => [full, ...prev]);
@@ -4205,6 +4208,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         showToast(message, 'error');
         throw new Error(message);
       }
+      const payrollReferenceId = `payroll:${fiscalYear}:${monthName.trim()}`;
+      if (vouchers.some((v) => v.referenceId === payrollReferenceId)) {
+        const message = `سند حقوق ${monthName} سال ${fiscalYear} قبلاً ثبت شده است.`;
+        showToast(message, 'error');
+        throw new Error(message);
+      }
       const activeEmps = employees.filter((e) => e.active);
       if (activeEmps.length === 0) return;
       const calcs = activeEmps.map((emp) =>
@@ -4257,10 +4266,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         description: `سند اتوماتیک حقوق و دستمزد ${monthName} سال ${profile.fiscalYear} (${activeEmps.length} نفر)`,
         voucherType: 'payroll',
         status: 'permanent',
+        referenceId: payrollReferenceId,
         lines,
       });
     },
-    [employees, profile.fiscalYear, profile.statutoryParamsByYear, createVoucher, showToast]
+    [employees, vouchers, profile.fiscalYear, profile.statutoryParamsByYear, createVoucher, showToast]
   );
 
   const paySalariesVoucher = useCallback(
@@ -4366,6 +4376,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const postDepreciationVoucher = useCallback(
     async (periodLabel: string) => {
+      const depreciationReferenceId = `depreciation:${profile.fiscalYear}:${periodLabel.trim()}`;
+      if (vouchers.some((v) => v.referenceId === depreciationReferenceId)) {
+        const message = `سند استهلاک دوره «${periodLabel}» سال ${profile.fiscalYear} قبلاً ثبت شده است.`;
+        showToast(message, 'error');
+        throw new Error(message);
+      }
       let totalDep = 0;
       for (const a of assets) {
         const dep = calculateMonthlyDepreciation(a);
@@ -4399,6 +4415,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         description: `سند اتوماتیک استهلاک دارایی‌های ثابت — ${periodLabel}`,
         voucherType: 'depreciation',
         status: 'permanent',
+        referenceId: depreciationReferenceId,
         lines: [
           {
             accountCode: '80301',
@@ -4418,7 +4435,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         ],
       });
     },
-    [assets, user, createVoucher, showToast]
+    [assets, user, vouchers, profile.fiscalYear, createVoucher, showToast]
   );
 
   const addCostCenter = useCallback(
