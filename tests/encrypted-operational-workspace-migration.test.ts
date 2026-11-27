@@ -71,7 +71,7 @@ async function run() {
   );
   assert.throws(
     () => parseOperationalWorkspaceSnapshot(JSON.stringify({ ...workspace, taxReports: null })),
-    /مجموعه رکوردهای فضای کاری/
+    /ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار/
   );
 
   const validMetadata = {
