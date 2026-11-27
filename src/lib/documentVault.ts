@@ -62,6 +62,24 @@ export const ALLOWED_ATTACHMENT_MIMES = new Set([
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
+let forcedDocumentVaultRestoreBarrier = false;
+
+export function setDocumentVaultRestoreBarrier(active: boolean): void {
+  forcedDocumentVaultRestoreBarrier = active;
+}
+
+if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+  const vaultRestoreBarrierChannel = new BroadcastChannel('holoo-complete-restore');
+  vaultRestoreBarrierChannel.onmessage = (event) => {
+    if (event.data?.reload === true) {
+      forcedDocumentVaultRestoreBarrier = true;
+      window.location.reload();
+      return;
+    }
+    forcedDocumentVaultRestoreBarrier = event.data?.active !== false;
+  };
+}
+
 const VAULT_DB_NAME = 'holoo_apex_document_vault_v1';
 const VAULT_DB_VERSION = 2;
 const VAULT_STORE = 'attachments';
@@ -97,7 +115,7 @@ function isIdbAvailable(): boolean {
   return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined';
 }
 
-function openVaultDb(): Promise<IDBDatabase> {
+function openVaultDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = window.indexedDB.open(VAULT_DB_NAME, VAULT_DB_VERSION);
     req.onupgradeneeded = () => {
@@ -114,7 +132,47 @@ function openVaultDb(): Promise<IDBDatabase> {
         db.createObjectStore(VAULT_RESTORE_MANIFESTS_STORE, { keyPath: 'restoreId' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      if (allowRestoreRecovery || !db.objectStoreNames.contains(VAULT_RESTORE_MANIFESTS_STORE)) {
+        resolve(db);
+        return;
+      }
+      const tx = db.transaction([VAULT_RESTORE_MANIFESTS_STORE], 'readonly');
+      const request = tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE).getAll();
+      request.onsuccess = () => {
+        const manifests = (request.result ?? []) as Array<{ state?: string }>;
+        const blocked = forcedDocumentVaultRestoreBarrier || manifests.some((manifest) => manifest.state === 'staged');
+        if (!blocked) {
+          resolve(db);
+          return;
+        }
+        const guarded = new Proxy(db, {
+          get(target, property) {
+            if (property === 'transaction') {
+              return (..._args: Parameters<IDBDatabase['transaction']>) => {
+                throw new Error('بازیابی پیوست‌های پشتیبان در حال انجام است؛ عملیات عادی خزانه اسناد موقتاً مسدود است.');
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+        resolve(guarded);
+      };
+      request.onerror = () => {
+        db.close();
+        reject(request.error ?? new Error('بررسی وضعیت بازیابی خزانه اسناد ناموفق بود.'));
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error ?? new Error('تراکنش بررسی بازیابی خزانه اسناد شکست خورد.'));
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error ?? new Error('تراکنش بررسی بازیابی خزانه اسناد لغو شد.'));
+      };
+    };
     req.onerror = () => reject(req.error ?? new Error('Failed to open Document Vault IndexedDB'));
   });
 }
@@ -564,7 +622,7 @@ export async function stageEncryptedDocumentAttachmentBundle(
     state: 'staged', stagedAt: new Date().toISOString(),
   };
   if (!isIdbAvailable()) throw new Error('ذخیره staging پایدار پیوست‌ها در این محیط در دسترس نیست.');
-  const db = await openVaultDb();
+  const db = await openVaultDb(true);
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readwrite');
@@ -596,7 +654,7 @@ export async function verifyStagedDocumentAttachmentBundle(
 ): Promise<StagedDocumentRestoreManifest> {
   validateRestoreId(restoreId);
   if (!isIdbAvailable()) throw new Error('خواندن staging پیوست‌ها در این محیط در دسترس نیست.');
-  const db = await openVaultDb();
+  const db = await openVaultDb(true);
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction([VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readonly');
@@ -642,7 +700,7 @@ export async function applyStagedDocumentAttachmentBundle(
   // Re-authenticate the staged manifest and its complete encrypted row set before
   // the live attachments store is touched. This also supports crash recovery retries.
   await verifyStagedDocumentAttachmentBundle(restoreId, expectedPackageDigest, expectedManifestDigest, expectedRowCount);
-  const db = await openVaultDb();
+  const db = await openVaultDb(true);
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction([VAULT_STORE, VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readwrite');
@@ -685,7 +743,7 @@ export async function applyStagedDocumentAttachmentBundle(
 export async function discardStagedDocumentAttachmentBundle(restoreId: string): Promise<void> {
   validateRestoreId(restoreId);
   if (!isIdbAvailable()) throw new Error('پاک‌سازی staging پایدار پیوست‌ها در این محیط در دسترس نیست.');
-  const db = await openVaultDb();
+  const db = await openVaultDb(true);
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([VAULT_RESTORE_STAGING_STORE, VAULT_RESTORE_MANIFESTS_STORE], 'readwrite');
