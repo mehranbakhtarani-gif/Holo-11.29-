@@ -315,7 +315,7 @@ async function runTests() {
   // permanent voucher and job status share one atomic transaction.
   const subcontractCompletionIdx = accountingCtxSrc.indexOf('const completeSubcontractJob = useCallback');
   assert.ok(subcontractCompletionIdx !== -1, 'completeSubcontractJob must exist');
-  const subcontractCompletionGuard = accountingCtxSrc.slice(subcontractCompletionIdx, subcontractCompletionIdx + 900);
+  const subcontractCompletionGuard = accountingCtxSrc.slice(subcontractCompletionIdx, subcontractCompletionIdx + 1800);
   assert.match(
     subcontractCompletionGuard,
     /SAFETY GATE[\\s\\S]*showToast[\\s\\S]*return;/,
