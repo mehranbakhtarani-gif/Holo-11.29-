@@ -518,8 +518,8 @@ service cloud.firestore {
     }
 
     function isValidCloudBackup(data) {
-      return data.keys().hasAll(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshot', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'companyName', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshot', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshotEnvelope', 'encryption', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'companyName', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshotEnvelope', 'encryption', 'createdAt', 'updatedAt'])
         && data.ownerId == request.auth.uid
         && isValidId(data.ownerId)
         && data.revision is number && data.revision >= 1
@@ -534,7 +534,8 @@ service cloud.firestore {
         && data.invoiceCount is number && data.invoiceCount >= 0
         && data.productCount is number && data.productCount >= 0
         && data.sizeKb is number && data.sizeKb >= 0 && data.sizeKb <= 1024
-        && data.snapshot is map && data.snapshot.size() >= 1 && data.snapshot.size() <= 30
+        && data.encryption == 'PBKDF2-SHA256+AES-256-GCM'
+        && isNonEmptyString(data.snapshotEnvelope, 900000)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
