@@ -6242,6 +6242,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
     ) => {
       if (!assertPermission('canEditInventory') || !assertPermission('canCreateVoucher')) return;
+      // SAFETY GATE: this workflow currently commits raw-stock deduction, finished-product
+      // creation, voucher posting and job completion in separate operations. Until these
+      // writes are moved into one server-authoritative atomic transaction, fail closed.
+      showToast(
+        'تکمیل پیمانکاری موقتاً غیرفعال است؛ ثبت اتمیک موجودی، محصول نهایی، سند و حواله هنوز تضمین نشده است.',
+        'error'
+      );
+      return;
       const job = subcontractJobs.find((j) => j.id === jobId);
       if (!job || job.status === 'completed') {
         showToast('این حواله پیمانکاری قبلاً تکمیل شده است.');
