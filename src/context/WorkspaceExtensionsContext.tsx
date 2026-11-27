@@ -207,14 +207,40 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   // Persist local mirror whenever state changes
   const persistLocalMirror = useCallback((next: WorkspaceExtensionsState) => {
     if (isOperationalRestoreBarrierActive()) return;
-    // Persist the complete extension state before publishing it to React state.
-    // Storage/quota failures must reach the caller instead of creating a false-success UI.
-    localStorage.setItem(LOCAL_EXT_STORAGE_KEY, JSON.stringify(next));
-    // These legacy mirrors are still read by independent modules. Write them
-    // directly so quota/security errors cannot be swallowed by compatibility helpers.
-    localStorage.setItem('holoo_apex96_reserved_invoices_v1', JSON.stringify(next.reservedInvoices));
-    localStorage.setItem('holoo_apex96_favorite_menus', JSON.stringify(next.favoriteMenus));
-    localStorage.setItem('holoo_apex96_product_meta_v1', JSON.stringify(next.productMetaMap));
+    // Keep the four compatibility stores convergent if a quota/security error
+    // interrupts the write sequence. localStorage has no multi-key transaction,
+    // so capture previous values and roll back every key already written.
+    const writes: Array<[string, string]> = [
+      [LOCAL_EXT_STORAGE_KEY, JSON.stringify(next)],
+      ['holoo_apex96_reserved_invoices_v1', JSON.stringify(next.reservedInvoices)],
+      ['holoo_apex96_favorite_menus', JSON.stringify(next.favoriteMenus)],
+      ['holoo_apex96_product_meta_v1', JSON.stringify(next.productMetaMap)],
+    ];
+    const previous = writes.map(([key]) => [key, localStorage.getItem(key)] as const);
+    let completed = 0;
+    try {
+      for (const [key, value] of writes) {
+        localStorage.setItem(key, value);
+        completed += 1;
+      }
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      for (let index = completed - 1; index >= 0; index -= 1) {
+        const [key, value] = previous[index];
+        try {
+          if (value === null) localStorage.removeItem(key);
+          else localStorage.setItem(key, value);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        throw new Error(
+          `Workspace extension persistence failed and rollback was incomplete: ${String(error)}; ${rollbackErrors.length} rollback error(s)`
+        );
+      }
+      throw error;
+    }
   }, []);
 
   // Push cloud patch safely matching firestore.rules bounds
@@ -297,8 +323,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         if (typeof data._version === 'number') {
           versionRef.current = Math.max(versionRef.current, data._version);
         }
-        setState((prev) => {
-          if (isOperationalRestoreBarrierActive()) return prev;
+        if (isOperationalRestoreBarrierActive()) return;
+        const prev = stateRef.current;
           const merged: WorkspaceExtensionsState = {
             reservedInvoices: Array.isArray(data.reservedInvoices)
               ? data.reservedInvoices
@@ -343,9 +369,9 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
               ? data.fiscalArchives
               : prev.fiscalArchives,
           };
-          persistLocalMirror(merged);
-          return merged;
-        });
+        persistLocalMirror(merged);
+        stateRef.current = merged;
+        setState(merged);
       },
       (err) => {
         if (!isFirestoreOfflineError(err)) {
