@@ -771,8 +771,10 @@ export async function cleanupOrphanedStagedDocumentAttachmentBundles(): Promise<
       const tx = db.transaction([VAULT_RESTORE_MANIFESTS_STORE], 'readonly');
       const request = tx.objectStore(VAULT_RESTORE_MANIFESTS_STORE).getAll();
       request.onsuccess = () => resolve(
-        ((request.result ?? []) as Array<{ restoreId?: string; state?: string }>)
-          .filter((row) => row.state === 'staged' && typeof row.restoreId === 'string')
+        ((request.result ?? []) as Array<{ restoreId?: string; state?: string; stagedAt?: string }>)
+          .filter((row) => row.state === 'staged' && typeof row.restoreId === 'string' &&
+            typeof row.stagedAt === 'string' && Number.isFinite(Date.parse(row.stagedAt)) &&
+            Date.now() - Date.parse(row.stagedAt) > 60 * 60 * 1000)
           .map((row) => row.restoreId as string)
       );
       request.onerror = () => reject(request.error ?? new Error('خواندن manifestهای staging ناموفق بود.'));
