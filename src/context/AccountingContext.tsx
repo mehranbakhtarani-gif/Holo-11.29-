@@ -657,8 +657,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (isFirestoreOfflineError(err)) {
           return fallbackMax + 1;
         }
-        // Fallback safely without blocking accounting flow if counter doc is still provisioning
-        return fallbackMax + 1;
+        handleFirestoreError(err, OperationType.UPDATE, `counters/${user.uid}`);
+        throw err;
       }
     },
     [user, deviceId]
