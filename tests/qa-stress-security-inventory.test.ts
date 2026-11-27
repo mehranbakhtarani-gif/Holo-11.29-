@@ -76,12 +76,12 @@ console.log('Running QA Stress, Inventory Integration, Accounting Math & Securit
     state: { ...validState, layers: [] },
     fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
     qty: 3, transferId: 'transfer-invalid-1', date: '1405/01/02',
-  }), /لایه‌های بهای موجودی/);
+  }), /لایه‌های موجودی/);
   assert.throws(() => planWarehouseTransfer({
     state: { ...validState, layers: [{ ...validState.layers[0], totalCostIrr: -1 }] },
     fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
     qty: 3, transferId: 'transfer-invalid-2', date: '1405/01/02',
-  }), /لایه‌های بهای موجودی/);
+  }), /لایه‌های موجودی/);
   logPass('Warehouse transfer layer reconciliation', 'valid transfers preserve cost and reject missing or invalid source layers');
 }
 
