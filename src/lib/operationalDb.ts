@@ -614,11 +614,13 @@ export async function commitSalesOrderDispatchOperationalTx(input: {
   plateNumber: string;
   items: SalesOrder['items'];
   updatedByDevice: string;
-}): Promise<SalesOrder> {
-  if (!isIndexedDbAvailable()) {
+}, options?: { dbOverride?: IDBDatabase }): Promise<SalesOrder> {
+  const usingOverride = Boolean(options?.dbOverride);
+  if (!usingOverride && !isIndexedDbAvailable()) {
     throw new Error('پایگاه‌داده عملیاتی محلی در دسترس نیست؛ حواله خروج ثبت نشد.');
   }
-  const db = await openOperationalDb();
+  const db = options?.dbOverride ?? (await openOperationalDb());
+  const closeIfOwned = () => { if (!usingOverride) db.close(); };
   return new Promise((resolve, reject) => {
     let tx: IDBTransaction;
     let committedOrder: SalesOrder | null = null;
@@ -680,20 +682,20 @@ export async function commitSalesOrderDispatchOperationalTx(input: {
       metaRequest.onsuccess = () => { metaReady = true; commitIfReady(); };
       metaRequest.onerror = () => { try { tx.abort(); } catch { /* transaction already inactive */ } };
       tx.oncomplete = () => {
-        db.close();
+        closeIfOwned();
         if (committedOrder) resolve(committedOrder);
         else reject(new Error('ثبت اتمیک حواله خروج کامل نشد.'));
       };
       tx.onerror = () => {
-        db.close();
+        closeIfOwned();
         reject(tx.error ?? new Error('خطا در ثبت اتمیک حواله خروج.'));
       };
       tx.onabort = () => {
-        db.close();
+        closeIfOwned();
         reject(tx.error ?? new Error('تراکنش حواله خروج لغو شد؛ هیچ تغییری اعمال نشد.'));
       };
     } catch (error) {
-      db.close();
+      closeIfOwned();
       reject(error);
     }
   });
