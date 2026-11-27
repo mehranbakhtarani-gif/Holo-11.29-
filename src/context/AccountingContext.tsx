@@ -5005,6 +5005,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             assetUpdates.push({
               id: asset.id,
               expectedAccumulatedDepreciation: asset.accumulatedDepreciation,
+              expectedPurchaseCost: asset.purchaseCost,
+              expectedSalvageValue: asset.salvageValue,
+              expectedUsefulLifeYears: asset.usefulLifeYears,
+              expectedPurchaseDate: asset.purchaseDate,
               depreciationAmount: dep,
               accumulatedDepreciation: nextAccum,
             });
