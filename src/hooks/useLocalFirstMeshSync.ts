@@ -1270,7 +1270,7 @@ export function useLocalFirstMeshSync() {
     await clearAllDexieOutboxItems();
     await refreshOutboxAndLogs();
     showToast('تمام صف محلی sync_outbox پاکسازی شد.');
-  }, [refreshOutboxAndLogs, showToast]);
+  }, [refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const clearSyncEventLogs = useCallback(async () => {
     await clearMeshSyncEventLogs();
