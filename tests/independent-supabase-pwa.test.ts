@@ -57,6 +57,8 @@ async function run() {
       assert.equal(wrapper.kind, 'holoo-apex-encrypted-sync-v1');
       assert.notEqual(encoded.includes('"balance":2500'), true);
       assert.equal(await decodeSupabaseSnapshot(encoded), payload);
+      await assert.rejects(() => decodeSupabaseSnapshot(payload));
+      assert.equal(await decodeSupabaseSnapshot(payload, true), payload);
       const tampered = {
         ...wrapper,
         envelope: {
