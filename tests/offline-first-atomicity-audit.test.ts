@@ -351,6 +351,10 @@ async function runTests() {
   const dispatchOrderEnd = accountingCtxSrc.indexOf('const invoiceSalesOrder = useCallback', dispatchOrderIdx);
   const dispatchOrderBody = accountingCtxSrc.slice(dispatchOrderIdx, dispatchOrderEnd);
   assert.ok(dispatchOrderBody.includes('runTransaction(db'));
+  assert.ok(dispatchOrderBody.includes('inFlightSalesOrderDispatches.has(lockKey)'));
+  assert.ok(dispatchOrderBody.includes('inFlightSalesOrderDispatches.delete(lockKey)'));
+  assert.ok(dispatchOrderBody.includes('finally'));
+
   assert.ok(dispatchOrderBody.includes("liveOrder.status !== 'ordered'"));
   assert.ok(dispatchOrderBody.includes("throw new Error('ORDER_NOT_DISPATCHABLE')"));
   assert.ok(dispatchOrderBody.includes("(liveOrder._version ?? 1) + 1"));
