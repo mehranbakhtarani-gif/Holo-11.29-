@@ -4326,6 +4326,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const postMonthlyPayrollVoucher = useCallback(
     async (monthName: string) => {
+      if (!assertPermission('canCreateVoucher') || !assertPermission('canFinalizeVoucher')) {
+        throw new Error('عدم دسترسی (RBAC) برای ثبت سند حقوق.');
+      }
       const fiscalYear = profile.fiscalYear;
       const statutoryParams = getStatutoryParamsForYear(fiscalYear, profile.statutoryParamsByYear);
       const statutoryErrors = validateStatutoryParams(statutoryParams);
@@ -4339,24 +4342,28 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         showToast(message, 'error');
         throw new Error(message);
       }
+
       const payrollReferenceId = `payroll:${fiscalYear}:${monthName.trim()}`;
       if (vouchers.some((v) => v.referenceId === payrollReferenceId)) {
         const message = `سند حقوق ${monthName} سال ${fiscalYear} قبلاً ثبت شده است.`;
         showToast(message, 'error');
         throw new Error(message);
       }
-      const activeEmps = employees.filter((e) => e.active);
-      if (activeEmps.length === 0) return;
+      const activeEmps = employees.filter((employee) => employee.active);
+      if (activeEmps.length === 0) {
+        showToast('هیچ کارمند فعالی برای محاسبه حقوق وجود ندارد.', 'warning');
+        return;
+      }
       const calcs = activeEmps.map((emp) =>
         calculateEmployeePayroll(emp, fiscalYear, profile.statutoryParamsByYear)
       );
-      const totalExpense = calcs.reduce((s, c) => s + c.totalEmployerCost, 0);
-      const totalNet = calcs.reduce((s, c) => s + c.netPay, 0);
+      const totalExpense = calcs.reduce((sum, calc) => sum + calc.totalEmployerCost, 0);
+      const totalNet = calcs.reduce((sum, calc) => sum + calc.netPay, 0);
       const totalInsurance = calcs.reduce(
-        (s, c) => s + c.employeeInsurance + c.employerInsurance,
+        (sum, calc) => sum + calc.employeeInsurance + calc.employerInsurance,
         0
       );
-      const totalTax = calcs.reduce((s, c) => s + c.incomeTax, 0);
+      const totalTax = calcs.reduce((sum, calc) => sum + calc.incomeTax, 0);
 
       const lines: VoucherLine[] = [
         {
@@ -4392,16 +4399,121 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         });
       }
 
-      await createVoucher({
-        date: getTodayShamsi(),
-        description: `سند اتوماتیک حقوق و دستمزد ${monthName} سال ${profile.fiscalYear} (${activeEmps.length} نفر)`,
-        voucherType: 'payroll',
-        status: 'permanent',
-        referenceId: payrollReferenceId,
-        lines,
+      const date = getTodayShamsi();
+      const description = `سند اتوماتیک حقوق و دستمزد ${monthName} سال ${fiscalYear} (${activeEmps.length} نفر)`;
+      const validation = validateVoucherPayload({
+        payload: {
+          date,
+          description,
+          voucherType: 'payroll',
+          referenceId: payrollReferenceId,
+          lines,
+        },
+        accounts,
+        parties,
+        existingVouchers: vouchers,
+        closedFiscalYears: profile.closedFiscalYears,
       });
+      if (!validation.valid) {
+        throw new Error(validation.errors[0] || 'سند حقوق و دستمزد نامعتبر است.');
+      }
+
+      if (user) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          throw new Error('برای ثبت اتمیک سند حقوق در فضای ابری، اتصال اینترنت لازم است. هیچ تغییری اعمال نشد.');
+        }
+        const voucherId = `payv_${sha256HexSync(payrollReferenceId).slice(0, 32)}`;
+        const voucherRef = doc(db, 'vouchers', voucherId);
+        const counterRef = doc(db, 'counters', user.uid);
+        const sameYearMax = vouchers
+          .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fiscalYear)
+          .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
+
+        const committedVoucher = await runTransaction(db, async (tx) => {
+          const [voucherSnap, counterSnap] = await Promise.all([
+            tx.get(voucherRef),
+            tx.get(counterRef),
+          ]);
+          if (voucherSnap.exists()) {
+            throw new Error(`سند حقوق ${monthName} سال ${fiscalYear} قبلاً در فضای ابری ثبت شده است.`);
+          }
+          const currentMax = counterSnap.exists()
+            ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, sameYearMax)
+            : sameYearMax;
+          const voucherNumber = currentMax + 1;
+          const voucherBase: Voucher = {
+            id: voucherId,
+            ownerId,
+            voucherNumber,
+            date,
+            fiscalYear: validation.fiscalYear || fiscalYear,
+            description: description.trim().slice(0, 300),
+            voucherType: 'payroll',
+            status: 'permanent',
+            totalDebit: validation.totalDebit,
+            totalCredit: validation.totalCredit,
+            referenceId: payrollReferenceId,
+            lines: validation.sanitizedLines.slice(0, 100),
+            _version: 1,
+            updatedByDevice: deviceId,
+          };
+          const sealedVoucher = {
+            ...voucherBase,
+            integrityHash: computeVoucherIntegrityHash(voucherBase),
+          };
+          tx.set(voucherRef, {
+            ownerId,
+            voucherNumber,
+            date,
+            fiscalYear: voucherBase.fiscalYear,
+            description: voucherBase.description,
+            voucherType: 'payroll',
+            status: 'permanent',
+            totalDebit: validation.totalDebit,
+            totalCredit: validation.totalCredit,
+            referenceId: payrollReferenceId,
+            integrityHash: sealedVoucher.integrityHash,
+            lines: sealedVoucher.lines,
+            _version: 1,
+            updatedByDevice: deviceId.slice(0, 64),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          if (counterSnap.exists()) {
+            tx.update(counterRef, {
+              lastVoucherNumber: voucherNumber,
+              updatedByDevice: deviceId.slice(0, 64),
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            tx.set(counterRef, {
+              ownerId: user.uid,
+              lastVoucherNumber: voucherNumber,
+              lastInvoiceSeq: 102,
+              updatedByDevice: deviceId.slice(0, 64),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          return sealedVoucher;
+        });
+        emitVoucherNotificationEvent({
+          type: 'created_permanent',
+          voucher: committedVoucher,
+          unit: profile.currencyUnit,
+        });
+      } else {
+        await createVoucher({
+          date,
+          description,
+          voucherType: 'payroll',
+          status: 'permanent',
+          referenceId: payrollReferenceId,
+          lines,
+        });
+      }
     },
-    [employees, vouchers, profile.fiscalYear, profile.statutoryParamsByYear, createVoucher, showToast]
+    [employees, vouchers, accounts, parties, ownerId, user, deviceId, profile.fiscalYear, profile.statutoryParamsByYear, profile.closedFiscalYears, profile.currencyUnit, createVoucher, showToast, assertPermission]
   );
 
   const paySalariesVoucher = useCallback(
