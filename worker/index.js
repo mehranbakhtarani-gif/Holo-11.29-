@@ -114,4 +114,56 @@ if(u.pathname==="/api/supabase/pull"&&req.method==="GET"){
   return out({found:true,backupId:requested||undefined,revision:Number(row.revision)||1,conflictPolicy:row.conflict_policy||"last_write_wins",lastDeviceId:row.last_device_id||"",lastDeviceLabel:row.last_device_label||"",updatedAt:row.updated_at||new Date().toISOString(),snapshotJson:typeof row.snapshot_json==="string"?row.snapshot_json:JSON.stringify(row.snapshot_json)},200,allow);
  }catch{return out({error:"ارتباط با سرور Supabase برقرار نشد.",code:"PULL_NETWORK_ERROR"},502,allow)}
 }
+
+if(u.pathname==="/api/supabase/sync"&&req.method==="POST"){
+ const actor=actorFor(req,env);
+ if(!actor||!validWid(actor.workspaceId))return out({error:"احراز هویت مستقل Supabase برای همگام‌سازی الزامی است.",code:"AUTH_REQUIRED"},401,allow);
+ const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
+ if(cfg.key.startsWith("sb_publishable_")||cfg.key.startsWith("eyJ")&&(()=>{try{return JSON.parse(Buffer.from(cfg.key.split(".")[1],"base64url").toString()).role!=="service_role"}catch{return true}})())return out({error:"کلید Worker مجوز نوشتن امن ندارد.",code:"INVALID_ANON_KEY"},403,allow);
+ let raw;try{raw=await req.text()}catch{return out({error:"بدنه درخواست قابل خواندن نیست."},400,allow)}
+ if(raw.length>6_200_000)return out({error:"حجم داده بیش از حد مجاز است."},413,allow);
+ let body;try{body=JSON.parse(raw)}catch{return out({error:"بدنه JSON نامعتبر است."},400,allow)}
+ const op=typeof body.operationId==="string"?body.operationId.trim():"";
+ const operationId=/^[a-zA-Z0-9_-]{8,120}$/.test(op)?op:"";
+ const conflictPolicy=body.conflictPolicy==="first_write_wins"?"first_write_wins":"last_write_wins";
+ const deviceId=String(body.deviceId||"unknown").slice(0,64),deviceLabel=String(body.deviceLabel||"دستگاه کاری").slice(0,80);
+ const clientRevision=Math.max(0,Math.floor(Number(body.clientRevision)||0));
+ const clientUpdatedAt=typeof body.clientUpdatedAt==="string"&&!Number.isNaN(Date.parse(body.clientUpdatedAt))?body.clientUpdatedAt:new Date().toISOString();
+ if(typeof body.snapshotJson!=="string"||!body.snapshotJson.length)return out({error:"محتوای اسنپ‌شات برای همگام‌سازی خالی است."},400,allow);
+ if(body.snapshotJson.length>6_000_000)return out({error:"حجم اسنپ‌شات بیش از حد مجاز است."},413,allow);
+ let snapshot;try{snapshot=JSON.parse(body.snapshotJson,(k,v)=>["__proto__","constructor","prototype"].includes(k)?undefined:v);if(!snapshot||typeof snapshot!=="object"||Array.isArray(snapshot))throw Error()}catch{return out({error:"فرمت JSON اسنپ‌شات نامعتبر است."},400,allow)}
+ const base=cfg.base+"/rest/v1/"+cfg.table,owner=actor.uid,query=base+"?owner_id=eq."+encodeURIComponent(owner)+"&select=owner_id,revision,last_device_id,last_device_label,updated_at,snapshot_json&limit=1";
+ const readCurrent=async()=>{const r=await fetch(query,{headers:sbHeaders(cfg),signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error("READ_"+r.status);const rows=await r.json();return rows?.[0]||null};
+ const audit=async(outcome,rev,details)=>{try{await fetch(cfg.base+"/rest/v1/"+String(env.SUPABASE_AUDIT_TABLE_NAME||"holoo_apex_audit_log"),{method:"POST",headers:sbHeaders(cfg,{Prefer:"return=minimal"}),body:JSON.stringify({owner_id:owner,device_id:deviceId,device_label:deviceLabel,action:"workspace_sync",conflict_policy:conflictPolicy,client_revision:clientRevision,server_revision:rev,outcome,details:String(details).slice(0,300)}),signal:AbortSignal.timeout(4000)})}catch{}};
+ const backupMeta=async()=>{try{const prefix=owner+"__bak__",url=base+"?owner_id=like."+encodeURIComponent(prefix+"*")+"&select=owner_id,revision,company_name,fiscal_year,last_device_label,voucher_count,invoice_count,product_count,updated_at,created_at&order=created_at.desc&limit=30";const r=await fetch(url,{headers:sbHeaders(cfg),signal:AbortSignal.timeout(7000)});if(!r.ok)return{backups:[],prunedBackupsCount:0};const rows=(await r.json()).filter(x=>typeof x.owner_id==="string"&&x.owner_id.startsWith(prefix)).sort((a,b)=>String(b.created_at||b.updated_at||"").localeCompare(String(a.created_at||a.updated_at||"")));let prunedBackupsCount=0;for(const old of rows.slice(3)){const d=await fetch(base+"?owner_id=eq."+encodeURIComponent(old.owner_id),{method:"DELETE",headers:sbHeaders(cfg,{Prefer:"return=minimal"}),signal:AbortSignal.timeout(5000)});if(d.ok)prunedBackupsCount++}return{backups:rows.slice(0,3).map(x=>({id:x.owner_id,provider:"supabase",revision:Number(x.revision)||1,savedAt:x.created_at||x.updated_at||new Date().toISOString(),deviceLabel:x.last_device_label||"دستگاه کاری",companyName:x.company_name||"",fiscalYear:x.fiscal_year||"1405",voucherCount:Number(x.voucher_count)||0,invoiceCount:Number(x.invoice_count)||0,productCount:Number(x.product_count)||0})),prunedBackupsCount}}catch{return{backups:[],prunedBackupsCount:0}}};
+ try{
+  let existing=await readCurrent(),serverRev=Number(existing?.revision)||0;
+  const oldSnapshot=existing?.snapshot_json;
+  const lastOp=oldSnapshot&&typeof oldSnapshot==="object"?oldSnapshot._syncMeta?.lastOperationId:null;
+  if(operationId&&lastOp===operationId){const b=await backupMeta();return out({status:"idempotent_replay",idempotentReplay:true,operationId,serverRevision:serverRev,conflictPolicy,syncedAt:existing.updated_at||new Date().toISOString(),retainedBackups:b.backups,prunedBackupsCount:0},200,allow)}
+  const hasConflict=!!existing&&serverRev>clientRevision&&existing.last_device_id!==deviceId;
+  if(hasConflict&&conflictPolicy==="first_write_wins"){
+   await audit("conflict_kept_remote",serverRev,"First-Write-Wins preserved remote revision "+serverRev);
+   const b=await backupMeta();
+   return out({status:"conflict_kept_remote",serverRevision:serverRev,conflictPolicy,remoteDeviceLabel:existing.last_device_label||"دستگاه دیگر",syncedAt:existing.updated_at||new Date().toISOString(),retainedBackups:b.backups,prunedBackupsCount:b.prunedBackupsCount,remoteSnapshotJson:typeof oldSnapshot==="string"?oldSnapshot:JSON.stringify(oldSnapshot)},200,allow)
+  }
+  const nextRevision=Math.max(serverRev,clientRevision)+1,now=new Date().toISOString();
+  const snapshotWithMeta=operationId?{...snapshot,_syncMeta:{lastOperationId:operationId,revision:nextRevision,deviceId,syncedAt:now}}:snapshot;
+  const payload={owner_id:owner,owner_email:String(actor.email||"").slice(0,200),company_name:String(body.companyName||"").slice(0,160),fiscal_year:String(body.fiscalYear||"1405").slice(0,16),revision:nextRevision,conflict_policy:conflictPolicy,last_device_id:deviceId,last_device_label:deviceLabel,voucher_count:Math.max(0,Math.floor(Number(body.voucherCount)||0)),invoice_count:Math.max(0,Math.floor(Number(body.invoiceCount)||0)),product_count:Math.max(0,Math.floor(Number(body.productCount)||0)),snapshot_json:snapshotWithMeta,client_updated_at:clientUpdatedAt,updated_at:now};
+  if(existing&&conflictPolicy==="first_write_wins"){
+   const cas=await fetch(base+"?owner_id=eq."+encodeURIComponent(owner)+"&revision=eq."+serverRev,{method:"PATCH",headers:sbHeaders(cfg,{Prefer:"return=representation"}),body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
+   if(!cas.ok)return out({error:"خطا در ثبت همزمان نسخه روی Supabase.",code:"CAS_WRITE_FAILED"},cas.status,allow);
+   const rows=await cas.json();
+   if(!Array.isArray(rows)||!rows.length){const winner=await readCurrent()||existing;const rev=Number(winner.revision)||serverRev;await audit("conflict_kept_remote",rev,"Atomic CAS preserved concurrent revision "+rev);const b=await backupMeta();return out({status:"conflict_kept_remote",serverRevision:rev,conflictPolicy,remoteDeviceLabel:winner.last_device_label||"دستگاه دیگر",syncedAt:winner.updated_at||now,retainedBackups:b.backups,prunedBackupsCount:b.prunedBackupsCount,remoteSnapshotJson:typeof winner.snapshot_json==="string"?winner.snapshot_json:JSON.stringify(winner.snapshot_json)},200,allow)}
+  }else{
+   const up=await fetch(base+"?on_conflict=owner_id",{method:"POST",headers:sbHeaders(cfg,{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
+   if(!up.ok)return out({error:"خطا در ذخیره نسخه روی Supabase.",code:"UPSERT_FAILED"},up.status,allow)
+  }
+  const backupKey=owner+"__bak__"+Date.now()+"_"+nextRevision;
+  try{await fetch(base,{method:"POST",headers:sbHeaders(cfg,{Prefer:"return=minimal"}),body:JSON.stringify({...payload,owner_id:backupKey,created_at:now}),signal:AbortSignal.timeout(8000)})}catch{}
+  const b=await backupMeta(),outcome=hasConflict?"conflict_overwrote_remote":"synced";
+  await audit(outcome,nextRevision,"Synced revision "+nextRevision+" from "+deviceLabel);
+  return out({status:outcome,operationId:operationId||undefined,serverRevision:nextRevision,conflictPolicy,syncedAt:now,retainedBackups:b.backups,prunedBackupsCount:b.prunedBackupsCount},200,allow);
+ }catch{return out({error:"ارتباط با سرور Supabase برقرار نشد.",code:"SUPABASE_SYNC_FAILED"},502,allow)}
+}
 if(u.pathname.startsWith("/api/ai/")||u.pathname.startsWith("/api/supabase/"))return out({error:"این API هنوز به Worker منتقل نشده است.",code:"API_NOT_MIGRATED"},501,allow);return out({error:"Not found"},404,allow)}};
