@@ -1081,8 +1081,9 @@ export async function getOperationalDbStats(): Promise<OperationalDbStats> {
         lastCommitAt = typeof meta?.updatedAt === 'string' ? meta.updatedAt : null;
       } else if (storeName === 'syncOutbox') {
         pendingOutboxCount = await countStoreByIndex(tx, 'syncOutbox', 'status', 'pending');
-      } else if (storeName === 'syncInbox') {
-        // Inbox rows track processed inbound operations
+      } else if (storeName === 'syncInbox' || storeName === 'secureWorkspace') {
+        // Inbox rows and encrypted migration snapshots are infrastructure records,
+        // not active accounting entities.
       } else {
         totalRecords += await countStoreRecords(tx, storeName);
       }
@@ -1207,7 +1208,9 @@ export async function queryOperationalStorePaginated<T>(
 ): Promise<{ items: T[]; total: number; page: number; pageSize: number }> {
   const page = Math.max(1, Math.trunc(options.page ?? 1));
   const pageSize = Math.max(1, Math.min(500, Math.trunc(options.pageSize ?? 50)));
-  if (!isIndexedDbAvailable()) {
+  // The encrypted migration envelope is managed only by dedicated verified APIs.
+  // Do not expose it through generic operational-store pagination.
+  if (storeName === 'secureWorkspace' || !isIndexedDbAvailable()) {
     return { items: [], total: 0, page, pageSize };
   }
   try {
@@ -1299,8 +1302,9 @@ export async function getOperationalDbDetailedReport(): Promise<OperationalDbDet
         outboxBreakdown.pending = await countStoreByIndex(tx, 'syncOutbox', 'status', 'pending');
         outboxBreakdown.synced = await countStoreByIndex(tx, 'syncOutbox', 'status', 'synced');
         outboxBreakdown.conflict = await countStoreByIndex(tx, 'syncOutbox', 'status', 'conflict');
-      } else if (storeName === 'syncInbox') {
-        // Inbox rows track processed inbound operations and are not counted as user accounting entities
+      } else if (storeName === 'syncInbox' || storeName === 'secureWorkspace') {
+        // Inbox rows and encrypted migration snapshots are infrastructure records,
+        // not active accounting entities.
       } else {
         totalRecords += count;
       }
