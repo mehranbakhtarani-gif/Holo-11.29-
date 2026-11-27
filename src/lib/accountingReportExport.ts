@@ -707,22 +707,12 @@ export function buildStandardAccountingReportHtml(
   const styles = getPrintDocumentStyles(options);
   const bodyHtml = buildStandardAccountingReportBodyHtml(spec, visibleColumns, profile, options);
 
-  const isOnlineRuntime = typeof navigator === 'undefined' ? true : navigator.onLine;
-  const externalFontLinks = isOnlineRuntime
-    ? `    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Vazirmatn:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />`
-    : '';
-
+  // Zero external CDN egress: rely exclusively on self-hosted @fontsource/vazirmatn and system fonts
   return `<!doctype html>
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="UTF-8" />
     <title>${escapeHtml(spec.title)} — ${escapeHtml(profile.companyName)}</title>
-${externalFontLinks}
     <style>${styles}</style>
   </head>
   <body>

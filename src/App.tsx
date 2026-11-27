@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, MotionConfig } from 'motion/react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
 import {
   Activity,
   ArrowDownToLine,
@@ -8,7 +8,6 @@ import {
   BellOff,
   BellRing,
   Calculator,
-  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -48,34 +47,87 @@ import { ActiveModule } from './types/accounting';
 import { useAccounting } from './context/AccountingContext';
 import { useWorkspaceExtensions } from './context/WorkspaceExtensionsContext';
 import { DashboardView } from './components/DashboardView';
-import { InvoicesView } from './components/InvoicesView';
-import { VouchersView } from './components/VouchersView';
-import { AuditView } from './components/AuditView';
-import { AccountsView } from './components/AccountsView';
-import { PartiesView } from './components/PartiesView';
-import { InventoryView } from './components/InventoryView';
-import { TreasuryView } from './components/TreasuryView';
-import { CorporateView } from './components/CorporateView';
-import { ReportsView } from './components/ReportsView';
-import { BrandStudioView } from './components/BrandStudioView';
-import { SettingsView } from './components/SettingsView';
-import { CurrenciesView } from './components/CurrenciesView';
-import { ImportAndSubcontractView } from './components/ImportAndSubcontractView';
-import { FinanceOpsView } from './components/FinanceOpsView';
-import { WarehouseCrmOpsView } from './components/WarehouseCrmOpsView';
-import { SmartCopilotDrawer } from './components/SmartCopilotDrawer';
-import { SystemHealthDrawer } from './components/SystemHealthDrawer';
-import { OfflineQueueMonitorDrawer } from './components/OfflineQueueMonitorDrawer';
 import { MeshInitialSetupModal } from './components/MeshInitialSetupModal';
 import { PeerMeshSyncButton } from './components/PeerMeshSyncButton';
-import { OfflineSmartGuideDrawer } from './components/OfflineSmartGuideDrawer';
 import { SyncConflictResolutionModal } from './components/SyncConflictResolutionModal';
-import { UniversalExcelImportModal } from './components/UniversalExcelImportModal';
-import { mapModuleToImportEntity } from './lib/universalExcelImport';
 import { OfflineIndicator, PwaUpdateBanner } from './components/PWAInstallButton';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import { useDualCloudSync } from './hooks/useDualCloudSync';
 import { useLocalFirstMeshSync } from './hooks/useLocalFirstMeshSync';
+import financeDirectorAvatar from './assets/images/avatar_finance_director_1795265732394.jpg';
+
+// Lazy-loaded secondary views and heavy on-demand drawers (keeps initial bundle lean)
+const InvoicesView = lazy(() => import('./components/InvoicesView').then((m) => ({ default: m.InvoicesView })));
+const VouchersView = lazy(() => import('./components/VouchersView').then((m) => ({ default: m.VouchersView })));
+const AuditView = lazy(() => import('./components/AuditView').then((m) => ({ default: m.AuditView })));
+const AccountsView = lazy(() => import('./components/AccountsView').then((m) => ({ default: m.AccountsView })));
+const PartiesView = lazy(() => import('./components/PartiesView').then((m) => ({ default: m.PartiesView })));
+const InventoryView = lazy(() => import('./components/InventoryView').then((m) => ({ default: m.InventoryView })));
+const TreasuryView = lazy(() => import('./components/TreasuryView').then((m) => ({ default: m.TreasuryView })));
+const CorporateView = lazy(() => import('./components/CorporateView').then((m) => ({ default: m.CorporateView })));
+const ReportsView = lazy(() => import('./components/ReportsView').then((m) => ({ default: m.ReportsView })));
+const BrandStudioView = lazy(() => import('./components/BrandStudioView').then((m) => ({ default: m.BrandStudioView })));
+const SettingsView = lazy(() => import('./components/SettingsView').then((m) => ({ default: m.SettingsView })));
+const CurrenciesView = lazy(() => import('./components/CurrenciesView').then((m) => ({ default: m.CurrenciesView })));
+const ImportAndSubcontractView = lazy(() =>
+  import('./components/ImportAndSubcontractView').then((m) => ({ default: m.ImportAndSubcontractView }))
+);
+const FinanceOpsView = lazy(() => import('./components/FinanceOpsView').then((m) => ({ default: m.FinanceOpsView })));
+const WarehouseCrmOpsView = lazy(() =>
+  import('./components/WarehouseCrmOpsView').then((m) => ({ default: m.WarehouseCrmOpsView }))
+);
+const SmartCopilotDrawer = lazy(() =>
+  import('./components/SmartCopilotDrawer').then((m) => ({ default: m.SmartCopilotDrawer }))
+);
+const SystemHealthDrawer = lazy(() =>
+  import('./components/SystemHealthDrawer').then((m) => ({ default: m.SystemHealthDrawer }))
+);
+const OfflineQueueMonitorDrawer = lazy(() =>
+  import('./components/OfflineQueueMonitorDrawer').then((m) => ({ default: m.OfflineQueueMonitorDrawer }))
+);
+const OfflineSmartGuideDrawer = lazy(() =>
+  import('./components/OfflineSmartGuideDrawer').then((m) => ({ default: m.OfflineSmartGuideDrawer }))
+);
+const UniversalExcelImportModal = lazy(() =>
+  import('./components/UniversalExcelImportModal').then((m) => ({ default: m.UniversalExcelImportModal }))
+);
+
+function mapActiveModuleToExcelEntity(
+  mod: ActiveModule
+): 'parties' | 'products' | 'accounts' | 'vouchers' | 'invoices' | 'cheques' | 'employees' | 'costCenters' {
+  switch (mod) {
+    case 'parties':
+      return 'parties';
+    case 'inventory':
+    case 'warehouse-crm':
+      return 'products';
+    case 'accounts':
+      return 'accounts';
+    case 'vouchers':
+    case 'audit':
+    case 'finance-ops':
+      return 'vouchers';
+    case 'invoices':
+    case 'commercial':
+      return 'invoices';
+    case 'treasury':
+    case 'currencies':
+      return 'cheques';
+    case 'corporate':
+      return 'employees';
+    default:
+      return 'parties';
+  }
+}
+
+const ModuleLoadingFallback: React.FC = () => (
+  <div className="min-h-[320px] flex items-center justify-center">
+    <div className="inline-flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-600 dark:text-slate-300 shadow-sm">
+      <RefreshCw className="w-4 h-4 animate-spin text-teal-600" />
+      <span>در حال بارگذاری ماژول...</span>
+    </div>
+  </div>
+);
 import { useNativeNotifications } from './hooks/useNativeNotifications';
 import {
   QuickCalculatorModal,
@@ -118,7 +170,6 @@ export default function App() {
   const {
     user,
     profile,
-    updateProfilePhoto,
     accounts,
     parties,
     cheques,
@@ -253,51 +304,6 @@ export default function App() {
   const [showChequePopover, setShowChequePopover] = useState(false);
   const [showCloudPopover, setShowCloudPopover] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-
-  const handleAvatarFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      showToast('لطفاً یک فایل تصویری انتخاب کنید.');
-      return;
-    }
-    try {
-      const imageUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('read failed'));
-        reader.onerror = () => reject(new Error('read failed'));
-        reader.readAsDataURL(file);
-      });
-      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const element = new Image();
-        element.onload = () => resolve(element);
-        element.onerror = () => reject(new Error('invalid image'));
-        element.src = imageUrl;
-      });
-      const canvas = document.createElement('canvas');
-      canvas.width = 256;
-      canvas.height = 256;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('canvas unavailable');
-      const side = Math.min(image.width, image.height);
-      const sx = (image.width - side) / 2;
-      const sy = (image.height - side) / 2;
-      ctx.drawImage(image, sx, sy, side, side, 0, 0, 256, 256);
-      let quality = 0.82;
-      let photoData = canvas.toDataURL('image/jpeg', quality);
-      while (photoData.length > 200_000 && quality > 0.45) {
-        quality -= 0.08;
-        photoData = canvas.toDataURL('image/jpeg', quality);
-      }
-      if (photoData.length > 200_000) throw new Error('تصویر انتخابی بیش از حد حجیم است.');
-      await updateProfilePhoto(photoData);
-      setAvatarError(false);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'ذخیره عکس پروفایل ناموفق بود.');
-    }
-  }, [showToast, updateProfilePhoto]);
 
   const combinedPendingQueueCount = localMesh.pendingOutboxCount + pendingQueueCount;
 
@@ -1866,54 +1872,34 @@ export default function App() {
             <span className="hidden sm:block h-5 w-px bg-slate-200 dark:bg-white/10 mx-0.5" aria-hidden="true" />
 
             {/* User Profile Avatar & Name */}
-            <input
-              ref={avatarInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              aria-label="انتخاب عکس پروفایل"
-              onChange={handleAvatarFileChange}
-            />
-            <div className="relative flex items-center">
-              <button
-                type="button"
-                onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
-                title="پروفایل کاربر و مدیریت دسترسی‌ها"
-                className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
-              >
-                <span className="relative block w-8 h-8 shrink-0">
-                  {profile.profilePhotoData && !avatarError ? (
-                    <img
-                      src={profile.profilePhotoData}
-                      alt={`عکس پروفایل ${profile.displayName || activeOperator.fullName}`}
-                      onError={() => setAvatarError(true)}
-                      className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-white/15"
-                    />
-                  ) : (
-                    <span className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
-                      {(profile.displayName || activeOperator.fullName).slice(0, 1)}
-                    </span>
-                  )}
+            <button
+              type="button"
+              onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
+              title="پروفایل کاربر و مدیریت دسترسی‌ها"
+              className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+            >
+              {!avatarError ? (
+                <img
+                  src={financeDirectorAvatar}
+                  alt={activeOperator.fullName}
+                  referrerPolicy="no-referrer"
+                  onError={() => setAvatarError(true)}
+                  className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-white/15"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                  {activeOperator.fullName.slice(0, 1)}
+                </div>
+              )}
+              <div className="hidden xl:flex flex-col text-right leading-tight">
+                <span className="text-xs font-semibold text-[#0F172A] dark:text-white whitespace-nowrap">
+                  {activeOperator.fullName}
                 </span>
-                <span className="hidden xl:flex flex-col text-right leading-tight">
-                  <span className="text-xs font-semibold text-[#0F172A] dark:text-white whitespace-nowrap">
-                    {activeOperator.fullName}
-                  </span>
-                  <span className="text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                    {RBAC_ROLE_LABELS[activeOperator.role].split('(')[0].trim()}
-                  </span>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                  {RBAC_ROLE_LABELS[activeOperator.role].split('(')[0].trim()}
                 </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => avatarInputRef.current?.click()}
-                title="انتخاب یا تغییر عکس پروفایل"
-                aria-label="تغییر عکس پروفایل"
-                className="absolute -bottom-0.5 left-0 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 dark:border-[#161B26] dark:bg-indigo-500 dark:hover:bg-indigo-400"
-              >
-                <Camera className="h-2.5 w-2.5" />
-              </button>
-            </div>
+              </div>
+            </button>
 
             {/* Logout / Cloud Sign-In Action */}
             {isCloudMode ? (
@@ -1955,115 +1941,117 @@ export default function App() {
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
             >
-              {activeModule === 'dashboard' && (
-                <DashboardView
-                  onNavigate={navigate}
-                  onOpenCopilot={() => setShowCopilot(true)}
-                  dualCloud={dualCloud}
-                  localMesh={localMesh}
-                  onOpenQueueMonitor={() => setShowQueueMonitor(true)}
-                  onOpenSystemHealth={() => setShowHealthDrawer(true)}
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'invoices' && (
-                <InvoicesView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'vouchers' && (
-                <VouchersView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'audit' && (
-                <AuditView
-                  onNavigate={navigate}
-                  onOpenSystemHealth={() => setShowHealthDrawer(true)}
-                  onOpenQueueMonitor={() => setShowQueueMonitor(true)}
-                  localMesh={localMesh}
-                  dualCloud={dualCloud}
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'accounts' && (
-                <AccountsView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'parties' && (
-                <PartiesView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'inventory' && (
-                <InventoryView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'treasury' && (
-                <TreasuryView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'currencies' && (
-                <CurrenciesView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                  onNavigate={navigate}
-                />
-              )}
-              {activeModule === 'commercial' && (
-                <ImportAndSubcontractView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'corporate' && (
-                <CorporateView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'finance-ops' && (
-                <FinanceOpsView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'warehouse-crm' && (
-                <WarehouseCrmOpsView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'reports' && (
-                <ReportsView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                />
-              )}
-              {activeModule === 'studio' && <BrandStudioView />}
-              {activeModule === 'settings' && (
-                <SettingsView
-                  initialIntent={moduleIntent}
-                  clearIntent={() => setModuleIntent(undefined)}
-                  dualCloud={dualCloud}
-                  localMesh={localMesh}
-                  nativeNotifications={nativeNotifications}
-                  urgentChequeCount={chequeAlertSummary.urgentAlerts.length}
-                  onNavigate={navigate}
-                  onOpenQueueMonitor={() => setShowQueueMonitor(true)}
-                />
-              )}
+              <Suspense fallback={<ModuleLoadingFallback />}>
+                {activeModule === 'dashboard' && (
+                  <DashboardView
+                    onNavigate={navigate}
+                    onOpenCopilot={() => setShowCopilot(true)}
+                    dualCloud={dualCloud}
+                    localMesh={localMesh}
+                    onOpenQueueMonitor={() => setShowQueueMonitor(true)}
+                    onOpenSystemHealth={() => setShowHealthDrawer(true)}
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'invoices' && (
+                  <InvoicesView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'vouchers' && (
+                  <VouchersView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'audit' && (
+                  <AuditView
+                    onNavigate={navigate}
+                    onOpenSystemHealth={() => setShowHealthDrawer(true)}
+                    onOpenQueueMonitor={() => setShowQueueMonitor(true)}
+                    localMesh={localMesh}
+                    dualCloud={dualCloud}
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'accounts' && (
+                  <AccountsView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'parties' && (
+                  <PartiesView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'inventory' && (
+                  <InventoryView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'treasury' && (
+                  <TreasuryView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'currencies' && (
+                  <CurrenciesView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                    onNavigate={navigate}
+                  />
+                )}
+                {activeModule === 'commercial' && (
+                  <ImportAndSubcontractView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'corporate' && (
+                  <CorporateView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'finance-ops' && (
+                  <FinanceOpsView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'warehouse-crm' && (
+                  <WarehouseCrmOpsView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'reports' && (
+                  <ReportsView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                  />
+                )}
+                {activeModule === 'studio' && <BrandStudioView />}
+                {activeModule === 'settings' && (
+                  <SettingsView
+                    initialIntent={moduleIntent}
+                    clearIntent={() => setModuleIntent(undefined)}
+                    dualCloud={dualCloud}
+                    localMesh={localMesh}
+                    nativeNotifications={nativeNotifications}
+                    urgentChequeCount={chequeAlertSummary.urgentAlerts.length}
+                    onNavigate={navigate}
+                    onOpenQueueMonitor={() => setShowQueueMonitor(true)}
+                  />
+                )}
+              </Suspense>
             </motion.div>
           </AnimatePresence>
         </main>
@@ -2177,43 +2165,55 @@ export default function App() {
         open={showCalculator}
         onClose={() => setShowCalculator(false)}
       />
-      <SmartCopilotDrawer
-        open={showCopilot}
-        onClose={() => setShowCopilot(false)}
-        onNavigate={navigate}
-      />
-      <SystemHealthDrawer
-        open={showHealthDrawer}
-        onClose={() => setShowHealthDrawer(false)}
-        onNavigate={navigate}
-        supabaseStatus={supabaseStatus}
-        pendingOfflineQueueCount={combinedPendingQueueCount}
-        conflictPolicy={conflictPolicy}
-        dualCloud={dualCloud}
-        localMesh={localMesh}
-        onOpenQueueMonitor={() => setShowQueueMonitor(true)}
-      />
-      <OfflineQueueMonitorDrawer
-        open={showQueueMonitor}
-        onClose={() => setShowQueueMonitor(false)}
-        localMesh={localMesh}
-        dualCloud={dualCloud}
-        onOpenAuditLog={() => navigate('audit', 'p2p_mesh_log', 'audit-center')}
-      />
-      <OfflineSmartGuideDrawer
-        open={showOfflineGuide}
-        onClose={() => setShowOfflineGuide(false)}
-        activeModule={activeModule}
-        onNavigate={navigate}
-        localMesh={localMesh}
-        dualCloud={dualCloud}
-        onOpenQueueMonitor={() => setShowQueueMonitor(true)}
-      />
-      <UniversalExcelImportModal
-        open={showUniversalExcelImport}
-        initialEntity={mapModuleToImportEntity(activeModule)}
-        onClose={() => setShowUniversalExcelImport(false)}
-      />
+      <Suspense fallback={null}>
+        {showCopilot && (
+          <SmartCopilotDrawer
+            open={showCopilot}
+            onClose={() => setShowCopilot(false)}
+            onNavigate={navigate}
+          />
+        )}
+        {showHealthDrawer && (
+          <SystemHealthDrawer
+            open={showHealthDrawer}
+            onClose={() => setShowHealthDrawer(false)}
+            onNavigate={navigate}
+            supabaseStatus={supabaseStatus}
+            pendingOfflineQueueCount={combinedPendingQueueCount}
+            conflictPolicy={conflictPolicy}
+            dualCloud={dualCloud}
+            localMesh={localMesh}
+            onOpenQueueMonitor={() => setShowQueueMonitor(true)}
+          />
+        )}
+        {showQueueMonitor && (
+          <OfflineQueueMonitorDrawer
+            open={showQueueMonitor}
+            onClose={() => setShowQueueMonitor(false)}
+            localMesh={localMesh}
+            dualCloud={dualCloud}
+            onOpenAuditLog={() => navigate('audit', 'p2p_mesh_log', 'audit-center')}
+          />
+        )}
+        {showOfflineGuide && (
+          <OfflineSmartGuideDrawer
+            open={showOfflineGuide}
+            onClose={() => setShowOfflineGuide(false)}
+            activeModule={activeModule}
+            onNavigate={navigate}
+            localMesh={localMesh}
+            dualCloud={dualCloud}
+            onOpenQueueMonitor={() => setShowQueueMonitor(true)}
+          />
+        )}
+        {showUniversalExcelImport && (
+          <UniversalExcelImportModal
+            open={showUniversalExcelImport}
+            initialEntity={mapActiveModuleToExcelEntity(activeModule)}
+            onClose={() => setShowUniversalExcelImport(false)}
+          />
+        )}
+      </Suspense>
       <MeshInitialSetupModal localMesh={localMesh} />
       <SyncConflictResolutionModal
         conflict={pendingConflict || localMesh.pendingMeshConflict}

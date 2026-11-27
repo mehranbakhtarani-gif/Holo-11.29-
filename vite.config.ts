@@ -2,8 +2,12 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
   return {
@@ -13,7 +17,8 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'prompt',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
+        // Public icons are already precached via workbox.globPatterns; keep includeAssets empty to avoid duplicate precache entries
+        includeAssets: [],
         manifest: {
           id: './',
           name: 'هلو شرکتی Apex — سامانه جامع حسابداری',
@@ -52,19 +57,19 @@ export default defineConfig(() => {
               name: 'فاکتور فروش (F2)',
               short_name: 'فروش',
               url: './?view=invoices&action=new-sale',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+              icons: [{ src: './pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
             },
             {
               name: 'ثبت سند حسابداری (F3)',
               short_name: 'سند جدید',
               url: './?view=vouchers&action=new-voucher',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+              icons: [{ src: './pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
             },
             {
               name: 'خزانه‌داری و چک (F7)',
               short_name: 'چک‌ها',
               url: './?view=treasury',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+              icons: [{ src: './pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
             },
           ],
         },
@@ -114,9 +119,8 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
-      // Copies src/assets into dist/ so root-relative URLs like
-      // "/src/assets/images/..." (e.g. generate_image output) still resolve
-      // in production builds. Do not remove.
+      // Copies src/assets into dist/ so subpath-relative URLs like
+      // "src/assets/images/..." still resolve cleanly in production builds.
       {
         name: 'copy-unbundled-src-assets',
         apply: 'build',
@@ -133,6 +137,22 @@ export default defineConfig(() => {
         },
       },
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/firebase')) return 'vendor-firebase';
+            if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-')) return 'vendor-charts';
+            if (id.includes('node_modules/jspdf') || id.includes('node_modules/html2canvas')) return 'vendor-pdf';
+            if (id.includes('node_modules/xlsx')) return 'vendor-excel';
+            if (id.includes('node_modules/peerjs')) return 'vendor-p2p';
+            if (id.includes('node_modules/dexie')) return 'vendor-dexie';
+            if (id.includes('node_modules/framer-motion') || id.includes('node_modules/motion')) return 'vendor-motion';
+            return undefined;
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

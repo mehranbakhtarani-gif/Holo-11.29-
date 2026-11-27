@@ -564,3 +564,88 @@ export function loadBankReconciliationSession(
     return {};
   }
 }
+
+export function exportAllBankReconciliationSessions(): Record<
+  string,
+  Record<string, SavedReconciliationDecision>
+> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, Record<string, SavedReconciliationDecision>>;
+  } catch {
+    return {};
+  }
+}
+
+export function importAllBankReconciliationSessions(sessions: unknown): number {
+  if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return 0;
+  const sanitized: Record<string, Record<string, SavedReconciliationDecision>> = {};
+  let importedCount = 0;
+  for (const [bankCode, entries] of Object.entries(sessions as Record<string, unknown>)) {
+    if (
+      !bankCode ||
+      bankCode === '__proto__' ||
+      bankCode === 'constructor' ||
+      bankCode === 'prototype' ||
+      !entries ||
+      typeof entries !== 'object' ||
+      Array.isArray(entries)
+    ) {
+      continue;
+    }
+    const cleanEntries: Record<string, SavedReconciliationDecision> = {};
+    for (const [rowId, dec] of Object.entries(entries as Record<string, unknown>)) {
+      if (
+        !rowId ||
+        rowId === '__proto__' ||
+        rowId === 'constructor' ||
+        rowId === 'prototype' ||
+        !dec ||
+        typeof dec !== 'object' ||
+        Array.isArray(dec)
+      ) {
+        continue;
+      }
+      const d = dec as Partial<SavedReconciliationDecision>;
+      const validReviewStatus =
+        d.reviewStatus === 'pending_review' ||
+        d.reviewStatus === 'confirmed' ||
+        d.reviewStatus === 'rejected' ||
+        d.reviewStatus === 'adjusted' ||
+        d.reviewStatus === 'duplicate_ignored';
+      if (typeof d.statementRowId === 'string' && validReviewStatus) {
+        cleanEntries[rowId] = {
+          statementRowId: d.statementRowId,
+          reviewStatus: d.reviewStatus as BankReviewStatus,
+          linkedVoucherId:
+            typeof d.linkedVoucherId === 'string' ? d.linkedVoucherId : undefined,
+          linkedVoucherNumber:
+            typeof d.linkedVoucherNumber === 'number' && Number.isFinite(d.linkedVoucherNumber)
+              ? d.linkedVoucherNumber
+              : undefined,
+          reviewedBy:
+            typeof d.reviewedBy === 'string' && d.reviewedBy.trim().length > 0
+              ? d.reviewedBy.slice(0, 120)
+              : 'اپراتور',
+          reviewedAt:
+            typeof d.reviewedAt === 'string' ? d.reviewedAt : new Date().toISOString(),
+          reviewNote: typeof d.reviewNote === 'string' ? d.reviewNote.slice(0, 300) : undefined,
+        };
+        importedCount += 1;
+      }
+    }
+    if (Object.keys(cleanEntries).length > 0) {
+      sanitized[bankCode] = cleanEntries;
+    }
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+  } catch {
+    // ignore storage errors in non-browser environments
+  }
+  return importedCount;
+}
+

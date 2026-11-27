@@ -34,6 +34,8 @@ export interface StandaloneFxResponse {
 
 let cachedBackendAvailable: boolean | null = null;
 let inFlightProbe: Promise<boolean> | null = null;
+const cachedWorkerAvailability = new Map<string, boolean>();
+const inFlightWorkerProbes = new Map<string, Promise<boolean>>();
 
 /** Checks whether an HTTP response is genuinely JSON (rejects SPA HTML 200 fallbacks) */
 export function isJsonHttpResponse(resp: Response): boolean {
@@ -56,7 +58,7 @@ export function isJsonHttpResponse(resp: Response): boolean {
  * - On static hosts (Cloudflare Pages, Netlify, GitHub Pages) that return 404 or `index.html`
  *   (text/html), this cleanly caches `false` so zero repeated 404 requests ever fire.
  * - In Node.js test environments (`typeof window === 'undefined'`), returns `true` unless
- *   explicitly probed via `probeBackendServerWithFetch` so unit test fetch mocks work seamlessly.
+ *   explicitly probed via `customFetch` so unit test fetch mocks work seamlessly.
  */
 export async function detectOptionalBackendServer(
   customFetch?: typeof fetch
@@ -64,7 +66,7 @@ export async function detectOptionalBackendServer(
   if (!customFetch && typeof window === 'undefined') {
     return true;
   }
-  if (!customFetch && typeof navigator !== 'undefined' && !navigator.onLine) {
+  if (!customFetch && typeof navigator !== 'undefined' && navigator.onLine === false) {
     return false;
   }
   if (!customFetch && cachedBackendAvailable !== null) {
@@ -100,6 +102,57 @@ export async function detectOptionalBackendServer(
   return inFlightProbe;
 }
 
+/**
+ * Independently probes a configured Cloudflare Worker backend (`${workerBaseUrl}/api/health`)
+ * once per browser session so static GitHub Pages / Cloudflare Pages deployments can talk to
+ * the Worker even when same-origin `/api/health` is absent (404/HTML).
+ */
+export async function detectCloudflareWorkerBackend(
+  workerBaseUrl: string,
+  customFetch?: typeof fetch
+): Promise<boolean> {
+  const cleanBase = workerBaseUrl.trim().replace(/\/+$/, '');
+  if (!cleanBase) return false;
+  if (!customFetch && typeof window === 'undefined') {
+    return true;
+  }
+  if (!customFetch && typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return false;
+  }
+  if (!customFetch && cachedWorkerAvailability.has(cleanBase)) {
+    return Boolean(cachedWorkerAvailability.get(cleanBase));
+  }
+  if (!customFetch && inFlightWorkerProbes.has(cleanBase)) {
+    return inFlightWorkerProbes.get(cleanBase)!;
+  }
+
+  const runProbe = async (): Promise<boolean> => {
+    try {
+      const fn = customFetch ?? fetch;
+      const resp = await fn(`${cleanBase}/api/health`, { method: 'GET', cache: 'no-store' });
+      if (!resp.ok || !isJsonHttpResponse(resp)) {
+        return false;
+      }
+      const json = (await resp.json().catch(() => null)) as { status?: string } | null;
+      return Boolean(json && json.status === 'ok');
+    } catch {
+      return false;
+    }
+  };
+
+  if (customFetch) {
+    return runProbe();
+  }
+
+  const promise = runProbe().then((ok) => {
+    cachedWorkerAvailability.set(cleanBase, ok);
+    inFlightWorkerProbes.delete(cleanBase);
+    return ok;
+  });
+  inFlightWorkerProbes.set(cleanBase, promise);
+  return promise;
+}
+
 export function getCachedBackendAvailability(): boolean | null {
   return cachedBackendAvailable;
 }
@@ -107,6 +160,8 @@ export function getCachedBackendAvailability(): boolean | null {
 export function resetBackendProbeCache(): void {
   cachedBackendAvailable = null;
   inFlightProbe = null;
+  cachedWorkerAvailability.clear();
+  inFlightWorkerProbes.clear();
 }
 
 const LOCAL_FX_META: Record<

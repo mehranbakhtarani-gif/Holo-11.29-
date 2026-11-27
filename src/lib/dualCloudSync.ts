@@ -1,6 +1,7 @@
 import type { CloudBackupMeta } from './firebaseCloudBackup';
 import {
   buildStandaloneLocalDiagnostics,
+  detectCloudflareWorkerBackend,
   detectOptionalBackendServer,
   isJsonHttpResponse,
 } from './staticRuntimeGuard';
@@ -195,10 +196,61 @@ const LAST_SYNC_STORAGE_KEY = 'holoo_apex_supabase_last_sync_v1';
 const SB_WORKSPACE_ID_KEY = 'holoo_apex_supabase_workspace_id_v1';
 const SB_AUTO_BACKUP_KEY = 'holoo_apex_supabase_auto_backup_v1';
 
-const SUPABASE_WORKER_BASE_URL = 'https://holoo-apex-api.mehranbakhtarani.workers.dev';
+const DEFAULT_SUPABASE_WORKER_BASE_URL = 'https://holoo-apex-api.mehranbakhtarani.workers.dev';
 
-function supabaseWorkerUrl(path: string): string {
-  return `${SUPABASE_WORKER_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+function getConfiguredWorkerBaseUrl(): string {
+  try {
+    const envObj = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+    const custom = envObj?.VITE_SUPABASE_API_BASE_URL?.trim();
+    if (custom && /^https?:\/\//i.test(custom)) {
+      return custom.replace(/\/+$/, '');
+    }
+  } catch {
+    // ignore in non-Vite runtimes
+  }
+  return DEFAULT_SUPABASE_WORKER_BASE_URL;
+}
+
+function shouldAttemptExternalWorker(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const envObj = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+    if (envObj?.VITE_SUPABASE_API_BASE_URL?.trim()) return true;
+  } catch {
+    // ignore
+  }
+  const host = (window.location?.hostname || '').toLowerCase();
+  return host === 'mehranbakhtarani-gif.github.io';
+}
+
+/**
+ * Resolves the active Supabase API base URL without Express↔Worker CORS deadlocks:
+ * - In Node unit-test environments (`typeof window === 'undefined'`): uses the Worker base URL.
+ * - When local/hosted Express `server.ts` is reachable on same-origin (`/api/health` → ok):
+ *   returns `''` so requests hit same-origin `/api/supabase/*` directly without CORS errors.
+ * - Otherwise (static GitHub Pages / custom static host with VITE_SUPABASE_API_BASE_URL):
+ *   probes `${workerBase}/api/health` once and routes to the Worker if reachable.
+ * - Otherwise (pure standalone static PWA without backend): returns `null` (zero failed 404s).
+ */
+export async function resolveSupabaseApiBaseUrl(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return getConfiguredWorkerBaseUrl();
+  }
+  if (await detectOptionalBackendServer()) {
+    return '';
+  }
+  if (shouldAttemptExternalWorker()) {
+    const workerBase = getConfiguredWorkerBaseUrl();
+    if (await detectCloudflareWorkerBackend(workerBase)) {
+      return workerBase;
+    }
+  }
+  return null;
+}
+
+function buildSupabaseApiUrl(baseUrl: string, path: string): string {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return baseUrl ? `${baseUrl}${cleanPath}` : cleanPath;
 }
 
 export function loadSupabaseAutoBackupEnabled(): boolean {
@@ -250,12 +302,13 @@ export function saveSupabaseWorkspaceId(workspaceId: string): void {
 export async function checkSupabaseWorkspaceState(
   workspaceId: string
 ): Promise<{ ok: boolean; initialized?: boolean; error?: string }> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return { ok: false, error: 'نسخه مستقل بدون سرور فعال است (نیازی به سرور بک‌اند نیست).' };
   }
   try {
     const resp = await fetch(
-      supabaseWorkerUrl(`/api/supabase/auth/state?workspaceId=${encodeURIComponent(workspaceId)}`),
+      buildSupabaseApiUrl(apiBase, `/api/supabase/auth/state?workspaceId=${encodeURIComponent(workspaceId)}`),
       { method: 'GET', cache: 'no-store', credentials: 'include' }
     );
     if (!isJsonHttpResponse(resp)) {
@@ -273,11 +326,12 @@ export async function checkSupabaseWorkspaceState(
 }
 
 export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeResponse> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return { authenticated: false, workspaceId: null, serverRevision: 0, updatedAt: null, backupCount: 0 };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/me'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/auth/me'), {
       method: 'GET',
       cache: 'no-store',
       credentials: 'include',
@@ -301,11 +355,12 @@ export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeRespons
 }
 
 export async function logoutSupabaseWorkspaceAuth(): Promise<boolean> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return true;
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/logout'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/auth/logout'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(),
@@ -320,7 +375,8 @@ export async function setupSupabaseWorkspaceAuth(
   workspaceId: string,
   passcode: string
 ): Promise<SupabaseWorkspaceAuthResult> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return {
       ok: false,
       error: 'برنامه در حالت مستقل استاتیک (بدون server.ts) اجرا می‌شود؛ همگام‌سازی محلی و P2P فعال است.',
@@ -328,7 +384,7 @@ export async function setupSupabaseWorkspaceAuth(
     };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/setup'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/auth/setup'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(null, { 'Content-Type': 'application/json' }),
@@ -363,7 +419,8 @@ export async function loginSupabaseWorkspaceAuth(
   workspaceId: string,
   passcode: string
 ): Promise<SupabaseWorkspaceAuthResult> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return {
       ok: false,
       error: 'برنامه در حالت مستقل استاتیک (بدون server.ts) اجرا می‌شود؛ همگام‌سازی محلی و P2P فعال است.',
@@ -371,7 +428,7 @@ export async function loginSupabaseWorkspaceAuth(
     };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/login'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/auth/login'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(null, { 'Content-Type': 'application/json' }),
@@ -427,7 +484,8 @@ export async function fetchServerDiagnostics(
 export async function runLiveServerAndSupabaseTest(
   token?: string | null
 ): Promise<LiveServerTestResult> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return {
       ok: true,
       testedAt: new Date().toISOString(),
@@ -452,7 +510,7 @@ export async function runLiveServerAndSupabaseTest(
     };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/test'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/test'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(token, { 'Content-Type': 'application/json' }),
@@ -610,7 +668,8 @@ export function saveLastSupabaseSyncAt(shamsiStamp: string | null): void {
 }
 
 export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return {
       configured: false,
       connected: false,
@@ -624,7 +683,7 @@ export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
     };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/status'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/status'), {
       method: 'GET',
       cache: 'no-store',
     });
@@ -662,11 +721,12 @@ export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
 export async function fetchSupabaseBackups(
   idToken?: string | null
 ): Promise<SupabaseBackupsListResponse> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return { ok: true, maxBackups: 3, currentRevision: 0, backups: [] };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/backups'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/backups'), {
       method: 'GET',
       credentials: 'include',
       headers: buildApiHeaders(idToken),
@@ -704,15 +764,19 @@ export async function deleteSupabaseBackup(
   idToken: string | null | undefined,
   backupId: string
 ): Promise<{ ok: boolean; backups?: CloudBackupMeta[]; error?: string }> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return { ok: false, error: 'در حالت مستقل بدون سرور، پشتیبان‌های ابری Supabase غیرفعال هستند.' };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl(`/api/supabase/backups?backupId=${encodeURIComponent(backupId)}`), {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: buildApiHeaders(idToken),
-    });
+    const resp = await fetch(
+      buildSupabaseApiUrl(apiBase, `/api/supabase/backups?backupId=${encodeURIComponent(backupId)}`),
+      {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: buildApiHeaders(idToken),
+      }
+    );
     const json = (await resp.json().catch(() => ({}))) as {
       ok?: boolean;
       backups?: RawServerBackupMeta[];
@@ -738,11 +802,12 @@ export async function resetSupabaseCloudStorage(
   error?: string;
   code?: string;
 }> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return { ok: true, deletedWorkspace: false, deletedBackups: 0, deletedAuditLogs: false };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/reset'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/reset'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(idToken, { 'Content-Type': 'application/json' }),
@@ -796,7 +861,8 @@ export async function pushSnapshotToSupabase(params: {
   productCount: number;
   snapshotJson: string;
 }): Promise<{ ok: boolean; data?: SupabaseSyncResponse; error?: string; code?: string }> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return {
       ok: false,
       error: 'برنامه در حالت مستقل بدون سرور اجرا می‌شود؛ اطلاعات روی حافظه محلی دستگاه ذخیره شد.',
@@ -804,7 +870,7 @@ export async function pushSnapshotToSupabase(params: {
     };
   }
   try {
-    const resp = await fetch(supabaseWorkerUrl('/api/supabase/sync'), {
+    const resp = await fetch(buildSupabaseApiUrl(apiBase, '/api/supabase/sync'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(params.idToken, { 'Content-Type': 'application/json' }),
@@ -863,7 +929,8 @@ export async function pullSnapshotFromSupabase(
   snapshotJson?: string;
   error?: string;
 }> {
-  if (!(await detectOptionalBackendServer())) {
+  const apiBase = await resolveSupabaseApiBaseUrl();
+  if (apiBase === null) {
     return {
       ok: false,
       found: false,
@@ -872,8 +939,8 @@ export async function pullSnapshotFromSupabase(
   }
   try {
     const url = backupId
-      ? supabaseWorkerUrl(`/api/supabase/pull?backupId=${encodeURIComponent(backupId)}`)
-      : supabaseWorkerUrl('/api/supabase/pull');
+      ? buildSupabaseApiUrl(apiBase, `/api/supabase/pull?backupId=${encodeURIComponent(backupId)}`)
+      : buildSupabaseApiUrl(apiBase, '/api/supabase/pull');
     const resp = await fetch(url, {
       method: 'GET',
       credentials: 'include',

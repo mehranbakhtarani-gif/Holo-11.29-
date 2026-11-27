@@ -30,6 +30,7 @@ import {
   computePartyBalances,
   computeTrialBalance,
   computeVoucherIntegrityHash,
+  verifyVoucherIntegrityHash,
   extractFiscalYearFromDate,
   isValidShamsiDate,
 } from './accountingEngine';
@@ -714,7 +715,7 @@ export function runIndependentAuditMode(input: IndependentAuditInput): Independe
 
   // ---- Control 12: Correcting / Reversing Vouchers & Tamper Seal ----
   const tamperBreaches = permanentFyVouchers.filter(
-    (v) => v.integrityHash && computeVoucherIntegrityHash(v) !== v.integrityHash
+    (v) => v.integrityHash && !verifyVoucherIntegrityHash(v)
   );
   const brokenReversals = permanentFyVouchers.filter(
     (v) => v.reversalOfVoucherId && !voucherById.has(v.reversalOfVoucherId)

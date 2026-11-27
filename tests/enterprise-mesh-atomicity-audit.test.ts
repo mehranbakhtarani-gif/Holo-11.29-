@@ -705,7 +705,10 @@ runTest('7. Standalone Android/PWA assets, manifest config, IDB v2 schema & Fire
   assert.ok(opDb.includes('commitStockAdjustmentOperationalTx'));
 
   const reportExport = fs.readFileSync(path.join(root, 'src/lib/accountingReportExport.ts'), 'utf8');
-  assert.ok(reportExport.includes('navigator.onLine'), 'External Google Fonts must be guarded when offline');
+  assert.ok(
+    !reportExport.includes('fonts.googleapis.com') && !reportExport.includes('fonts.gstatic.com'),
+    'Print reports must be 100% self-hosted without external Google Fonts CDN links'
+  );
 });
 
 // ============================================================================

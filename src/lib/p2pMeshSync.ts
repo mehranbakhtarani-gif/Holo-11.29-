@@ -330,14 +330,38 @@ export function saveSelectedMeshPeerId(peerId: MeshDevicePeerId): void {
   }
 }
 
+export const LEGACY_INSECURE_MESH_PASSPHRASE = 'holoo-apex-private-mesh';
+
+export function isWeakMeshPassphrase(passphrase: string): boolean {
+  const clean = (passphrase || '').trim();
+  return clean.length < 10 || clean === LEGACY_INSECURE_MESH_PASSPHRASE;
+}
+
+export function generateSecureMeshPassphrase(): string {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `hx-${hex.slice(0, 8)}-${hex.slice(8, 16)}-${hex.slice(16, 24)}-${hex.slice(24, 32)}`;
+  }
+  const rand = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `hx-${rand}`;
+}
+
 export function loadMeshPassphrase(): string {
   try {
     const raw = localStorage.getItem(MESH_PASSPHRASE_KEY);
-    if (raw && raw.trim().length >= 4) return raw.trim();
+    if (raw && raw.trim().length >= 4 && raw.trim() !== LEGACY_INSECURE_MESH_PASSPHRASE) {
+      return raw.trim();
+    }
+    // Auto-generate and persist a unique per-workspace cryptographic pairing passphrase
+    // instead of falling back to a hardcoded public literal.
+    const generated = generateSecureMeshPassphrase();
+    localStorage.setItem(MESH_PASSPHRASE_KEY, generated);
+    return generated;
   } catch {
-    // ignore
+    return generateSecureMeshPassphrase();
   }
-  return 'holoo-apex-private-mesh';
 }
 
 export function saveMeshPassphrase(passphrase: string): void {
@@ -349,6 +373,115 @@ export function saveMeshPassphrase(passphrase: string): void {
   } catch {
     // ignore
   }
+}
+
+const MESH_E2EE_PREFIX = 'mesh_e2ee_v1:';
+
+function toBase64Bytes(bytes: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+function fromBase64Bytes(b64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function deriveMeshAesKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+  const enc = new TextEncoder();
+  const baseKey = await globalThis.crypto.subtle.importKey(
+    'raw',
+    enc.encode(passphrase.trim()),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  return globalThis.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt as unknown as BufferSource,
+      iterations: 100_000,
+      hash: 'SHA-256',
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/** Computes a true WebCrypto HMAC-SHA256 digest (hex) for cryptographic peer authentication */
+export async function computeWebCryptoHmacSha256(passphrase: string, message: string): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('WebCrypto subtle API unavailable');
+  }
+  const enc = new TextEncoder();
+  const key = await globalThis.crypto.subtle.importKey(
+    'raw',
+    enc.encode(passphrase.trim()),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await globalThis.crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Encrypts a P2P mesh snapshot payload end-to-end with AES-256-GCM (PBKDF2-SHA256 key derivation) */
+export async function encryptMeshPayloadAesGcm(passphrase: string, plaintext: string): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    return plaintext;
+  }
+  const salt = new Uint8Array(16);
+  const iv = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(salt);
+  globalThis.crypto.getRandomValues(iv);
+  const key = await deriveMeshAesKey(passphrase, salt);
+  const cipherBuf = await globalThis.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(plaintext)
+  );
+  const combined = new Uint8Array(16 + 12 + cipherBuf.byteLength);
+  combined.set(salt, 0);
+  combined.set(iv, 16);
+  combined.set(new Uint8Array(cipherBuf), 28);
+  return `${MESH_E2EE_PREFIX}${toBase64Bytes(combined)}`;
+}
+
+/** Decrypts an AES-256-GCM P2P mesh payload; rejects any tampered or wrong-passphrase ciphertext */
+export async function decryptMeshPayloadAesGcm(passphrase: string, payload: string): Promise<string> {
+  if (!payload.startsWith(MESH_E2EE_PREFIX)) {
+    return payload;
+  }
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('WebCrypto subtle API unavailable to decrypt E2EE P2P payload');
+  }
+  const raw = fromBase64Bytes(payload.slice(MESH_E2EE_PREFIX.length));
+  if (raw.length <= 28) {
+    throw new Error('Malformed encrypted P2P payload');
+  }
+  const salt = new Uint8Array(raw.subarray(0, 16));
+  const iv = new Uint8Array(raw.subarray(16, 28));
+  const ciphertext = new Uint8Array(raw.subarray(28));
+  const key = await deriveMeshAesKey(passphrase, salt);
+  const plainBuf = await globalThis.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    ciphertext
+  );
+  return new TextDecoder().decode(plainBuf);
 }
 
 export function loadVectorClock(): Record<string, number> {
@@ -1180,6 +1313,7 @@ export class HolooPeerMeshManager {
       ])
     );
 
+    const wireSnapshotJson = await encryptMeshPayloadAesGcm(this.passphrase, local.snapshotJson);
     const msg = signMeshMessageEnvelope(this.passphrase, {
       type: 'mesh:state_payload',
       fromPeerId: this.myPeerId,
@@ -1187,7 +1321,7 @@ export class HolooPeerMeshManager {
       updatedAt: local.updatedAt,
       payloadHash: local.payloadHash,
       vectorClock: local.vectorClock,
-      snapshotJson: local.snapshotJson,
+      snapshotJson: wireSnapshotJson,
       relayEnvelopes,
       batchedOperationIds: batchedOpIds.length > 0 ? batchedOpIds : undefined,
     });
@@ -1330,9 +1464,10 @@ export class HolooPeerMeshManager {
 
     if (msg.type === 'mesh:state_payload') {
       try {
+        const plainSnapshotJson = await decryptMeshPayloadAesGcm(this.passphrase, msg.snapshotJson);
         const receivedOpIds = await this.callbacks.onRemoteStateReceived({
           fromPeerId: remotePeerId,
-          snapshotJson: msg.snapshotJson,
+          snapshotJson: plainSnapshotJson,
           payloadHash: msg.payloadHash,
           vectorClock: msg.vectorClock || {},
           relayEnvelopes: Array.isArray(msg.relayEnvelopes) ? msg.relayEnvelopes : [],

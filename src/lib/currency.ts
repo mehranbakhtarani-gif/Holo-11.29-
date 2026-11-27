@@ -118,18 +118,31 @@ export function getEffectiveExchangeRate(
   }
 
   if (matching.length > 0) {
+    // matching is sorted descending by date; pick the earliest historical rate rather than a far-future rate
+    const earliest = matching[matching.length - 1];
     return {
       currencyCode: code,
-      rateToIrr: matching[0].rateToIrr,
-      rateDate: matching[0].date,
-      rateType: matching[0].rateType,
+      rateToIrr: earliest.rateToIrr,
+      rateDate: earliest.date,
+      rateType: earliest.rateType,
       isExactDate: false,
     };
   }
 
+  if (def?.defaultRateToIrr && def.defaultRateToIrr > 0) {
+    return {
+      currencyCode: code,
+      rateToIrr: def.defaultRateToIrr,
+      rateDate: null,
+      rateType: 'default',
+      isExactDate: false,
+    };
+  }
+
+  // Never silently pretend 1 foreign unit === 1 IRR when no rate or default exists
   return {
     currencyCode: code,
-    rateToIrr: def?.defaultRateToIrr && def.defaultRateToIrr > 0 ? def.defaultRateToIrr : 1,
+    rateToIrr: 0,
     rateDate: null,
     rateType: 'default',
     isExactDate: false,

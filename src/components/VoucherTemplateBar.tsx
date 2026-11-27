@@ -1,11 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BookmarkPlus,
   Check,
   ChevronDown,
   ChevronUp,
+  Edit3,
   LayoutTemplate,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
@@ -22,6 +24,7 @@ import {
   AppliedVoucherTemplateResult,
   SYSTEM_VOUCHER_TEMPLATES,
   VOUCHER_TEMPLATE_CATEGORY_LABELS,
+  VOUCHER_TEMPLATES_CHANGED_EVENT,
   VoucherTemplate,
   VoucherTemplateCategory,
   addCustomVoucherTemplate,
@@ -52,6 +55,7 @@ interface VoucherTemplateBarProps {
   currentDescription: string;
   currentLines: VoucherLine[];
   onApplyTemplate: (result: AppliedVoucherTemplateResult, templateName: string) => void;
+  onOpenManager?: (templateId?: string | null) => void;
   onNotify: (message: string) => void;
 }
 
@@ -80,6 +84,7 @@ export const VoucherTemplateBar: React.FC<VoucherTemplateBarProps> = ({
   currentDescription,
   currentLines,
   onApplyTemplate,
+  onOpenManager,
   onNotify,
 }) => {
   const [expanded, setExpanded] = useState(true);
@@ -89,6 +94,12 @@ export const VoucherTemplateBar: React.FC<VoucherTemplateBarProps> = ({
     loadCustomVoucherTemplates()
   );
   const [usageMap, setUsageMap] = useState<Record<string, number>>(() => loadTemplateUsageMap());
+
+  useEffect(() => {
+    const syncCustomTemplates = () => setCustomTemplates(loadCustomVoucherTemplates());
+    window.addEventListener(VOUCHER_TEMPLATES_CHANGED_EVENT, syncCustomTemplates);
+    return () => window.removeEventListener(VOUCHER_TEMPLATES_CHANGED_EVENT, syncCustomTemplates);
+  }, []);
 
   // Selected template for quick-amount parametric application
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
@@ -229,6 +240,16 @@ export const VoucherTemplateBar: React.FC<VoucherTemplateBarProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {onOpenManager && (
+            <button
+              type="button"
+              onClick={() => onOpenManager(null)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md hover:border-teal-400 dark:hover:border-teal-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
+              <span>مدیریت قالب‌ها</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -390,15 +411,31 @@ export const VoucherTemplateBar: React.FC<VoucherTemplateBarProps> = ({
                     </div>
 
                     {!tpl.isSystem && (
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteCustomTemplate(e, tpl)}
-                        title="حذف الگوی شخصی"
-                        className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 shrink-0"
-                        aria-label={`حذف الگوی ${tpl.name}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        {onOpenManager && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenManager(tpl.id);
+                            }}
+                            title="ویرایش الگوی شخصی"
+                            className="p-1 rounded text-slate-400 hover:text-teal-700 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/40"
+                            aria-label={`ویرایش الگوی ${tpl.name}`}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteCustomTemplate(e, tpl)}
+                          title="حذف الگوی شخصی"
+                          className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                          aria-label={`حذف الگوی ${tpl.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 );

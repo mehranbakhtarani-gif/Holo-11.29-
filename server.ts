@@ -344,6 +344,25 @@ async function startServer() {
   }
 
   app.post('/api/ai/vision-scan', async (req: Request, res: Response) => {
+    if (!hasValidCsrfGuard(req)) {
+      res.status(403).json({ error: 'درخواست نامعتبر است (محافظ CSRF).' });
+      return;
+    }
+    const actor = await resolveSupabaseActor(req);
+    if (!actor) {
+      res.status(401).json({
+        error: 'برای استفاده از سرویس پردازش تصویری سرور، ابتدا وارد حساب کاربری خود شوید یا از اسکن متنی آفلاین استفاده کنید.',
+        code: 'AUTH_REQUIRED',
+      });
+      return;
+    }
+    if (process.env.ALLOW_CLOUD_AI !== 'true') {
+      res.status(403).json({
+        error: 'سیاست حریم خصوصی سرور روی حالت «۱۰۰٪ محلی بدون خروج داده» تنظیم شده است. برای فعال‌سازی اسکن ابری، متغیر ALLOW_CLOUD_AI=true را در سرور تنظیم کنید.',
+        code: 'LOCAL_AI_ONLY_POLICY',
+      });
+      return;
+    }
     const ai = getGeminiClient();
     if (!ai) {
       res.status(503).json({
@@ -475,6 +494,25 @@ async function startServer() {
   });
 
   app.post('/api/ai/copilot', async (req: Request, res: Response) => {
+    if (!hasValidCsrfGuard(req)) {
+      res.status(403).json({ error: 'درخواست نامعتبر است (محافظ CSRF).' });
+      return;
+    }
+    const actor = await resolveSupabaseActor(req);
+    if (!actor) {
+      res.status(401).json({
+        error: 'برای استفاده از دستیار ابری سرور ابتدا وارد شوید یا به «موتور بومی (آفلاین)» سوئیچ کنید.',
+        code: 'AUTH_REQUIRED',
+      });
+      return;
+    }
+    if (process.env.ALLOW_CLOUD_AI !== 'true') {
+      res.status(403).json({
+        error: 'سیاست حریم خصوصی سرور روی حالت «۱۰۰٪ محلی» قفل است. از موتور بومی آفلاین استفاده کنید یا ALLOW_CLOUD_AI=true را تنظیم نمایید.',
+        code: 'LOCAL_AI_ONLY_POLICY',
+      });
+      return;
+    }
     const ai = getGeminiClient();
     if (!ai) {
       res.status(503).json({
@@ -1315,10 +1353,10 @@ async function startServer() {
       status: 'ok' as const,
       service: 'holoo-apex-corporate-erp',
       mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
-      port: PORT,
-      nodeVersion: process.version,
-      uptimeSec: Math.max(0, Math.floor((Date.now() - SERVER_BOOT_TIME_MS) / 1000)),
-      localAiPolicy: 'local_slm_only' as const,
+      port: verified ? PORT : 0,
+      nodeVersion: verified ? process.version : 'redacted',
+      uptimeSec: verified ? Math.max(0, Math.floor((Date.now() - SERVER_BOOT_TIME_MS) / 1000)) : 0,
+      localAiPolicy: process.env.ALLOW_CLOUD_AI === 'true' ? ('hybrid_opt_in' as const) : ('local_slm_only' as const),
       independentSupabaseMode: true,
       timestamp: new Date().toISOString(),
     };
@@ -1447,8 +1485,21 @@ async function startServer() {
     });
   });
 
-  // Live Interactive Server & Supabase Multi-Step Test Endpoint
+  // Live Interactive Server & Supabase Multi-Step Test Endpoint (CSRF + Auth enforced)
   app.post('/api/supabase/test', async (req: Request, res: Response) => {
+    if (!hasValidCsrfGuard(req)) {
+      res.status(403).json({ error: 'درخواست نامعتبر است (محافظ CSRF).' });
+      return;
+    }
+    const testActor = await resolveSupabaseActor(req);
+    if (!testActor) {
+      res.status(401).json({
+        ok: false,
+        error: 'برای اجرای عیب‌یابی مستقیم سرور و Supabase ابتدا وارد فضای کاری شوید.',
+        code: 'AUTH_REQUIRED',
+      });
+      return;
+    }
     const startedAt = Date.now();
     const checks: {
       id: string;
@@ -2014,16 +2065,30 @@ async function startServer() {
         deletedWorkspace = delWsResp.ok;
       }
 
+      // Audit trail immutability: never delete historical audit logs on workspace reset;
+      // instead append an immutable audit event recording the reset action.
       if (clearAuditLogs) {
-        const delAudResp = await fetch(
-          `${cfg.baseUrl}/rest/v1/${encodeURIComponent(cfg.auditTableName)}?owner_id=eq.${encodeURIComponent(verified.uid)}`,
-          {
-            method: 'DELETE',
+        try {
+          await fetch(`${cfg.baseUrl}/rest/v1/${encodeURIComponent(cfg.auditTableName)}`, {
+            method: 'POST',
             headers: buildSupabaseHeaders(cfg, { Prefer: 'return=minimal' }),
-            signal: AbortSignal.timeout(7000),
-          }
-        );
-        deletedAuditLogs = delAudResp.ok;
+            body: JSON.stringify({
+              owner_id: verified.uid,
+              device_id: 'server_reset',
+              device_label: 'Supabase Reset Guard',
+              action: 'workspace_reset',
+              conflict_policy: 'immutable_audit',
+              client_revision: 0,
+              server_revision: 0,
+              outcome: 'audit_preserved',
+              details: `Workspace reset requested (deletedWorkspace=${String(deletedWorkspace)}, deletedBackups=${deletedBackups}); audit log preserved per immutability policy.`,
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch {
+          // non-blocking
+        }
+        deletedAuditLogs = false;
       }
 
       res.json({
@@ -2032,6 +2097,7 @@ async function startServer() {
         deletedWorkspace,
         deletedBackups,
         deletedAuditLogs,
+        auditTrailPreserved: true,
         resetAt: new Date().toISOString(),
       });
     } catch {
@@ -2042,8 +2108,12 @@ async function startServer() {
     }
   });
 
-  // Delete a specific owner-scoped Supabase backup version
-  app.delete('/api/supabase/backups/:backupId', async (req: Request, res: Response) => {
+  // Delete a specific owner-scoped Supabase backup version (supports both /:backupId and ?backupId=...)
+  const handleDeleteSupabaseBackup = async (req: Request, res: Response) => {
+    if (!hasValidCsrfGuard(req)) {
+      res.status(403).json({ error: 'درخواست حذف پشتیبان نامعتبر است (محافظ CSRF).' });
+      return;
+    }
     const cfg = getValidatedSupabaseConfig();
     if (!cfg) {
       res.status(503).json({ error: 'Supabase در تنظیمات سرور پیکربندی نشده است.', code: 'NOT_CONFIGURED' });
@@ -2056,7 +2126,7 @@ async function startServer() {
       return;
     }
 
-    const backupId = String(req.params.backupId || '').trim();
+    const backupId = String(req.params.backupId || req.query.backupId || '').trim();
     const requiredPrefix = `${verified.uid}__bak__`;
     if (!isValidSafeId(backupId) || !backupId.startsWith(requiredPrefix)) {
       res.status(403).json({ error: 'شناسه نسخه پشتیبان معتبر نیست یا متعلق به این حساب نمی‌باشد.' });
@@ -2075,11 +2145,13 @@ async function startServer() {
         return;
       }
       const updated = await listAndPruneSupabaseBackups(cfg, verified.uid);
-      res.json({ ok: true, backups: updated.backups });
+      res.json({ ok: true, deleted: true, backupId, backups: updated.backups });
     } catch {
       res.status(502).json({ error: 'ارتباط با سرور Supabase برقرار نشد.' });
     }
-  });
+  };
+  app.delete('/api/supabase/backups', handleDeleteSupabaseBackup);
+  app.delete('/api/supabase/backups/:backupId', handleDeleteSupabaseBackup);
 
   // Pull latest workspace snapshot (or a specific retained backup via ?backupId=...) from Supabase PostgreSQL
   app.get('/api/supabase/pull', async (req: Request, res: Response) => {

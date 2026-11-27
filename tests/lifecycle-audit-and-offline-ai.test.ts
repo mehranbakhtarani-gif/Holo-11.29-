@@ -129,7 +129,7 @@ test('1. Proforma -> Final Sale conversion syncs FIFO costLayers, Sayadi cheque,
   assert.equal(plan.invoice.date, '1405/04/15');
   assert.ok(plan.voucher, 'Sealed voucher must be created on proforma conversion');
   assert.equal(plan.voucher!.totalDebit, plan.voucher!.totalCredit);
-  assert.ok(plan.voucher!.integrityHash?.startsWith('vseal_'));
+  assert.ok(plan.voucher!.integrityHash?.startsWith('vseal2_'));
   assert.ok(plan.cheque, 'Sayadi receivable cheque must be created when paidCheque > 0');
   assert.equal(plan.cheque!.direction, 'receivable');
   assert.equal(plan.cheque!.amount, paidCheque);

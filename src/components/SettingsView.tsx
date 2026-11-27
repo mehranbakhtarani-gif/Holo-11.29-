@@ -98,7 +98,10 @@ export const SettingsView: React.FC<{
     removeLocalSnapshot,
     rbacOperators,
     activeOperator,
-    setActiveOperatorId,
+    rbacPinEnabled,
+    isPrivilegedOperator,
+    switchActiveOperator,
+    configureRbacSwitchPin,
     addRbacOperator,
     updateRbacOperator,
     deleteRbacOperator,
@@ -116,6 +119,46 @@ export const SettingsView: React.FC<{
   } = useAccounting();
 
   const [sbSettingsPasscode, setSbSettingsPasscode] = useState('');
+  const [pendingSwitchOpId, setPendingSwitchOpId] = useState<string | null>(null);
+  const [switchPinInput, setSwitchPinInput] = useState('');
+  const [switchPinError, setSwitchPinError] = useState<string | null>(null);
+  const [rbacCurrentPin, setRbacCurrentPin] = useState('');
+  const [rbacNewPin, setRbacNewPin] = useState('');
+
+  const handleRequestOperatorSwitch = (targetId: string) => {
+    setSwitchPinError(null);
+    const target = rbacOperators.find((o) => o.id === targetId);
+    if (!target) return;
+    if (rbacPinEnabled && isPrivilegedOperator(target) && target.id !== activeOperator.id) {
+      setPendingSwitchOpId(target.id);
+      setSwitchPinInput('');
+      return;
+    }
+    const res = switchActiveOperator(targetId);
+    if (res.ok) {
+      showToast(`اپراتور فعال به «${target.fullName}» تغییر یافت.`);
+    } else if (res.requiresPin) {
+      setPendingSwitchOpId(targetId);
+      setSwitchPinInput('');
+    } else if (res.error) {
+      showToast(res.error, 'error');
+    }
+  };
+
+  const handleConfirmSwitchPin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingSwitchOpId) return;
+    const res = switchActiveOperator(pendingSwitchOpId, switchPinInput);
+    if (res.ok) {
+      const chosen = rbacOperators.find((o) => o.id === pendingSwitchOpId);
+      setPendingSwitchOpId(null);
+      setSwitchPinInput('');
+      setSwitchPinError(null);
+      if (chosen) showToast(`اپراتور فعال به «${chosen.fullName}» تغییر یافت.`);
+    } else {
+      setSwitchPinError(res.error || 'پین امنیتی نادرست است.');
+    }
+  };
 
   const {
     settings: invSettings,
@@ -1441,11 +1484,7 @@ export const SettingsView: React.FC<{
             <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
             <select
               value={activeOperator.id}
-              onChange={(e) => {
-                setActiveOperatorId(e.target.value);
-                const chosen = rbacOperators.find((o) => o.id === e.target.value);
-                if (chosen) showToast(`اپراتور فعال به «${chosen.fullName}» تغییر یافت.`);
-              }}
+              onChange={(e) => handleRequestOperatorSwitch(e.target.value)}
               aria-label="اپراتور فعال سیستم"
               className="px-3 py-1.5 rounded-lg border border-teal-300 dark:border-teal-800 bg-teal-50/50 dark:bg-teal-950/40 text-slate-900 dark:text-white font-semibold"
             >
@@ -1458,6 +1497,121 @@ export const SettingsView: React.FC<{
                 ))}
             </select>
           </div>
+        </div>
+
+        {/* Inline PIN Verification Prompt when switching to a privileged role */}
+        {pendingSwitchOpId && (
+          <form
+            onSubmit={handleConfirmSwitchPin}
+            className="p-3.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex flex-wrap items-center gap-2.5"
+          >
+            <span className="font-semibold text-amber-900 dark:text-amber-200">
+              تأیید پین امنیتی برای ورود به نقش «
+              {rbacOperators.find((o) => o.id === pendingSwitchOpId)?.fullName}»:
+            </span>
+            <input
+              type="password"
+              value={switchPinInput}
+              onChange={(e) => setSwitchPinInput(e.target.value)}
+              placeholder="پین امنیتی مدیر"
+              dir="ltr"
+              autoFocus
+              className="px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 font-code w-40"
+            />
+            <button
+              type="submit"
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+            >
+              تأیید و ورود
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPendingSwitchOpId(null);
+                setSwitchPinInput('');
+                setSwitchPinError(null);
+              }}
+              className="px-2.5 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800"
+            >
+              انصراف
+            </button>
+            {switchPinError && (
+              <span className="w-full text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                {switchPinError}
+              </span>
+            )}
+          </form>
+        )}
+
+        {/* Privileged Role PIN Gate Configuration */}
+        <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="space-y-0.5">
+            <div className="font-bold text-slate-800 dark:text-slate-100">
+              قفل پین امنیتی تغییر نقش مدیریتی (RBAC PIN Gate) —{' '}
+              <span className={rbacPinEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                {rbacPinEnabled ? 'فعال (SHA-256)' : 'غیرفعال'}
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-500">
+              با فعال‌سازی پین، جابجایی از نقش‌های کم‌دسترسی به مدیر سیستم یا مدیر مالی تنها پس از وارد کردن پین مجاز خواهد بود.
+            </div>
+          </div>
+          {activeOperator.permissions.canManageSettings && (
+            <div className="flex flex-wrap items-center gap-2">
+              {rbacPinEnabled && (
+                <input
+                  type="password"
+                  value={rbacCurrentPin}
+                  onChange={(e) => setRbacCurrentPin(e.target.value)}
+                  placeholder="پین فعلی"
+                  dir="ltr"
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-code w-28"
+                />
+              )}
+              <input
+                type="password"
+                value={rbacNewPin}
+                onChange={(e) => setRbacNewPin(e.target.value)}
+                placeholder="پین جدید (۴ تا ۲۴)"
+                dir="ltr"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-code w-36"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const res = configureRbacSwitchPin(rbacNewPin, rbacCurrentPin);
+                  if (res.ok) {
+                    setRbacCurrentPin('');
+                    setRbacNewPin('');
+                    showToast('پین امنیتی تغییر نقش مدیریتی با موفقیت ثبت شد.');
+                  } else if (res.error) {
+                    showToast(res.error, 'error');
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-teal-700 hover:bg-slate-800 text-white font-semibold"
+              >
+                {rbacPinEnabled ? 'تغییر پین' : 'فعال‌سازی پین'}
+              </button>
+              {rbacPinEnabled && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = configureRbacSwitchPin(null, rbacCurrentPin);
+                    if (res.ok) {
+                      setRbacCurrentPin('');
+                      setRbacNewPin('');
+                      showToast('قفل پین امنیتی غیرفعال شد.');
+                    } else if (res.error) {
+                      showToast(res.error, 'error');
+                    }
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-800 text-rose-600 dark:text-rose-400 font-semibold hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                >
+                  حذف پین
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Add New Operator Form */}
@@ -1562,7 +1716,7 @@ export const SettingsView: React.FC<{
                     {!isActiveUser && (
                       <button
                         type="button"
-                        onClick={() => setActiveOperatorId(op.id)}
+                        onClick={() => handleRequestOperatorSwitch(op.id)}
                         className="px-2.5 py-1 text-[11px] font-semibold text-teal-700 dark:text-teal-400 hover:underline"
                       >
                         ورود به نقش

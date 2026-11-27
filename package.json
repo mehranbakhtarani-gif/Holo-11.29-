@@ -11,7 +11,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "lint:rules": "eslint firestore.rules",
-    "test": "tsx tests/accounting-security-recovery.test.ts && tsx tests/erp-integrity-audit.test.ts && tsx tests/independent-supabase-pwa.test.ts && tsx tests/local-mesh-lww-outbox.test.ts && tsx tests/sync-conflict-resolution.test.ts && tsx tests/money-input-formatting.test.ts && tsx tests/lifecycle-audit-and-offline-ai.test.ts && tsx tests/report-pdf-print-columns.test.ts && tsx tests/billion-upgrades.test.ts && tsx tests/fuzzy-search-and-audit.test.ts && tsx tests/pending-approvals-summary.test.ts && tsx tests/smart-intelligence-upgrades.test.ts && tsx tests/qa-stress-security-inventory.test.ts && tsx tests/enterprise-mesh-atomicity-audit.test.ts && tsx tests/offline-first-pwa-25-scenarios.test.ts && tsx tests/static-standalone-pwa-no-server.test.ts && tsx tests/ui-theme-customizer.test.ts && tsx tests/audit-10point-remediation.test.ts && tsx tests/offline-first-atomicity-audit.test.ts && tsx tests/voucher-templates.test.ts"
+    "test": "tsx tests/accounting-security-recovery.test.ts && tsx tests/erp-integrity-audit.test.ts && tsx tests/independent-supabase-pwa.test.ts && tsx tests/local-mesh-lww-outbox.test.ts && tsx tests/sync-conflict-resolution.test.ts && tsx tests/money-input-formatting.test.ts && tsx tests/lifecycle-audit-and-offline-ai.test.ts && tsx tests/report-pdf-print-columns.test.ts && tsx tests/billion-upgrades.test.ts && tsx tests/fuzzy-search-and-audit.test.ts && tsx tests/pending-approvals-summary.test.ts && tsx tests/smart-intelligence-upgrades.test.ts && tsx tests/qa-stress-security-inventory.test.ts && tsx tests/enterprise-mesh-atomicity-audit.test.ts && tsx tests/offline-first-pwa-25-scenarios.test.ts && tsx tests/static-standalone-pwa-no-server.test.ts && tsx tests/ui-theme-customizer.test.ts && tsx tests/audit-10point-remediation.test.ts && tsx tests/offline-first-atomicity-audit.test.ts && tsx tests/voucher-templates.test.ts && tsx tests/audit-21-remediation.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -31,7 +31,6 @@
     "html2canvas-pro": "^2.6.4",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
     "peerjs": "^1.5.5",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
@@ -46,7 +45,6 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",

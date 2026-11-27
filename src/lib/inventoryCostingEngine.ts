@@ -263,7 +263,7 @@ export function applyInventoryMovementStep(
     return {
       nextState: {
         ...state,
-        stockQty: roundQty2(stockQty),
+        stockQty: roundQty(stockQty),
         totalValueIrr,
         weightedAvgUnitCostIrr,
         layers,
@@ -328,7 +328,7 @@ export function applyInventoryMovementStep(
       return {
         nextState: {
           ...state,
-          stockQty: roundQty2(nextStock),
+          stockQty: roundQty(nextStock),
           totalValueIrr: nextVal,
           weightedAvgUnitCostIrr: nextAvg,
           layers: activeLayers,
@@ -386,7 +386,7 @@ export function applyInventoryMovementStep(
     return {
       nextState: {
         ...state,
-        stockQty: roundQty2(nextStock),
+        stockQty: roundQty(nextStock),
         totalValueIrr: nextVal,
         weightedAvgUnitCostIrr: nextAvg,
         layers: activeLayers,
@@ -468,7 +468,7 @@ export function applyInventoryMovementStep(
       return {
         nextState: {
           ...state,
-          stockQty: roundQty2(nextStock),
+          stockQty: roundQty(nextStock),
           totalValueIrr: nextVal,
           weightedAvgUnitCostIrr: nextAvg,
           layers: nextLayers,
@@ -510,7 +510,7 @@ export function applyInventoryMovementStep(
     return {
       nextState: {
         ...state,
-        stockQty: roundQty2(nextStock),
+        stockQty: roundQty(nextStock),
         totalValueIrr: nextVal,
         weightedAvgUnitCostIrr: nextAvg,
         layers: [restoredLayer, ...layers],
@@ -574,7 +574,7 @@ export function applyInventoryMovementStep(
       return {
         nextState: {
           ...state,
-          stockQty: roundQty2(nextStock),
+          stockQty: roundQty(nextStock),
           totalValueIrr: nextVal,
           weightedAvgUnitCostIrr: nextAvg,
           layers: activeLayers,
@@ -626,7 +626,7 @@ export function applyInventoryMovementStep(
     return {
       nextState: {
         ...state,
-        stockQty: roundQty2(nextStock),
+        stockQty: roundQty(nextStock),
         totalValueIrr: nextVal,
         weightedAvgUnitCostIrr: nextAvg,
         layers: activeLayers,
@@ -884,7 +884,7 @@ export function recalculateInventoryLedger(input: {
       finalState: {
         productId,
         costingMethod,
-        stockQty: roundQty2(endingQty),
+        stockQty: roundQty(endingQty),
         totalValueIrr: endingValueIrr,
         weightedAvgUnitCostIrr: periodicUnitCostIrr,
         layers: finalLayers,

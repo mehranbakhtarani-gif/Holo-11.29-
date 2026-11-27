@@ -7,6 +7,7 @@ import {
   Download,
   Edit3,
   Inbox,
+  LayoutTemplate,
   ListOrdered,
   Loader2,
   Lock,
@@ -49,6 +50,7 @@ import { FuzzyTableOption, FuzzyTableSearch } from './FuzzyTableSearch';
 import { VoiceInputButton } from './VoiceInputButton';
 import { MoneyInput } from './ui/MoneyInput';
 import { VoucherTemplateBar } from './VoucherTemplateBar';
+import { VoucherTemplatesManagerModal } from './VoucherTemplatesManagerModal';
 import type { AppliedVoucherTemplateResult } from '../lib/voucherTemplates';
 
 const VOUCHER_TYPE_LABELS: Record<VoucherType, string> = {
@@ -105,6 +107,8 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
   );
   const [showForm, setShowForm] = useState(false);
   const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null);
+  const [showTemplateManager, setShowTemplateManager] = useState(false);
+  const [managerInitialTemplateId, setManagerInitialTemplateId] = useState<string | null>(null);
 
   const currentVoucherLockKey = showForm
     ? editingVoucherId
@@ -771,6 +775,17 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
             <span>اکسل</span>
           </button>
           <button
+            type="button"
+            onClick={() => {
+              setManagerInitialTemplateId(null);
+              setShowTemplateManager(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap"
+          >
+            <LayoutTemplate className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+            <span>مدیریت قالب‌ها</span>
+          </button>
+          <button
             onClick={() => {
               setViewMode('journal');
               resetComposer('general');
@@ -904,6 +919,10 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
                     ? `الگوی «${templateName}» با تراز کامل (${formatMoney(applied.totalDebit, unit)}) روی سند اعمال شد.`
                     : `سرفصل‌های الگوی «${templateName}» روی سند بارگذاری شد؛ مبلغ را وارد یا با F9 تراز کنید.`
                 );
+              }}
+              onOpenManager={(tplId) => {
+                setManagerInitialTemplateId(tplId ?? null);
+                setShowTemplateManager(true);
               }}
               onNotify={(msg) => showToast(msg)}
             />
@@ -1777,6 +1796,40 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
           </div>
         </div>
       )}
+
+      {/* Templates Manager Modal (Create, Edit, Clone, Delete & One-Click Load) */}
+      <VoucherTemplatesManagerModal
+        open={showTemplateManager}
+        initialTemplateId={managerInitialTemplateId}
+        accounts={accounts}
+        parties={parties}
+        costCenters={costCenters}
+        unit={unit}
+        date={date}
+        onClose={() => {
+          setShowTemplateManager(false);
+          setManagerInitialTemplateId(null);
+        }}
+        onLoadTemplateIntoNewVoucher={(applied, templateName) => {
+          setViewMode('journal');
+          setEditingVoucherId(null);
+          setAtfNumber('');
+          setSubNumber('');
+          setCurrencyCode(BASE_CURRENCY_CODE);
+          setExchangeRate(1);
+          setVoucherType(applied.voucherType);
+          setDescription(applied.description);
+          setLines(applied.lines);
+          setAiReasoning('');
+          setShowForm(true);
+          showToast(
+            applied.isBalanced
+              ? `الگوی «${templateName}» با مقادیر اولیه تراز (${formatMoney(applied.totalDebit, unit)}) در سند جدید بارگذاری شد.`
+              : `الگوی «${templateName}» در فرم سند جدید بارگذاری شد؛ مبالغ را تکمیل یا با F9 تراز کنید.`
+          );
+        }}
+        onNotify={(msg) => showToast(msg)}
+      />
     </div>
   );
 };

@@ -189,23 +189,64 @@ function readAllFromStore<T>(tx: IDBTransaction, storeName: OperationalStoreName
   });
 }
 
-function replaceStoreContents<T extends { id: string }>(
+const lastCommittedStoreSignatures = new Map<OperationalStoreName, Map<string, string>>();
+
+function computeRecordSignature(item: unknown): string {
+  try {
+    return JSON.stringify(item);
+  } catch {
+    return String(Date.now());
+  }
+}
+
+export function resetOperationalDiffCache(): void {
+  lastCommittedStoreSignatures.clear();
+}
+
+function syncStoreContentsIncremental<T extends { id: string }>(
   tx: IDBTransaction,
   storeName: OperationalStoreName,
   items: T[]
 ): void {
   const store = tx.objectStore(storeName);
-  store.clear();
+  const prevMap = lastCommittedStoreSignatures.get(storeName);
+  const nextMap = new Map<string, string>();
+
+  if (!prevMap) {
+    // First write in this session: synchronize full store and seed diff cache
+    store.clear();
+    for (const item of items) {
+      if (item && typeof item.id === 'string' && item.id.length > 0) {
+        store.put(item);
+        nextMap.set(item.id, computeRecordSignature(item));
+      }
+    }
+    lastCommittedStoreSignatures.set(storeName, nextMap);
+    return;
+  }
+
   for (const item of items) {
-    if (item && typeof item.id === 'string' && item.id.length > 0) {
+    if (!item || typeof item.id !== 'string' || item.id.length === 0) continue;
+    const sig = computeRecordSignature(item);
+    nextMap.set(item.id, sig);
+    if (prevMap.get(item.id) !== sig) {
       store.put(item);
     }
   }
+
+  for (const oldId of prevMap.keys()) {
+    if (!nextMap.has(oldId)) {
+      store.delete(oldId);
+    }
+  }
+
+  lastCommittedStoreSignatures.set(storeName, nextMap);
 }
 
 /**
- * Persists the entire operational accounting dataset atomically in a single
- * IndexedDB readwrite transaction across all entity object stores.
+ * Persists the operational accounting dataset atomically in a single
+ * IndexedDB readwrite transaction using incremental per-record diffing
+ * so unchanged stores and records are never unnecessarily cleared or rewritten.
  */
 export async function saveOperationalWorkspaceTx(
   data: OperationalWorkspaceData
@@ -259,22 +300,22 @@ export async function saveOperationalWorkspaceTx(
           schemaVersion: OP_DB_VERSION,
         });
 
-        replaceStoreContents(tx, 'accounts', data.accounts);
-        replaceStoreContents(tx, 'parties', data.parties);
-        replaceStoreContents(tx, 'products', data.products);
-        replaceStoreContents(tx, 'vouchers', data.vouchers);
-        replaceStoreContents(tx, 'invoices', data.invoices);
-        replaceStoreContents(tx, 'cheques', data.cheques);
-        replaceStoreContents(tx, 'employees', data.employees);
-        replaceStoreContents(tx, 'assets', data.assets);
-        replaceStoreContents(tx, 'costCenters', data.costCenters);
-        replaceStoreContents(tx, 'currencies', data.currencies);
-        replaceStoreContents(tx, 'exchangeRates', data.exchangeRates);
-        replaceStoreContents(tx, 'importDossiers', data.importDossiers);
-        replaceStoreContents(tx, 'salesOrders', data.salesOrders);
-        replaceStoreContents(tx, 'subcontractJobs', data.subcontractJobs);
-        replaceStoreContents(tx, 'rbacOperators', data.rbacOperators);
-        replaceStoreContents(tx, 'auditLogs', data.auditLogs);
+        syncStoreContentsIncremental(tx, 'accounts', data.accounts);
+        syncStoreContentsIncremental(tx, 'parties', data.parties);
+        syncStoreContentsIncremental(tx, 'products', data.products);
+        syncStoreContentsIncremental(tx, 'vouchers', data.vouchers);
+        syncStoreContentsIncremental(tx, 'invoices', data.invoices);
+        syncStoreContentsIncremental(tx, 'cheques', data.cheques);
+        syncStoreContentsIncremental(tx, 'employees', data.employees);
+        syncStoreContentsIncremental(tx, 'assets', data.assets);
+        syncStoreContentsIncremental(tx, 'costCenters', data.costCenters);
+        syncStoreContentsIncremental(tx, 'currencies', data.currencies);
+        syncStoreContentsIncremental(tx, 'exchangeRates', data.exchangeRates);
+        syncStoreContentsIncremental(tx, 'importDossiers', data.importDossiers);
+        syncStoreContentsIncremental(tx, 'salesOrders', data.salesOrders);
+        syncStoreContentsIncremental(tx, 'subcontractJobs', data.subcontractJobs);
+        syncStoreContentsIncremental(tx, 'rbacOperators', data.rbacOperators);
+        syncStoreContentsIncremental(tx, 'auditLogs', data.auditLogs);
       };
 
       tx.oncomplete = () => {
@@ -282,14 +323,17 @@ export async function saveOperationalWorkspaceTx(
         resolve({ localRevision: nextRevision, committedAt });
       };
       tx.onerror = () => {
+        resetOperationalDiffCache();
         db.close();
         reject(tx.error ?? new Error('Operational IndexedDB commit failed'));
       };
       tx.onabort = () => {
+        resetOperationalDiffCache();
         db.close();
         reject(tx.error ?? new Error('Operational IndexedDB transaction aborted'));
       };
     } catch (err) {
+      resetOperationalDiffCache();
       db.close();
       reject(err);
     }
@@ -427,6 +471,7 @@ export async function commitInvoiceOperationalTx(
       revReq.onerror = () => abortAndReject(revReq.error ?? new Error('Workspace meta read failed'));
 
       tx.oncomplete = () => {
+        resetOperationalDiffCache();
         if (!settled) {
           settled = true;
           closeIfOwned();
@@ -434,6 +479,7 @@ export async function commitInvoiceOperationalTx(
         }
       };
       tx.onerror = () => {
+        resetOperationalDiffCache();
         if (!settled) {
           settled = true;
           closeIfOwned();
@@ -441,6 +487,7 @@ export async function commitInvoiceOperationalTx(
         }
       };
       tx.onabort = () => {
+        resetOperationalDiffCache();
         if (!settled) {
           settled = true;
           closeIfOwned();
@@ -1116,6 +1163,7 @@ export async function wipeAllLocalIndexedDbs(): Promise<{
     else failedDbs.push(name);
   }
 
+  resetOperationalDiffCache();
   return { deletedDbs, blockedDbs, failedDbs };
 }
 

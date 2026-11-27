@@ -920,7 +920,49 @@ export function mergeWorkspacesDeterministicLWW(
     updatedCount += 1;
   }
 
+  const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+
+  type TombstoneEntry = { deletedAt: string; deviceId: string };
+  const rawLocalTombstones =
+    localObj._meshTombstones && typeof localObj._meshTombstones === 'object'
+      ? (localObj._meshTombstones as Record<string, Record<string, TombstoneEntry>>)
+      : {};
+  const rawRemoteTombstones =
+    remoteObj._meshTombstones && typeof remoteObj._meshTombstones === 'object'
+      ? (remoteObj._meshTombstones as Record<string, Record<string, TombstoneEntry>>)
+      : {};
+
+  const mergedTombstones: Record<string, Record<string, TombstoneEntry>> = {};
+
+  const parseTimestampMs = (val: unknown): number => {
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    if (typeof val === 'string' && val.trim().length > 0) {
+      const parsed = Date.parse(val);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return 0;
+  };
+
+  const recordTombstone = (col: string, key: string, entry: TombstoneEntry) => {
+    const ts = parseTimestampMs(entry.deletedAt);
+    if (ts > 0 && nowMs - ts > TOMBSTONE_TTL_MS) return; // expired tombstone
+    if (!mergedTombstones[col]) mergedTombstones[col] = {};
+    const existing = mergedTombstones[col][key];
+    if (!existing || parseTimestampMs(entry.deletedAt) >= parseTimestampMs(existing.deletedAt)) {
+      mergedTombstones[col][key] = entry;
+    }
+  };
+
   for (const col of SYNCABLE_WORKSPACE_COLLECTIONS) {
+    // Seed tombstones from both local and remote tombstone maps
+    for (const [key, entry] of Object.entries(rawLocalTombstones[col] || {})) {
+      if (entry && typeof entry.deletedAt === 'string') recordTombstone(col, key, entry);
+    }
+    for (const [key, entry] of Object.entries(rawRemoteTombstones[col] || {})) {
+      if (entry && typeof entry.deletedAt === 'string') recordTombstone(col, key, entry);
+    }
+
     const localArr = Array.isArray(localObj[col]) ? (localObj[col] as Record<string, unknown>[]) : [];
     const remoteArr = Array.isArray(remoteObj[col]) ? (remoteObj[col] as Record<string, unknown>[]) : [];
 
@@ -929,6 +971,12 @@ export function mergeWorkspacesDeterministicLWW(
       if (!item || typeof item !== 'object') continue;
       const key = String(item.id || item.uuid || '');
       if (!key) continue;
+      if (item.isDeleted) {
+        recordTombstone(col, key, {
+          deletedAt: String(item.updatedAt || new Date(nowMs).toISOString()),
+          deviceId: String(item.deviceId || localDeviceId),
+        });
+      }
       byKey.set(key, item);
     }
 
@@ -936,10 +984,19 @@ export function mergeWorkspacesDeterministicLWW(
       if (!rItem || typeof rItem !== 'object') continue;
       const key = String(rItem.id || rItem.uuid || '');
       if (!key) continue;
+      if (rItem.isDeleted) {
+        recordTombstone(col, key, {
+          deletedAt: String(rItem.updatedAt || new Date(nowMs).toISOString()),
+          deviceId: String(rItem.deviceId || 'remote'),
+        });
+      }
       const lItem = byKey.get(key);
 
       if (!lItem) {
-        if (!rItem.isDeleted) {
+        const tomb = mergedTombstones[col]?.[key];
+        const rTs = parseTimestampMs(rItem.updatedAt);
+        const tombTs = tomb ? parseTimestampMs(tomb.deletedAt) : 0;
+        if (!rItem.isDeleted && !(tomb && tombTs >= rTs)) {
           byKey.set(key, rItem);
           addedCount += 1;
         }
@@ -978,13 +1035,37 @@ export function mergeWorkspacesDeterministicLWW(
       }
     }
 
-    // Filter out tombstoned items from active operational arrays
+    // Apply retained tombstones against stale local records from a 3rd offline device
+    const colTombs = mergedTombstones[col] || {};
+    for (const [key, tomb] of Object.entries(colTombs)) {
+      const active = byKey.get(key);
+      if (!active) continue;
+      if (active.isDeleted) {
+        byKey.delete(key);
+        continue;
+      }
+      const activeTs = parseTimestampMs(active.updatedAt);
+      const tombTs = parseTimestampMs(tomb.deletedAt);
+      if (tombTs >= activeTs) {
+        byKey.delete(key);
+        deletedCount += 1;
+        conflictsResolved += 1;
+      } else {
+        // A strictly newer recreation/update superseded the tombstone
+        delete colTombs[key];
+      }
+    }
+
+    // Filter out tombstoned items from active operational arrays while retaining _meshTombstones
     const finalList = Array.from(byKey.values()).filter((item) => !item.isDeleted);
     merged[col] = finalList;
   }
 
   const changed = addedCount > 0 || updatedCount > 0 || deletedCount > 0;
-  const nowIso = new Date().toISOString();
+  const nowIso = new Date(nowMs).toISOString();
+  if (Object.keys(mergedTombstones).some((k) => Object.keys(mergedTombstones[k]).length > 0)) {
+    merged._meshTombstones = mergedTombstones;
+  }
   merged._meshSyncMeta = {
     schema: 'holoo_mesh_lww_v1',
     originDeviceId: localDeviceId,

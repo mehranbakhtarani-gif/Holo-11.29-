@@ -69,8 +69,13 @@ import {
   planProformaToSaleConversion,
   planStockAdjustmentWithCostLayers,
   planYearEndClosing,
+  sha256HexSync,
   validateVoucherPayload,
 } from '../lib/accountingEngine';
+import {
+  exportAllBankReconciliationSessions,
+  importAllBankReconciliationSessions,
+} from '../lib/bankReconciliationEngine';
 import {
   applyInventoryMovementStep,
   normalizeProductCostState,
@@ -156,6 +161,16 @@ interface AccountingContextValue {
   rbacOperators: RbacOperator[];
   activeOperator: RbacOperator;
   setActiveOperatorId: (id: string) => void;
+  rbacPinEnabled: boolean;
+  isPrivilegedOperator: (op: RbacOperator) => boolean;
+  switchActiveOperator: (
+    id: string,
+    pin?: string
+  ) => { ok: boolean; requiresPin?: boolean; error?: string };
+  configureRbacSwitchPin: (
+    newPin: string | null,
+    currentPin?: string
+  ) => { ok: boolean; error?: string };
   auditLogs: AuditActivityLog[];
   trialBalance: ReturnType<typeof computeTrialBalance>;
   incomeStatement: ReturnType<typeof computeIncomeStatement>;
@@ -406,7 +421,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>(initialSeed.salesOrders);
   const [subcontractJobs, setSubcontractJobs] = useState<SubcontractJob[]>(initialSeed.subcontractJobs);
   const [rbacOperators, setRbacOperators] = useState<RbacOperator[]>(initialSeed.rbacOperators);
-  const [activeOperatorId, setActiveOperatorId] = useState<string>(initialSeed.rbacOperators[0].id);
+  const [activeOperatorId, setActiveOperatorIdState] = useState<string>(initialSeed.rbacOperators[0].id);
+  const [rbacPinHash, setRbacPinHash] = useState<string | null>(() => {
+    try {
+      return typeof window !== 'undefined' ? window.localStorage.getItem('holoo_apex_rbac_pin_hash_v1') : null;
+    } catch {
+      return null;
+    }
+  });
   const [auditLogs, setAuditLogs] = useState<AuditActivityLog[]>(initialSeed.auditLogs);
 
   const activeOperator = useMemo(
@@ -415,6 +437,98 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       rbacOperators[0] ??
       initialSeed.rbacOperators[0],
     [rbacOperators, activeOperatorId, initialSeed.rbacOperators]
+  );
+
+  const isPrivilegedOperator = useCallback((op: RbacOperator): boolean => {
+    return (
+      op.role === 'finance_manager' ||
+      Boolean(op.permissions?.canManageSettings) ||
+      Boolean(op.permissions?.canFinalizeVoucher) ||
+      Boolean(op.permissions?.canDeleteRecords)
+    );
+  }, []);
+
+  const hashRbacPin = useCallback((pin: string): string => {
+    return sha256HexSync(`holoo-apex-rbac-pin-v1:${pin.trim()}`);
+  }, []);
+
+  const switchActiveOperator = useCallback(
+    (id: string, pin?: string): { ok: boolean; requiresPin?: boolean; error?: string } => {
+      const target = rbacOperators.find((o) => o.id === id && o.active);
+      if (!target) {
+        return { ok: false, error: 'اپراتور انتخاب‌شده فعال نیست یا پیدا نشد.' };
+      }
+      if (target.id === activeOperatorId) {
+        return { ok: true };
+      }
+      if (rbacPinHash && isPrivilegedOperator(target)) {
+        const provided = (pin ?? '').trim();
+        if (!provided) {
+          return {
+            ok: false,
+            requiresPin: true,
+            error: 'برای ورود به نقش مدیریتی، وارد کردن پین امنیتی الزامی است.',
+          };
+        }
+        if (hashRbacPin(provided) !== rbacPinHash) {
+          return {
+            ok: false,
+            requiresPin: true,
+            error: 'پین امنیتی نقش مدیریتی نادرست است.',
+          };
+        }
+      }
+      setActiveOperatorIdState(target.id);
+      return { ok: true };
+    },
+    [rbacOperators, activeOperatorId, rbacPinHash, isPrivilegedOperator, hashRbacPin]
+  );
+
+  const setActiveOperatorId = useCallback(
+    (id: string) => {
+      const res = switchActiveOperator(id);
+      if (!res.ok && res.error) {
+        setToast(res.error);
+      }
+    },
+    [switchActiveOperator]
+  );
+
+  const configureRbacSwitchPin = useCallback(
+    (newPin: string | null, currentPin?: string): { ok: boolean; error?: string } => {
+      const verdict = checkOperatorPermission(activeOperator, 'canManageSettings');
+      if (!verdict.allowed) {
+        return { ok: false, error: verdict.reason || 'تنها مدیر سیستم مجاز به تنظیم پین RBAC است.' };
+      }
+      if (rbacPinHash) {
+        const cur = (currentPin ?? '').trim();
+        if (!cur || hashRbacPin(cur) !== rbacPinHash) {
+          return { ok: false, error: 'پین فعلی نادرست است.' };
+        }
+      }
+      if (newPin === null || newPin.trim() === '') {
+        try {
+          window.localStorage.removeItem('holoo_apex_rbac_pin_hash_v1');
+        } catch {
+          // ignore
+        }
+        setRbacPinHash(null);
+        return { ok: true };
+      }
+      const trimmed = newPin.trim();
+      if (trimmed.length < 4 || trimmed.length > 24) {
+        return { ok: false, error: 'پین امنیتی باید بین ۴ تا ۲۴ کاراکتر باشد.' };
+      }
+      const hashed = hashRbacPin(trimmed);
+      try {
+        window.localStorage.setItem('holoo_apex_rbac_pin_hash_v1', hashed);
+      } catch {
+        // ignore
+      }
+      setRbacPinHash(hashed);
+      return { ok: true };
+    },
+    [activeOperator, rbacPinHash, hashRbacPin]
   );
 
   const showToast = useCallback((msg: string, explicitTone?: AudioFeedbackTone) => {
@@ -1709,6 +1823,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
 
   const renumberVouchersChronologically = useCallback(async () => {
+    if (!assertPermission('canFinalizeVoucher')) return;
     const rank = (t: VoucherType) => (t === 'opening' ? 0 : t === 'closing' ? 2 : 1);
     const closedSet = new Set(profile.closedFiscalYears || []);
     const byYear = new Map<string, Voucher[]>();
@@ -1735,19 +1850,27 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       ordered.forEach((v, idx) => numMap.set(v.id, idx + 1));
     }
 
+    const changedVouchers = vouchers.filter((v) => {
+      const nextNum = numMap.get(v.id) ?? v.voucherNumber;
+      return v.voucherNumber !== nextNum;
+    });
+
     if (user) {
       try {
-        const batch = writeBatch(db);
-        vouchers.forEach((v) => {
-          const nextNum = numMap.get(v.id) ?? v.voucherNumber;
-          if (v.voucherNumber !== nextNum) {
+        // Chunk Firestore writeBatch strictly below the 500-operation Firestore limit
+        const FIRESTORE_BATCH_CHUNK = 450;
+        for (let i = 0; i < changedVouchers.length; i += FIRESTORE_BATCH_CHUNK) {
+          const slice = changedVouchers.slice(i, i + FIRESTORE_BATCH_CHUNK);
+          const batch = writeBatch(db);
+          slice.forEach((v) => {
+            const nextNum = numMap.get(v.id) ?? v.voucherNumber;
             batch.update(doc(db, 'vouchers', v.id), {
               voucherNumber: nextNum,
               updatedAt: serverTimestamp(),
             });
-          }
-        });
-        await batch.commit();
+          });
+          await batch.commit();
+        }
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, 'vouchers');
       }
@@ -1757,14 +1880,16 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           const nextNum = numMap.get(v.id) ?? v.voucherNumber;
           if (nextNum === v.voucherNumber) return v;
           const updated = { ...v, voucherNumber: nextNum };
-          return updated.status === 'permanent' && updated.integrityHash
-            ? { ...updated, integrityHash: computeVoucherIntegrityHash(updated) }
-            : updated;
+          // Legacy vseal_ seals hashed voucherNumber; upgrade/preserve seal consistently
+          if (updated.status === 'permanent' && updated.integrityHash?.startsWith('vseal_')) {
+            return { ...updated, integrityHash: computeVoucherIntegrityHash(updated) };
+          }
+          return updated;
         })
       );
     }
     showToast('تمامی اسناد سال‌های مالی باز بر اساس تاریخ شمسی و به تفکیک سال مالی شماره‌گذاری مجدد شدند.');
-  }, [vouchers, profile.closedFiscalYears, profile.fiscalYear, user, showToast]);
+  }, [vouchers, profile.closedFiscalYears, profile.fiscalYear, user, showToast, assertPermission]);
 
   // ---------------- PRODUCTS & WAREHOUSE CRUD ----------------
   const addProduct = useCallback(
@@ -5548,6 +5673,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const postFxRevaluationVoucher = useCallback(
     async (rows: FxRevaluationRow[], date: string) => {
       if (!assertPermission('canManageCurrencies')) return;
+      const targetYear = extractFiscalYearFromDate(date) || profile.fiscalYear;
+      if ((profile.closedFiscalYears || []).includes(targetYear)) {
+        showToast(`سال مالی ${targetYear} بسته شده است؛ امکان صدور سند تسعیر ارز وجود ندارد.`, 'error');
+        return;
+      }
+      const expectedDesc = `سند تسعیر ارز دارایی‌ها و بدهی‌های ارزی پایان دوره (${date})`;
+      const alreadyPostedSameDate = vouchers.some(
+        (existing) => existing.date === date && existing.description === expectedDesc
+      );
+      if (alreadyPostedSameDate) {
+        showToast(`سند تسعیر ارز برای تاریخ ${date} قبلاً صادر شده است (جلوگیری از ثبت تکراری).`, 'warning');
+        return;
+      }
       const nonZero = rows
         .map((r) => ({ ...r, revaluationDiffIrr: Math.round(r.revaluationDiffIrr) }))
         .filter((r) => Math.abs(r.revaluationDiffIrr) >= 1);
@@ -5613,7 +5751,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       const v = await createVoucher({
         date,
-        description: `سند تسعیر ارز دارایی‌ها و بدهی‌های ارزی پایان دوره (${date})`,
+        description: expectedDesc,
         voucherType: 'general',
         status: 'permanent',
         lines,
@@ -5625,7 +5763,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       );
       showToast(`سند تسعیر ارز #${v.voucherNumber} با موفقیت صادر شد.`);
     },
-    [createVoucher, logActivity, showToast]
+    [assertPermission, createVoucher, logActivity, profile.closedFiscalYears, profile.fiscalYear, showToast, vouchers]
   );
 
   const postBrokerCommissionVoucher = useCallback(
@@ -5744,7 +5882,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       if (activeOperatorId === opId) {
         const next = rbacOperators.find((o) => o.id !== opId);
-        if (next) setActiveOperatorId(next.id);
+        if (next) setActiveOperatorIdState(next.id);
       }
       logActivity('مدیریت کاربران', 'حذف اپراتور', `شناسه اپراتور: ${opId}`);
       showToast('اپراتور حذف شد.');
@@ -5777,6 +5915,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         subcontractJobs,
         rbacOperators,
         auditLogs,
+        bankReconciliationSessions: exportAllBankReconciliationSessions(),
       },
       null,
       2
@@ -6042,6 +6181,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (Array.isArray(parsed.auditLogs)) {
           setAuditLogs(safeList<AuditActivityLog>(parsed.auditLogs, 2000));
         }
+        if (parsed.bankReconciliationSessions && typeof parsed.bankReconciliationSessions === 'object') {
+          importAllBankReconciliationSessions(parsed.bankReconciliationSessions);
+        }
         showToast('فایل پشتیبان حسابداری با اعتبارسنجی کامل بازیابی و بارگذاری شد.');
         return true;
       } catch {
@@ -6084,7 +6226,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setSalesOrders(seed.salesOrders);
         setSubcontractJobs(seed.subcontractJobs);
         setRbacOperators(seed.rbacOperators);
-        setActiveOperatorId(seed.rbacOperators[0]?.id || 'op_admin');
+        setActiveOperatorIdState(seed.rbacOperators[0]?.id || 'op_admin');
         setAuditLogs(seed.auditLogs);
         showToast('تمامی جدول‌ها و داده‌های برنامه به حالت نمونه اولیه بازنشانی شد.');
         return {
@@ -6129,7 +6271,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setSubcontractJobs([]);
       setRbacOperators(defaultAdminOp);
       if (defaultAdminOp[0]?.id) {
-        setActiveOperatorId(defaultAdminOp[0].id);
+        setActiveOperatorIdState(defaultAdminOp[0].id);
       }
       setAuditLogs([]);
 
@@ -6417,6 +6559,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         rbacOperators,
         activeOperator,
         setActiveOperatorId,
+        rbacPinEnabled: Boolean(rbacPinHash),
+        isPrivilegedOperator,
+        switchActiveOperator,
+        configureRbacSwitchPin,
         auditLogs,
         trialBalance,
         incomeStatement,

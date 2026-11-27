@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertCircle, Download, Image as ImageIcon, Loader2, ShieldCheck, Wand2 } from 'lucide-react';
 import { useAccounting } from '../context/AccountingContext';
+import corporateHqBanner from '../assets/images/corporate_hq_banner_1795265734976.jpg';
 
 const IMAGE_SIZES = ['1K', '2K', '4K'] as const;
 const ASPECT_RATIOS = ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'] as const;
@@ -452,7 +453,7 @@ export const BrandStudioView: React.FC = () => {
             ) : !imgFallback ? (
               <div className="relative w-full h-full min-h-[340px]">
                 <img
-                  src="/src/assets/images/corporate_hq_banner_1795265734976.jpg"
+                  src={corporateHqBanner}
                   alt="نمونه هویت بصری شرکتی هلو Apex"
                   onError={() => setImgFallback(true)}
                   className="w-full h-full object-cover min-h-[340px]"

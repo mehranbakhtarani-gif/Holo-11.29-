@@ -845,7 +845,14 @@ export function parseExcelArrayBuffer(
     );
   }
 
-  const workbook = XLSX.read(buffer, { type: 'array', raw: false });
+  const workbook = XLSX.read(buffer, {
+    type: 'array',
+    raw: false,
+    sheetRows: MAX_EXCEL_ROWS + 50,
+    cellFormula: false,
+    cellHTML: false,
+    cellStyles: false,
+  });
   const sheetNames = (workbook.SheetNames || []).slice(0, 50);
   if (sheetNames.length === 0) {
     return { sheetName: '', sheetNames: [], headers: [], rows: [] };

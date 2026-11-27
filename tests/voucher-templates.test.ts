@@ -6,12 +6,14 @@ import {
   applyVoucherTemplate,
   createCustomTemplateFromLines,
   deleteCustomVoucherTemplate,
+  duplicateTemplateAsCustom,
   filterVoucherTemplates,
   formatTemplateAccountSummary,
   incrementTemplateUsage,
   loadCustomVoucherTemplates,
   loadTemplateUsageMap,
   suggestTemplatesFromHistory,
+  upsertCustomVoucherTemplate,
 } from '../src/lib/voucherTemplates';
 
 // Lightweight in-memory localStorage mock for Node test execution
@@ -173,6 +175,103 @@ async function runTests() {
   storageMap.set('holoo_apex_voucher_templates_v1', '{broken-json');
   assert.deepEqual(loadCustomVoucherTemplates(), []);
   console.log('✓ 5. Custom template persistence, smart history ranking, fuzzy search & corrupted-JSON guard passed');
+
+  // 6. Templates Manager CRUD: Create with default accounts, party, cost center & balanced initial fixed values -> One-click load
+  storageMap.clear();
+  const createdFixed = upsertCustomVoucherTemplate({
+    name: 'اجاره ثابت ماهانه انبار شادآباد',
+    category: 'general_expenses',
+    voucherType: 'general',
+    descriptionTemplate: 'پرداخت اجاره ثابت انبار دوره {month}',
+    lines: [
+      {
+        accountCode: '80201',
+        fallbackTitle: 'اجاره دفتر، انبار شادآباد و قبوض',
+        side: 'debit',
+        formula: 'fixed',
+        fixedAmount: 45_000_000,
+        defaultDescription: 'اجاره ماهانه انبار',
+        defaultPartyId: seed.parties[0].id,
+        defaultPartyName: seed.parties[0].name,
+        defaultCostCenterId: seed.costCenters[2].id,
+      },
+      {
+        accountCode: '10201',
+        fallbackTitle: 'بانک ملت — حساب جاری شرکتی',
+        side: 'credit',
+        formula: 'fixed',
+        fixedAmount: 45_000_000,
+        defaultDescription: 'پرداخت بانکی اجاره',
+      },
+    ],
+  });
+
+  // One-click load with baseAmountIrr = 0 must populate exact initial debit/credit, default party & cost center!
+  const oneClickLoaded = applyVoucherTemplate(createdFixed.template, {
+    accounts: seed.accounts,
+    baseAmountIrr: 0,
+    date: '1405/05/01',
+  });
+  assert.equal(oneClickLoaded.isBalanced, true);
+  assert.equal(oneClickLoaded.totalDebit, 45_000_000);
+  assert.equal(oneClickLoaded.totalCredit, 45_000_000);
+  assert.equal(oneClickLoaded.lines[0].partyId, seed.parties[0].id);
+  assert.equal(oneClickLoaded.lines[0].costCenterId, seed.costCenters[2].id);
+  assert.match(oneClickLoaded.description, /مرداد 1405/);
+
+  // Edit existing custom template preserves ID & updates initial values
+  const edited = upsertCustomVoucherTemplate({
+    id: createdFixed.template.id,
+    name: 'اجاره ثابت ماهانه انبار شادآباد (اصلاح‌شده)',
+    category: 'general_expenses',
+    voucherType: 'general',
+    descriptionTemplate: 'پرداخت اجاره جدید انبار دوره {month}',
+    lines: [
+      {
+        accountCode: '80201',
+        fallbackTitle: 'اجاره دفتر، انبار شادآباد و قبوض',
+        side: 'debit',
+        formula: 'fixed',
+        fixedAmount: 55_000_000,
+        defaultDescription: 'اجاره جدید',
+      },
+      {
+        accountCode: '10201',
+        fallbackTitle: 'بانک ملت — حساب جاری شرکتی',
+        side: 'credit',
+        formula: 'fixed',
+        fixedAmount: 55_000_000,
+        defaultDescription: 'پرداخت بانکی',
+      },
+    ],
+  });
+  assert.equal(edited.template.id, createdFixed.template.id);
+  assert.equal(edited.templates.length, 1);
+  assert.equal(loadCustomVoucherTemplates()[0].lines[0].fixedAmount, 55_000_000);
+
+  // Reject unbalanced fixed initial amounts
+  assert.throws(
+    () =>
+      upsertCustomVoucherTemplate({
+        name: 'الگوی ناتراز نامعتبر',
+        category: 'general_expenses',
+        voucherType: 'general',
+        descriptionTemplate: 'تست خطا',
+        lines: [
+          { accountCode: '80201', fallbackTitle: 'هزینه', side: 'debit', formula: 'fixed', fixedAmount: 50_000_000, defaultDescription: '' },
+          { accountCode: '10201', fallbackTitle: 'بانک', side: 'credit', formula: 'fixed', fixedAmount: 40_000_000, defaultDescription: '' },
+        ],
+      }),
+    /تراز نیستند/
+  );
+
+  // Duplicate system template into editable custom template & then delete
+  const cloned = duplicateTemplateAsCustom(salesVatTpl);
+  assert.equal(cloned.template.isSystem, false);
+  assert.equal(cloned.templates.length, 2);
+  const afterDelete = deleteCustomVoucherTemplate(cloned.template.id);
+  assert.equal(afterDelete.length, 1);
+  console.log('✓ 6. Templates Manager CRUD (create, edit, duplicate, delete), initial values one-click load & balance guard passed');
 
   console.log('\nALL SMART VOUCHER TEMPLATES TESTS PASSED ✅');
 }

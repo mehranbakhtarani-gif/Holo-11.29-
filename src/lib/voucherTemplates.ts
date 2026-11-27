@@ -32,6 +32,8 @@ export interface VoucherTemplateLineDef {
   fixedAmount?: number;
   defaultDescription: string;
   requiresParty?: boolean;
+  defaultPartyId?: string;
+  defaultPartyName?: string;
   applyCostCenter?: boolean;
   defaultCostCenterId?: string;
 }
@@ -48,7 +50,21 @@ export interface VoucherTemplate {
   quickAmountLabel?: string;
   lines: VoucherTemplateLineDef[];
   createdAt?: string;
+  updatedAt?: string;
 }
+
+export interface VoucherTemplateDraftInput {
+  id?: string;
+  name: string;
+  category: VoucherTemplateCategory;
+  voucherType: VoucherType;
+  descriptionTemplate: string;
+  hint?: string;
+  quickAmountLabel?: string;
+  lines: VoucherTemplateLineDef[];
+}
+
+export const VOUCHER_TEMPLATES_CHANGED_EVENT = 'holoo:voucher-templates-changed';
 
 export interface ApplyVoucherTemplateParams {
   accounts: Account[];
@@ -583,9 +599,15 @@ export function applyVoucherTemplate(
       credit: def.side === 'credit' ? amount : 0,
     };
 
-    if (def.requiresParty && params.party) {
-      line.partyId = params.party.id;
-      line.partyName = params.party.name;
+    if (params.party && (def.requiresParty || !def.defaultPartyId)) {
+      if (def.requiresParty) {
+        line.partyId = params.party.id;
+        line.partyName = params.party.name;
+      }
+    }
+    if (!line.partyId && def.defaultPartyId) {
+      line.partyId = def.defaultPartyId;
+      line.partyName = def.defaultPartyName || '';
     }
 
     const effectiveCostCenterId = def.defaultCostCenterId || (def.applyCostCenter ? params.costCenterId : undefined);
@@ -688,6 +710,7 @@ export function createCustomTemplateFromLines(input: {
       ...(formula === 'fixed' ? { fixedAmount: amount } : {}),
       defaultDescription: l.description?.trim() || input.description.trim() || cleanName,
       requiresParty: Boolean(l.partyId || l.accountCode.startsWith('104') || l.accountCode.startsWith('301')),
+      ...(l.partyId ? { defaultPartyId: l.partyId, defaultPartyName: l.partyName || '' } : {}),
       ...(l.costCenterId ? { defaultCostCenterId: l.costCenterId, applyCostCenter: true } : {}),
     };
   });
@@ -706,6 +729,126 @@ export function createCustomTemplateFromLines(input: {
     lines: lineDefs,
     createdAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Validates and creates or updates a custom voucher template with default accounts,
+ * optional default parties/cost centers, and either fixed initial amounts or dynamic formulas.
+ */
+export function upsertCustomVoucherTemplate(input: VoucherTemplateDraftInput): {
+  template: VoucherTemplate;
+  templates: VoucherTemplate[];
+} {
+  const cleanName = input.name.trim();
+  if (cleanName.length < 2) {
+    throw new Error('نام الگو باید حداقل ۲ کاراکتر باشد.');
+  }
+  const cleanLines = input.lines
+    .filter((l) => l && typeof l.accountCode === 'string' && l.accountCode.trim().length > 0)
+    .map((l): VoucherTemplateLineDef => {
+      const formula: VoucherTemplateFormula = l.formula || 'fixed';
+      const fixedAmount =
+        formula === 'fixed' ? Math.max(0, toExactIrr(l.fixedAmount ?? 0)) : undefined;
+      const percentage =
+        formula === 'percentage'
+          ? Math.max(0, Math.min(1000, Number(l.percentage) || 0))
+          : undefined;
+      return {
+        accountCode: l.accountCode.trim(),
+        fallbackTitle: l.fallbackTitle?.trim() || 'حساب معین',
+        side: l.side === 'credit' ? 'credit' : 'debit',
+        formula,
+        ...(fixedAmount !== undefined ? { fixedAmount } : {}),
+        ...(percentage !== undefined ? { percentage } : {}),
+        defaultDescription: l.defaultDescription?.trim() || '',
+        requiresParty: Boolean(l.requiresParty || l.defaultPartyId),
+        ...(l.defaultPartyId
+          ? { defaultPartyId: l.defaultPartyId, defaultPartyName: l.defaultPartyName || '' }
+          : {}),
+        ...(l.defaultCostCenterId
+          ? { defaultCostCenterId: l.defaultCostCenterId, applyCostCenter: true }
+          : l.applyCostCenter
+            ? { applyCostCenter: true }
+            : {}),
+      };
+    });
+
+  if (cleanLines.length < 2) {
+    throw new Error('هر الگوی سند دوبل باید حداقل ۲ آرتیکل معتبر داشته باشد.');
+  }
+
+  const hasDebitLine = cleanLines.some((l) => l.side === 'debit');
+  const hasCreditLine = cleanLines.some((l) => l.side === 'credit');
+  if (!hasDebitLine || !hasCreditLine) {
+    throw new Error('الگو باید حداقل یک آرتیکل بدهکار و یک آرتیکل بستانکار داشته باشد.');
+  }
+
+  // If all lines use fixed initial amounts and any amount > 0, enforce double-entry balance
+  const allFixed = cleanLines.every((l) => l.formula === 'fixed');
+  if (allFixed) {
+    const fixedDebit = sumIrr(
+      cleanLines.map((l) => (l.side === 'debit' ? Math.max(0, toExactIrr(l.fixedAmount ?? 0)) : 0))
+    );
+    const fixedCredit = sumIrr(
+      cleanLines.map((l) => (l.side === 'credit' ? Math.max(0, toExactIrr(l.fixedAmount ?? 0)) : 0))
+    );
+    if ((fixedDebit > 0 || fixedCredit > 0) && fixedDebit !== fixedCredit) {
+      throw new Error(
+        `مقادیر اولیه ثابت تراز نیستند (جمع بدهکار: ${fixedDebit.toLocaleString()}، جمع بستانکار: ${fixedCredit.toLocaleString()}). از دکمه تراز خودکار استفاده کنید.`
+      );
+    }
+  }
+
+  const existingList = loadCustomVoucherTemplates();
+  const prev = input.id ? existingList.find((t) => t.id === input.id) : undefined;
+  const nowIso = new Date().toISOString();
+  const summaryCodes = Array.from(new Set(cleanLines.map((l) => l.accountCode)))
+    .slice(0, 4)
+    .join('، ');
+  const supportsQuickAmount = cleanLines.some((l) => l.formula !== 'fixed');
+
+  const template: VoucherTemplate = {
+    id:
+      prev?.id ||
+      `usr_tpl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    name: cleanName.slice(0, 80),
+    category: input.category || 'custom',
+    voucherType: input.voucherType || 'general',
+    descriptionTemplate: input.descriptionTemplate.trim() || cleanName,
+    hint: input.hint?.trim() || `الگوی شخصی · سرفصل‌ها: ${summaryCodes}`,
+    isSystem: false,
+    supportsQuickAmount,
+    quickAmountLabel: input.quickAmountLabel?.trim() || 'مبلغ پایه سند (ریال)',
+    lines: cleanLines,
+    createdAt: prev?.createdAt || nowIso,
+    updatedAt: nowIso,
+  };
+
+  const nextList = prev
+    ? existingList.map((t) => (t.id === prev.id ? template : t))
+    : [template, ...existingList];
+  saveCustomVoucherTemplates(nextList);
+
+  return { template, templates: nextList };
+}
+
+/**
+ * Clones any system or custom template into a brand-new editable custom template.
+ */
+export function duplicateTemplateAsCustom(
+  source: VoucherTemplate,
+  customName?: string
+): { template: VoucherTemplate; templates: VoucherTemplate[] } {
+  const clonedName = (customName?.trim() || `${source.name} (نسخه شخصی)`).slice(0, 80);
+  return upsertCustomVoucherTemplate({
+    name: clonedName,
+    category: source.category,
+    voucherType: source.voucherType,
+    descriptionTemplate: source.descriptionTemplate,
+    hint: source.hint,
+    quickAmountLabel: source.quickAmountLabel,
+    lines: source.lines.map((l) => ({ ...l })),
+  });
 }
 
 // ==================== OFFLINE-FIRST LOCAL STORAGE PERSISTENCE ====================
@@ -741,6 +884,9 @@ export function saveCustomVoucherTemplates(templates: VoucherTemplate[]): void {
     if (typeof localStorage === 'undefined') return;
     const onlyCustom = templates.filter((t) => !t.isSystem);
     localStorage.setItem(CUSTOM_TEMPLATES_STORAGE_KEY, JSON.stringify(onlyCustom));
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent(VOUCHER_TEMPLATES_CHANGED_EVENT));
+    }
   } catch {
     // Ignore quota errors cleanly in restricted browser modes
   }
