@@ -2760,7 +2760,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       }
 
-      if (user && !skipVoucher && (typeof navigator === 'undefined' || navigator.onLine)) {
+      if (user && !skipVoucher && typeof navigator !== 'undefined' && !navigator.onLine) {
+        throw new Error('برای ثبت اتمیک چک و سند حسابداری مرتبط، اتصال اینترنت لازم است. هیچ تغییری اعمال نشد.');
+      }
+
+      if (user && !skipVoucher) {
         const chequeRef = doc(db, 'cheques', id);
         const voucherId = `chqv_${sha256HexSync(id).slice(0, 32)}`;
         const voucherRef = doc(db, 'vouchers', voucherId);
