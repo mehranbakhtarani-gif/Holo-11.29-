@@ -2456,32 +2456,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         updatedAt: serverTimestamp(),
       });
 
-      const commitOfflineBulkBatch = async () => {
-        const batch = writeBatch(db);
-        for (const { product, delta } of plannedEntries) {
-          batch.update(doc(db, 'products', product.id), {
-            stock: delta.stock,
-            buyPrice: delta.buyPrice,
-            costLayers: delta.costLayers,
-            inventoryValueIrr: delta.inventoryValueIrr,
-            _version: (product._version ?? 1) + 1,
-            updatedByDevice: deviceId.slice(0, 64),
-            updatedAt: serverTimestamp(),
-          });
-        }
-        if (plannedVoucher) {
-          batch.set(doc(db, 'vouchers', plannedVoucher.id), serializeBulkVoucher(plannedVoucher));
-        }
-        await batch.commit();
-      };
-
       // Phase 2: Single Atomic Commit (all products + counter + consolidated voucher together)
       if (user) {
-        const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
-        if (isOfflineNow) {
-          await commitOfflineBulkBatch();
-        } else {
-          try {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          throw new Error('انبارگردانی ابری به کنترل نسخه و موجودی زنده Firestore نیاز دارد؛ در حالت آفلاین هیچ تغییری اعمال نشد. پس از اتصال مجدد دوباره اجرا کنید.');
+        }
+        try {
             await runTransaction(db, async (tx) => {
               const counterRef = doc(db, 'counters', user.uid);
               const counterSnap = await tx.get(counterRef);
@@ -2518,7 +2498,16 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
               plannedEntries.forEach(({ product, delta }, idx) => {
                 const snap = productSnaps[idx];
-                const liveVer = snap.exists() ? Number(snap.data()._version) || 1 : product._version ?? 1;
+                if (!snap.exists()) {
+                  throw new Error(`کالای ${product.id} در فضای ابری پیدا نشد؛ انبارگردانی لغو شد.`);
+                }
+                if (snap.data().ownerId !== ownerId) {
+                  throw new Error(`مالکیت کالای ${product.id} با فضای کاری فعلی مطابقت ندارد.`);
+                }
+                const liveVer = Number(snap.data()._version) || 1;
+                if (liveVer !== (delta.prevVersion ?? product._version ?? 1)) {
+                  throw new Error(`موجودی کالای ${product.id} هم‌زمان تغییر کرده است؛ انبارگردانی را با اطلاعات تازه دوباره اجرا کنید.`);
+                }
                 tx.update(doc(db, 'products', product.id), {
                   stock: delta.stock,
                   buyPrice: delta.buyPrice,
@@ -2530,14 +2519,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 });
               });
             });
-          } catch (err) {
-            if (isFirestoreOfflineError(err)) {
-              await commitOfflineBulkBatch();
-            } else {
-              handleFirestoreError(err, OperationType.UPDATE, `atomic-bulk-stocktaking/${batchRefId}`);
-              return;
-            }
-          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `atomic-bulk-stocktaking/${batchRefId}`);
+          throw err;
         }
       } else {
         const deltaMap = new Map(plannedEntries.map((e) => [e.product.id, e.delta]));
