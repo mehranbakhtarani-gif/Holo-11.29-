@@ -494,6 +494,13 @@ export const HOLOO_MENU_TREE: MenuGroup[] = [
         keywords: 'طراحی فاکتور قالب چاپ هلو لوگو پاورقی یک واحدی دو واحدی سه واحدی invoice designer print',
       },
       {
+        key: 'tool-ui-theme',
+        label: 'شخصی‌سازی رنگ‌بندی و تم محیط',
+        module: 'settings',
+        intent: 'ui-theme',
+        keywords: 'رنگ رنگبندی تم پوسته برند accent پالت ظاهر محیط کاربری theme customizer color primary',
+      },
+      {
         key: 'tool-notifications',
         label: 'اعلان‌های بومی (PWA) و یادآوری چک',
         module: 'settings',

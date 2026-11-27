@@ -420,7 +420,11 @@ export function useLocalFirstMeshSync() {
               snapshotJson
             );
 
-            if (!decision.autoResolved && conflictSummary.hasConflicts) {
+            const hasFinancialDocConflict = conflictSummary.previews.some(
+              (p) => p.collection === 'vouchers' || p.collection === 'invoices' || p.collection === 'cheques'
+            );
+
+            if ((!decision.autoResolved || hasFinancialDocConflict) && conflictSummary.hasConflicts) {
               setPendingMeshConflict({
                 id: `mesh_conflict_${Date.now()}`,
                 source: 'p2p_mesh',
@@ -436,7 +440,7 @@ export function useLocalFirstMeshSync() {
               });
               playWarningTone();
               showToast(
-                `تداخل در ${toPersianDigits(conflictSummary.totalConflictingDocs)} سند حسابداری با «${peerLabel}» شناسایی شد؛ لطفاً نسخه نهایی را انتخاب کنید.`
+                `تداخل در ${toPersianDigits(conflictSummary.totalConflictingDocs)} سند حسابداری با «${peerLabel}» شناسایی شد؛ برای جلوگیری از بازنویسی خودکار، لطفاً نسخه نهایی را انتخاب کنید.`
               );
               await recordSyncEvent({
                 eventId: `mevt_conflict_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -456,16 +460,16 @@ export function useLocalFirstMeshSync() {
               return [];
             }
 
-            if (decision.autoResolved && decision.choice === 'keep_local') {
+            if (decision.autoResolved && !hasFinancialDocConflict && decision.choice === 'keep_local') {
               anyChanged = false;
-              autoConflictNote = `تداخل با «${peerLabel}» به‌صورت خودکار حل شد (پیش‌فرض ذخیره‌شده: حفظ آخرین تغییر محلی).`;
+              autoConflictNote = `تداخل غیرمالی با «${peerLabel}» طبق تنظیم پیش‌فرض (حفظ محلی) حل شد.`;
               logActivity('همگام‌سازی P2P (Mesh)', 'حل خودکار تداخل (حفظ محلی)', autoConflictNote);
               playSuccessChime();
               showToast(autoConflictNote);
-            } else if (decision.autoResolved && decision.choice === 'restore_remote') {
+            } else if (decision.autoResolved && !hasFinancialDocConflict && decision.choice === 'restore_remote') {
               currentMergedJson = snapshotJson;
               anyChanged = true;
-              autoConflictNote = `تداخل با «${peerLabel}» به‌صورت خودکار حل شد (پیش‌فرض ذخیره‌شده: بازگردانی نسخه همتا).`;
+              autoConflictNote = `تداخل غیرمالی با «${peerLabel}» طبق تنظیم پیش‌فرض (نسخه همتا) حل شد.`;
             }
           }
 

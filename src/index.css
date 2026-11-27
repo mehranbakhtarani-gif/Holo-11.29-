@@ -51,7 +51,7 @@
 
   /* High-visibility accessible keyboard focus ring for rapid accounting data entry */
   :is(button, a, input, select, textarea, [tabindex]):focus-visible {
-    outline: 2px solid #6366f1;
+    outline: 2px solid var(--apex-primary);
     outline-offset: 2px;
   }
 
@@ -186,7 +186,7 @@
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(15, 118, 110, 0.55);
+  background: color-mix(in srgb, var(--apex-primary) 55%, transparent);
 }
 
 /* Respect user motion preferences strictly */

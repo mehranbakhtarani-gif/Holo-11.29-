@@ -1,4 +1,9 @@
 import type { CloudBackupMeta } from './firebaseCloudBackup';
+import {
+  buildStandaloneLocalDiagnostics,
+  detectOptionalBackendServer,
+  isJsonHttpResponse,
+} from './staticRuntimeGuard';
 
 export type ConflictResolutionPolicy = 'last_write_wins' | 'first_write_wins';
 
@@ -245,11 +250,17 @@ export function saveSupabaseWorkspaceId(workspaceId: string): void {
 export async function checkSupabaseWorkspaceState(
   workspaceId: string
 ): Promise<{ ok: boolean; initialized?: boolean; error?: string }> {
+  if (!(await detectOptionalBackendServer())) {
+    return { ok: false, error: 'نسخه مستقل بدون سرور فعال است (نیازی به سرور بک‌اند نیست).' };
+  }
   try {
     const resp = await fetch(
       supabaseWorkerUrl(`/api/supabase/auth/state?workspaceId=${encodeURIComponent(workspaceId)}`),
       { method: 'GET', cache: 'no-store', credentials: 'include' }
     );
+    if (!isJsonHttpResponse(resp)) {
+      return { ok: false, error: 'نسخه مستقل بدون سرور فعال است.' };
+    }
     const json = (await resp.json().catch(() => ({}))) as {
       initialized?: boolean;
       error?: string;
@@ -262,6 +273,9 @@ export async function checkSupabaseWorkspaceState(
 }
 
 export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeResponse> {
+  if (!(await detectOptionalBackendServer())) {
+    return { authenticated: false, workspaceId: null, serverRevision: 0, updatedAt: null, backupCount: 0 };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/me'), {
       method: 'GET',
@@ -269,7 +283,7 @@ export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeRespons
       credentials: 'include',
       headers: buildApiHeaders(),
     });
-    if (!resp.ok) {
+    if (!resp.ok || !isJsonHttpResponse(resp)) {
       return { authenticated: false, workspaceId: null, serverRevision: 0, updatedAt: null, backupCount: 0 };
     }
     const json = (await resp.json().catch(() => ({}))) as Partial<SupabaseSessionMeResponse>;
@@ -287,6 +301,9 @@ export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeRespons
 }
 
 export async function logoutSupabaseWorkspaceAuth(): Promise<boolean> {
+  if (!(await detectOptionalBackendServer())) {
+    return true;
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/logout'), {
       method: 'POST',
@@ -303,6 +320,13 @@ export async function setupSupabaseWorkspaceAuth(
   workspaceId: string,
   passcode: string
 ): Promise<SupabaseWorkspaceAuthResult> {
+  if (!(await detectOptionalBackendServer())) {
+    return {
+      ok: false,
+      error: 'برنامه در حالت مستقل استاتیک (بدون server.ts) اجرا می‌شود؛ همگام‌سازی محلی و P2P فعال است.',
+      code: 'STANDALONE_STATIC_PWA',
+    };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/setup'), {
       method: 'POST',
@@ -339,6 +363,13 @@ export async function loginSupabaseWorkspaceAuth(
   workspaceId: string,
   passcode: string
 ): Promise<SupabaseWorkspaceAuthResult> {
+  if (!(await detectOptionalBackendServer())) {
+    return {
+      ok: false,
+      error: 'برنامه در حالت مستقل استاتیک (بدون server.ts) اجرا می‌شود؛ همگام‌سازی محلی و P2P فعال است.',
+      code: 'STANDALONE_STATIC_PWA',
+    };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/login'), {
       method: 'POST',
@@ -374,6 +405,9 @@ export async function loginSupabaseWorkspaceAuth(
 export async function fetchServerDiagnostics(
   token?: string | null
 ): Promise<ServerDiagnosticsResponse | null> {
+  if (!(await detectOptionalBackendServer())) {
+    return buildStandaloneLocalDiagnostics() as unknown as ServerDiagnosticsResponse;
+  }
   try {
     const resp = await fetch('/api/server/diagnostics', {
       method: 'GET',
@@ -381,16 +415,42 @@ export async function fetchServerDiagnostics(
       credentials: 'include',
       headers: buildApiHeaders(token),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok || !isJsonHttpResponse(resp)) {
+      return buildStandaloneLocalDiagnostics() as unknown as ServerDiagnosticsResponse;
+    }
     return (await resp.json()) as ServerDiagnosticsResponse;
   } catch {
-    return null;
+    return buildStandaloneLocalDiagnostics() as unknown as ServerDiagnosticsResponse;
   }
 }
 
 export async function runLiveServerAndSupabaseTest(
   token?: string | null
 ): Promise<LiveServerTestResult> {
+  if (!(await detectOptionalBackendServer())) {
+    return {
+      ok: true,
+      testedAt: new Date().toISOString(),
+      totalLatencyMs: 0,
+      projectRef: null,
+      serverRevision: 0,
+      backupCount: 0,
+      authSource: 'disconnected',
+      keyRole: 'standalone_local',
+      networkReachable: typeof navigator !== 'undefined' ? navigator.onLine : true,
+      rlsWriteReady: false,
+      remediations: [],
+      checks: [
+        {
+          id: 'standalone_static_pwa',
+          title: 'حالت مستقل استاتیک (بدون نیاز به سرور)',
+          ok: true,
+          latencyMs: 0,
+          detail: 'کل هسته حسابداری، IndexedDB و پشتیبان رمزنگاری‌شده بدون نیاز به server.ts فعال است.',
+        },
+      ],
+    };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/test'), {
       method: 'POST',
@@ -550,12 +610,25 @@ export function saveLastSupabaseSyncAt(shamsiStamp: string | null): void {
 }
 
 export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
+  if (!(await detectOptionalBackendServer())) {
+    return {
+      configured: false,
+      connected: false,
+      tableReady: false,
+      keyRole: 'standalone_local',
+      projectRef: null,
+      tableName: 'holoo_apex_workspaces',
+      latencyMs: 0,
+      errorCode: 'STANDALONE_STATIC_PWA',
+      checkedAt: new Date().toISOString(),
+    };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/status'), {
       method: 'GET',
       cache: 'no-store',
     });
-    if (!resp.ok) {
+    if (!resp.ok || !isJsonHttpResponse(resp)) {
       return {
         configured: false,
         connected: false,
@@ -563,7 +636,7 @@ export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
         projectRef: null,
         tableName: 'holoo_apex_workspaces',
         latencyMs: null,
-        errorCode: `HTTP_${resp.status}`,
+        errorCode: !isJsonHttpResponse(resp) ? 'STANDALONE_STATIC_PWA' : `HTTP_${resp.status}`,
         checkedAt: new Date().toISOString(),
       };
     }
@@ -589,6 +662,9 @@ export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
 export async function fetchSupabaseBackups(
   idToken?: string | null
 ): Promise<SupabaseBackupsListResponse> {
+  if (!(await detectOptionalBackendServer())) {
+    return { ok: true, maxBackups: 3, currentRevision: 0, backups: [] };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/backups'), {
       method: 'GET',
@@ -628,6 +704,9 @@ export async function deleteSupabaseBackup(
   idToken: string | null | undefined,
   backupId: string
 ): Promise<{ ok: boolean; backups?: CloudBackupMeta[]; error?: string }> {
+  if (!(await detectOptionalBackendServer())) {
+    return { ok: false, error: 'در حالت مستقل بدون سرور، پشتیبان‌های ابری Supabase غیرفعال هستند.' };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl(`/api/supabase/backups?backupId=${encodeURIComponent(backupId)}`), {
       method: 'DELETE',
@@ -659,6 +738,9 @@ export async function resetSupabaseCloudStorage(
   error?: string;
   code?: string;
 }> {
+  if (!(await detectOptionalBackendServer())) {
+    return { ok: true, deletedWorkspace: false, deletedBackups: 0, deletedAuditLogs: false };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/reset'), {
       method: 'POST',
@@ -714,6 +796,13 @@ export async function pushSnapshotToSupabase(params: {
   productCount: number;
   snapshotJson: string;
 }): Promise<{ ok: boolean; data?: SupabaseSyncResponse; error?: string; code?: string }> {
+  if (!(await detectOptionalBackendServer())) {
+    return {
+      ok: false,
+      error: 'برنامه در حالت مستقل بدون سرور اجرا می‌شود؛ اطلاعات روی حافظه محلی دستگاه ذخیره شد.',
+      code: 'STANDALONE_STATIC_PWA',
+    };
+  }
   try {
     const resp = await fetch(supabaseWorkerUrl('/api/supabase/sync'), {
       method: 'POST',

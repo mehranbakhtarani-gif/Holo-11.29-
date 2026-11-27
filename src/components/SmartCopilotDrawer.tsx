@@ -480,7 +480,10 @@ export const SmartCopilotDrawer: React.FC<{
     scrollToBottom();
 
     try {
-      if (activeMode === 'online_gemini') {
+      const canUseServerAi =
+        activeMode === 'online_gemini' ? await (await import('../lib/staticRuntimeGuard')).detectOptionalBackendServer() : false;
+
+      if (canUseServerAi) {
         const enrichedSnapshot = {
           ...snapshot,
           pendingApprovals: {
@@ -521,16 +524,25 @@ export const SmartCopilotDrawer: React.FC<{
           }>;
         };
 
-        if (!resp.ok) {
+        if (!resp.ok || !payload.reply) {
+          // Seamless internal fallback without error dead-end
+          const localData = localCopilotRespond({ message: trimmed, snapshot });
+          const localExecActions = inferLocalExecutableActions(
+            trimmed,
+            safeDraftVoucherIds.length,
+            topDebtorReminders.length
+          );
           setMessages((prev) => [
             ...prev,
             {
-              id: `e-${Date.now()}`,
+              id: `m-${Date.now()}`,
               role: 'model',
-              text:
-                payload.error ||
-                'ارتباط با موتور هوش مصنوعی آنلاین برقرار نشد. می‌توانید از دکمه «موتور بومی (آفلاین)» در بالای پنجره استفاده کنید.',
-              isError: true,
+              text: localData.reply || 'پاسخی تولید نشد.',
+              engineLabel: 'موتور بومی مستقل (بدون سرور)',
+              suggestedActions: Array.isArray(localData.suggestedActions)
+                ? localData.suggestedActions
+                : undefined,
+              executableActions: localExecActions.length > 0 ? localExecActions : undefined,
             },
           ]);
           return;

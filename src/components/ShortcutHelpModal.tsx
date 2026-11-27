@@ -522,8 +522,8 @@ export const CommandPaletteModal: React.FC<{
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] bg-slate-950/60 p-4 no-print">
-      <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xl">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center pt-[6vh] sm:pt-[10vh] bg-slate-950/60 p-3 sm:p-4 no-print">
+      <div className="w-full max-w-2xl max-h-[88dvh] flex flex-col rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xl">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-800">
           <Search className="w-4 h-4 text-teal-600 shrink-0" />
           <input
@@ -611,27 +611,77 @@ export const QuickCalculatorModal: React.FC<{ open: boolean; onClose: () => void
 
   if (!open) return null;
 
+  const safeEvaluateArithmetic = (raw: string): number | null => {
+    const cleaned = raw.replace(/[^0-9+\-*/().% ]/g, '').replace(/\s+/g, '');
+    if (!cleaned) return 0;
+    let pos = 0;
+
+    const parseExpression = (): number => {
+      let left = parseTerm();
+      while (pos < cleaned.length && (cleaned[pos] === '+' || cleaned[pos] === '-')) {
+        const op = cleaned[pos++];
+        const right = parseTerm();
+        left = op === '+' ? left + right : left - right;
+      }
+      return left;
+    };
+
+    const parseTerm = (): number => {
+      let left = parseFactor();
+      while (pos < cleaned.length && (cleaned[pos] === '*' || cleaned[pos] === '/' || cleaned[pos] === '%')) {
+        const op = cleaned[pos++];
+        const right = parseFactor();
+        if (op === '*') left *= right;
+        else if (op === '/') left = right === 0 ? NaN : left / right;
+        else left = right === 0 ? NaN : left % right;
+      }
+      return left;
+    };
+
+    const parseFactor = (): number => {
+      if (cleaned[pos] === '+') {
+        pos++;
+        return parseFactor();
+      }
+      if (cleaned[pos] === '-') {
+        pos++;
+        return -parseFactor();
+      }
+      if (cleaned[pos] === '(') {
+        pos++;
+        const val = parseExpression();
+        if (cleaned[pos] !== ')') return NaN;
+        pos++;
+        return val;
+      }
+      const start = pos;
+      let dotCount = 0;
+      while (pos < cleaned.length && ((cleaned[pos] >= '0' && cleaned[pos] <= '9') || cleaned[pos] === '.')) {
+        if (cleaned[pos] === '.') dotCount++;
+        pos++;
+      }
+      if (start === pos || dotCount > 1) return NaN;
+      return Number(cleaned.slice(start, pos));
+    };
+
+    const val = parseExpression();
+    if (pos !== cleaned.length || !Number.isFinite(val)) return null;
+    return val;
+  };
+
   const evalExpr = (input: string) => {
-    try {
-      const cleaned = input.replace(/[^0-9+\-*/().% ]/g, '');
-      if (!cleaned.trim()) {
-        setResult('0');
-        return;
-      }
-      // Safe arithmetic evaluation using Function on strictly whitelisted math characters
-      const val = Function(`"use strict"; return (${cleaned});`)();
-      if (typeof val === 'number' && Number.isFinite(val)) {
-        setResult(Math.round(val * 100) / 100 + '');
-      }
-    } catch {
+    const val = safeEvaluateArithmetic(input);
+    if (val === null) {
       setResult('خطا');
+      return;
     }
+    setResult(String(Math.round(val * 100) / 100));
   };
 
   const keys = ['7', '8', '9', '/', '4', '5', '6', '*', '1', '2', '3', '-', '0', '000', '.', '+'];
 
   return (
-    <div className="fixed bottom-6 left-6 z-50 w-72 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden no-print">
+    <div className="fixed bottom-24 lg:bottom-6 left-3 sm:left-6 z-[65] w-[min(18rem,calc(100vw-1.5rem))] max-h-[80dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl no-print">
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900 text-white">
         <div className="flex items-center gap-2 text-xs font-semibold">
           <Calculator className="w-4 h-4 text-teal-400" />

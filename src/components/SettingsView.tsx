@@ -43,6 +43,7 @@ import { PWAInstallButton } from './PWAInstallButton';
 import { NativeNotificationsPanel } from './NativeNotificationsPanel';
 import { LocalStorageMeshSettingsPanel } from './LocalStorageMeshSettingsPanel';
 import { OfflineFirstControlPanel } from './OfflineFirstControlPanel';
+import { UiThemeCustomizerPanel } from './UiThemeCustomizerPanel';
 import { InvoiceTemplateDesigner } from './InvoiceTemplateDesigner';
 import { SupabaseAutoDiagnosticPanel } from './SupabaseAutoDiagnosticPanel';
 import { SystemResetCenter } from './SystemResetCenter';
@@ -130,6 +131,7 @@ export const SettingsView: React.FC<{
   const [currencyUnit, setCurrencyUnit] = useState(profile.currencyUnit);
   const [deviceNameInput, setDeviceNameInput] = useState(deviceLabel);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uiThemeRef = useRef<HTMLDivElement | null>(null);
   const offlineFirstRef = useRef<HTMLDivElement | null>(null);
   const localFolderMeshRef = useRef<HTMLDivElement | null>(null);
   const cloudRef = useRef<HTMLDivElement | null>(null);
@@ -153,6 +155,13 @@ export const SettingsView: React.FC<{
 
   const settingsDirectory = useMemo(
     () => [
+      {
+        id: 'ui-theme',
+        title: 'شخصی‌سازی رنگ‌بندی محیط کاربری (برند و Accent)',
+        keywords:
+          'رنگ رنگبندی تم پوسته برند accent primary پالت ظاهر محیط کاربری localStorage theme customizer color',
+        ref: uiThemeRef,
+      },
       {
         id: 'offline-first',
         title: 'مرکز کنترل آفلاین-محور (Local / Hybrid / Online)، پشتیبان رمزنگاری‌شده و قفل محلی',
@@ -292,6 +301,15 @@ export const SettingsView: React.FC<{
         auditLogRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 60);
       clearIntent?.();
+    } else if (initialIntent === 'ui-theme') {
+      setTimeout(() => {
+        uiThemeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setHighlightedSection('ui-theme');
+      }, 60);
+      setTimeout(() => {
+        setHighlightedSection((curr) => (curr === 'ui-theme' ? null : curr));
+      }, 2400);
+      clearIntent?.();
     } else if (initialIntent === 'notifications') {
       setTimeout(() => {
         notificationsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -421,6 +439,11 @@ export const SettingsView: React.FC<{
             ))
           )}
         </div>
+      </div>
+
+      {/* UI Theme Customizer (Brand Primary & Semantic Accents persisted in localStorage) */}
+      <div ref={uiThemeRef}>
+        <UiThemeCustomizerPanel highlighted={highlightedSection === 'ui-theme'} />
       </div>
 
       {/* Standalone Offline-First PWA Control Center (3 Modes, AES-256-GCM Backups, PBKDF2 Auth, Storage & Safe Updates) */}

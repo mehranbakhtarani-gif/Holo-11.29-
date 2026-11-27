@@ -32,8 +32,8 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
       </button>
 
       {showGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 space-y-5">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-3 sm:p-4">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
                 نصب نسخه دسکتاپ و موبایل (PWA) هلو Apex
@@ -87,7 +87,7 @@ export const OfflineIndicator: React.FC<{ onOpenHealth?: () => void }> = ({ onOp
   if (isOnline) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-wrap items-center gap-2.5 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white shadow-lg no-print">
+    <div className="fixed bottom-24 lg:bottom-4 right-3 left-3 sm:left-auto sm:right-4 sm:max-w-md z-[60] flex flex-wrap items-center gap-2.5 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white shadow-lg no-print">
       <WifiOff className="w-4 h-4 shrink-0" />
       <span>حالت کاملاً آفلاین فعال است — تمام ثبت‌ها روی حافظه دستگاه ذخیره می‌شوند.</span>
       {onOpenHealth && (
@@ -135,7 +135,7 @@ export const PwaUpdateBanner: React.FC<{
   };
 
   return (
-    <div className="fixed bottom-4 left-4 z-50 flex flex-wrap items-center gap-3 rounded-xl bg-indigo-700 px-4 py-2.5 text-xs font-semibold text-white shadow-xl border border-indigo-400/30 no-print">
+    <div className="fixed bottom-24 lg:bottom-4 right-3 left-3 sm:right-auto sm:left-4 sm:max-w-md z-[60] flex flex-wrap items-center gap-3 rounded-xl bg-indigo-700 px-4 py-2.5 text-xs font-semibold text-white shadow-xl border border-indigo-400/30 no-print">
       <span>نسخه جدید هلو Apex آماده نصب است (اطلاعات محلی محفوظ می‌ماند).</span>
       <button
         type="button"

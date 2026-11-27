@@ -648,8 +648,8 @@ export const PartiesView: React.FC<{ initialIntent?: string; clearIntent?: () =>
 
       {/* Printable Party Subsidiary Ledger Statement Modal */}
       {statementParty && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <div className="w-full max-w-4xl rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-800 p-6 space-y-5 print-container">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-4xl max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-800 p-4 sm:p-6 space-y-5 print-container">
             <div className="flex items-start justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
               <div>
                 <h3 className="text-base font-bold">

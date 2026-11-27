@@ -182,6 +182,15 @@ export const SmartVisionScannerModal: React.FC<SmartVisionScannerModalProps> = (
       const { base64, mimeType, previewUrl: url } = await compressImageIfNeeded(file);
       setPreviewUrl(url);
 
+      const { detectOptionalBackendServer, isJsonHttpResponse } = await import('../../lib/staticRuntimeGuard');
+      const hasBackend = await detectOptionalBackendServer();
+      if (!hasBackend) {
+        setErrorMsg(
+          'برنامه در حالت مستقل بدون سرور (Static PWA) اجرا می‌شود. تصویر پیش‌نمایش بارگذاری شد؛ می‌توانید فیلدهای زیر را مستقیم و کاملاً آفلاین تکمیل و ثبت کنید یا از ورود گروهی اکسل استفاده نمایید.'
+        );
+        return;
+      }
+
       const accountsHint = leafAccounts.slice(0, 24).map((a) => `${a.code}:${a.title}`);
       const resp = await fetch('/api/ai/vision-scan', {
         method: 'POST',
@@ -194,14 +203,16 @@ export const SmartVisionScannerModal: React.FC<SmartVisionScannerModalProps> = (
         }),
       });
 
-      const payload = (await resp.json().catch(() => ({}))) as {
+      const payload = (
+        isJsonHttpResponse(resp) ? await resp.json().catch(() => ({})) : {}
+      ) as {
         ok?: boolean;
         error?: string;
         extracted?: ExtractedVisionDocument;
       };
 
       if (!resp.ok || !payload.extracted) {
-        setErrorMsg(payload.error || 'استخراج هوشمند تصویر انجام نشد. لطفاً دوباره تلاش کنید.');
+        setErrorMsg(payload.error || 'استخراج هوشمند تصویر انجام نشد. می‌توانید اطلاعات سند را به صورت دستی ثبت کنید.');
         return;
       }
 
@@ -410,7 +421,7 @@ export const SmartVisionScannerModal: React.FC<SmartVisionScannerModalProps> = (
       aria-modal="true"
       aria-label="اسکنر هوشمند اسناد مالی (Vision OCR)"
     >
-      <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#151A24] border border-slate-200/80 dark:border-white/[0.08] shadow-2xl">
+      <div className="w-full max-w-3xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-white dark:bg-[#151A24] border border-slate-200/80 dark:border-white/[0.08] shadow-2xl">
         {/* Modal Header */}
         <div className="px-5 py-4 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 sticky top-0 bg-white/95 dark:bg-[#151A24]/95 backdrop-blur-md z-10">
           <div className="flex items-center gap-2.5 min-w-0">

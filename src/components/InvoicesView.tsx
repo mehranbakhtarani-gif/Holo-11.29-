@@ -2361,8 +2361,8 @@ export const InvoicesView: React.FC<{ initialIntent?: string; clearIntent?: () =
 
           {/* Authentic Holoo Apex 9.6 Automatic Financial Settlement Modal (F9) */}
           {showSettlementModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-4 overflow-y-auto">
-              <div className="w-full max-w-xl rounded-xl bg-white dark:bg-slate-900 border-2 border-teal-700/40 shadow-2xl overflow-hidden text-xs">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-3 sm:p-4 overflow-y-auto">
+              <div className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border-2 border-teal-700/40 shadow-2xl text-xs">
                 <div className="px-5 py-3 bg-slate-800 dark:bg-slate-950 text-white flex items-center justify-between">
                   <div className="flex items-center gap-2 font-bold text-sm">
                     <CreditCard className="w-4 h-4 text-teal-400" />

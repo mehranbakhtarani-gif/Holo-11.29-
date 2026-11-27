@@ -69,7 +69,7 @@ export const SyncConflictResolutionModal: React.FC<SyncConflictResolutionModalPr
       aria-modal="true"
       aria-labelledby="sync-conflict-modal-title"
     >
-      <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 border border-amber-300/80 dark:border-amber-700/60 shadow-2xl overflow-hidden text-right">
+      <div className="w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 border border-amber-300/80 dark:border-amber-700/60 shadow-2xl overflow-hidden text-right">
         {/* Header */}
         <div className="px-5 py-4 bg-amber-50/90 dark:bg-amber-950/40 border-b border-amber-200/80 dark:border-amber-800/60 flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">

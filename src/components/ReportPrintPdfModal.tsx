@@ -195,7 +195,7 @@ export const ReportPrintPdfModal: React.FC<ReportPrintPdfModalProps> = ({
       aria-modal="true"
       aria-label="خروجی PDF و چاپ استاندارد گزارش حسابداری"
     >
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-[1320px] max-h-[94vh] flex flex-col overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-[1320px] max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Modal Header */}
         <div className="px-4 sm:px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/80 dark:bg-slate-950/60 shrink-0">
           <div className="flex items-center gap-3 min-w-0">

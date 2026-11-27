@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { DualCloudSyncController } from '../hooks/useDualCloudSync';
 import type { SupabaseRemediationItem } from '../lib/dualCloudSync';
+import { detectOptionalBackendServer, isJsonHttpResponse } from '../lib/staticRuntimeGuard';
 import { toPersianDigits } from '../lib/format';
 
 const snappySpring = {
@@ -82,16 +83,19 @@ export const SupabaseAutoDiagnosticPanel: React.FC<SupabaseAutoDiagnosticPanelPr
       let httpStatus: number | null = null;
 
       try {
-        const resp = await fetch('/api/health', {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        httpStatus = resp.status;
-        expressReachable = resp.ok;
-        expressLatencyMs = Math.max(
-          1,
-          Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - started)
-        );
+        const hasBackend = await detectOptionalBackendServer();
+        if (hasBackend) {
+          const resp = await fetch('/api/health', {
+            method: 'GET',
+            cache: 'no-store',
+          });
+          httpStatus = resp.status;
+          expressReachable = resp.ok && isJsonHttpResponse(resp);
+          expressLatencyMs = Math.max(
+            1,
+            Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - started)
+          );
+        }
       } catch {
         expressReachable = false;
         expressLatencyMs = null;
@@ -106,16 +110,22 @@ export const SupabaseAutoDiagnosticPanel: React.FC<SupabaseAutoDiagnosticPanelPr
         setIsProbingBrowser(false);
       }
 
-      await dualCloud.runServerTest(silent);
+      if (expressReachable) {
+        await dualCloud.runServerTest(silent);
+      }
     },
     [dualCloud]
   );
 
-  // Auto-run diagnostic tool immediately whenever an error state exists or activation failed
+  // Auto-run diagnostic tool only for real server/Supabase errors (never in standalone static PWA mode)
+  const isStandaloneStaticPwa = dualCloud.supabaseStatus.errorCode === 'STANDALONE_STATIC_PWA';
   const hasKnownError = Boolean(
-    dualCloud.lastSupabaseError ||
-      dualCloud.lastActivationErrorCode ||
-      (dualCloud.supabaseStatus.errorCode && dualCloud.supabaseStatus.errorCode !== 'OK')
+    !isStandaloneStaticPwa &&
+      (dualCloud.lastSupabaseError ||
+        dualCloud.lastActivationErrorCode ||
+        (dualCloud.supabaseStatus.errorCode &&
+          dualCloud.supabaseStatus.errorCode !== 'OK' &&
+          dualCloud.supabaseStatus.errorCode !== 'OFFLINE_OR_UNREACHABLE'))
   );
 
   useEffect(() => {
@@ -125,18 +135,29 @@ export const SupabaseAutoDiagnosticPanel: React.FC<SupabaseAutoDiagnosticPanelPr
     }
   }, [hasKnownError, dualCloud.serverTestResult, dualCloud.isTestingServer, runBrowserAndServerDiagnostics]);
 
-  // Also refresh browser probe whenever a new activation failure happens
+  // Also refresh browser probe whenever a new activation failure happens (only when optional server exists)
   useEffect(() => {
-    if (dualCloud.autoDiagnosticRunCount > 0) {
+    if (dualCloud.autoDiagnosticRunCount > 0 && !isStandaloneStaticPwa) {
       void (async () => {
         const navOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
         const started = typeof performance !== 'undefined' ? performance.now() : Date.now();
         try {
+          const hasBackend = await detectOptionalBackendServer();
+          if (!hasBackend) {
+            setBrowserProbe({
+              checkedAt: new Date().toISOString(),
+              navigatorOnline: navOnline,
+              expressReachable: false,
+              expressLatencyMs: null,
+              httpStatus: null,
+            });
+            return;
+          }
           const resp = await fetch('/api/health', { method: 'GET', cache: 'no-store' });
           setBrowserProbe({
             checkedAt: new Date().toISOString(),
             navigatorOnline: navOnline,
-            expressReachable: resp.ok,
+            expressReachable: resp.ok && isJsonHttpResponse(resp),
             expressLatencyMs: Math.max(
               1,
               Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - started)
@@ -154,7 +175,7 @@ export const SupabaseAutoDiagnosticPanel: React.FC<SupabaseAutoDiagnosticPanelPr
         }
       })();
     }
-  }, [dualCloud.autoDiagnosticRunCount]);
+  }, [dualCloud.autoDiagnosticRunCount, isStandaloneStaticPwa]);
 
   const testResult = dualCloud.serverTestResult;
   const effectiveKeyRole =

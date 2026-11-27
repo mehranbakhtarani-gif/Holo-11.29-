@@ -305,15 +305,35 @@ export const WarehouseCrmOpsView: React.FC<{
     }
 
     setRunningBomId(bom.id);
+    const rollbackSnapshots = new Map<
+      string,
+      {
+        stock: number;
+        buyPrice: number;
+        costLayers: typeof products[number]['costLayers'];
+        inventoryValueIrr: number | undefined;
+      }
+    >();
     try {
       const today = getTodayShamsi();
       const costingMethod = profile.defaultCostingMethod ?? 'fifo';
       const runRefId = generateSafeId('bomrun');
       let totalMaterialCost = 0;
 
+      // Track live in-memory mutations in case finishedProductId also appears in ingredients
+      const workingProducts = new Map(products.map((p) => [p.id, { ...p }]));
+
       for (const ing of bom.ingredients) {
-        const rawProd = products.find((p) => p.id === ing.productId);
+        const rawProd = workingProducts.get(ing.productId);
         if (!rawProd) continue;
+        if (!rollbackSnapshots.has(rawProd.id)) {
+          rollbackSnapshots.set(rawProd.id, {
+            stock: rawProd.stock,
+            buyPrice: rawProd.buyPrice,
+            costLayers: rawProd.costLayers,
+            inventoryValueIrr: rawProd.inventoryValueIrr,
+          });
+        }
         const neededKg = Math.round(outKg * ing.kgPerOutputKg * 100) / 100;
         const rawState = normalizeProductCostState(rawProd, costingMethod, today);
         const step = applyInventoryMovementStep(rawState, {
@@ -327,20 +347,30 @@ export const WarehouseCrmOpsView: React.FC<{
           allowNegativeStock: false,
         });
         totalMaterialCost += Math.round(step.cogsOrCostIrr);
-        await updateProduct(rawProd.id, {
+        const rawPatch = {
           stock: step.nextState.stockQty,
           buyPrice: step.nextState.weightedAvgUnitCostIrr,
           costLayers: step.nextState.layers,
           inventoryValueIrr: step.nextState.totalValueIrr,
-        });
+        };
+        workingProducts.set(rawProd.id, { ...rawProd, ...rawPatch });
+        await updateProduct(rawProd.id, rawPatch);
       }
 
       const laborTotal = Math.round(outKg * bom.laborOverheadPerKgIrr);
       const totalProdCost = totalMaterialCost + laborTotal;
       const finishedUnitCost = Math.round(totalProdCost / outKg);
 
-      const finProd = products.find((p) => p.id === bom.finishedProductId);
+      const finProd = workingProducts.get(bom.finishedProductId);
       if (finProd) {
+        if (!rollbackSnapshots.has(finProd.id)) {
+          rollbackSnapshots.set(finProd.id, {
+            stock: finProd.stock,
+            buyPrice: finProd.buyPrice,
+            costLayers: finProd.costLayers,
+            inventoryValueIrr: finProd.inventoryValueIrr,
+          });
+        }
         const finState = normalizeProductCostState(finProd, costingMethod, today);
         const finStep = applyInventoryMovementStep(finState, {
           id: `${runRefId}_fin_${finProd.id}`,
@@ -404,8 +434,23 @@ export const WarehouseCrmOpsView: React.FC<{
         lines,
       });
 
+      if (!voucher) {
+        throw new Error('سند حسابداری تولید ثبت نشد؛ تغییرات موجودی انبار به‌صورت خودکار بازگردانی شد.');
+      }
+
       showToast(
         `تولید ${formatNumber(outKg)} کیلو ثبت شد (بهای تمام‌شده: ${formatMoney(finishedUnitCost, unit)}/کیلو · سند #${toPersianDigits(voucher.voucherNumber)}).`
+      );
+    } catch (err) {
+      // Atomic rollback of any mutated products so inventory subledger never diverges from GL 10501
+      for (const [prodId, snap] of rollbackSnapshots.entries()) {
+        await updateProduct(prodId, snap).catch(() => undefined);
+      }
+      showToast(
+        err instanceof Error
+          ? err.message
+          : 'خطا در ثبت سند تولید BOM؛ تغییرات انبار به‌صورت اتمیک بازگردانی شد.',
+        'error'
       );
     } finally {
       setRunningBomId(null);

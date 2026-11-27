@@ -832,7 +832,7 @@ export default function App() {
       {/* Main Content Shell */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Floating Frosted-Glass Top Utility Bar (Exact Reference Structure) */}
-        <header className="sticky top-3 z-30 mx-2.5 sm:mx-4 lg:mx-6 mt-3 min-h-14 h-auto min-w-0 px-2.5 sm:px-5 py-1.5 rounded-2xl bg-white/85 dark:bg-[#161B26]/80 backdrop-blur-xl border border-slate-200/80 dark:border-white/[0.08] shadow-[0_6px_24px_-12px_rgba(15,23,42,0.12)] dark:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.7)] flex items-center justify-between gap-3 sm:gap-4 no-print">
+        <header className="sticky top-3 z-30 mx-3 sm:mx-4 lg:mx-6 mt-3 h-14 px-4 sm:px-5 rounded-2xl bg-white/85 dark:bg-[#161B26]/80 backdrop-blur-xl border border-slate-200/80 dark:border-white/[0.08] shadow-[0_6px_24px_-12px_rgba(15,23,42,0.12)] dark:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.7)] flex items-center justify-between gap-3 sm:gap-4 no-print">
           {/* Start Zone: Mobile Menu + Clean Page Title */}
           <div className="flex items-center gap-2.5 min-w-0">
             <button
@@ -902,7 +902,7 @@ export default function App() {
                     onClick={() => setShowChequePopover(false)}
                     aria-hidden="true"
                   />
-                  <div className="absolute right-0 left-auto mt-2 w-88 max-w-[calc(100vw-1.5rem)] z-50 bg-white dark:bg-[#151A24]/95 backdrop-blur-xl border border-slate-200 dark:border-white/12 rounded-2xl shadow-2xl overflow-hidden text-right">
+                  <div className="fixed inset-x-3 top-20 sm:absolute sm:inset-x-auto sm:left-0 sm:top-auto sm:mt-2 sm:w-96 max-h-[80dvh] overflow-y-auto z-[70] bg-white dark:bg-[#151A24]/95 backdrop-blur-xl border border-slate-200 dark:border-white/12 rounded-2xl shadow-2xl text-right">
                     <div className="px-4 py-3 border-b border-slate-200 dark:border-white/[0.08] flex items-center justify-between gap-2">
                       <div>
                         <div className="text-xs font-bold text-[#0F172A] dark:text-white">
@@ -1189,7 +1189,7 @@ export default function App() {
                     onClick={() => setShowCloudPopover(false)}
                     aria-hidden="true"
                   />
-                  <div className="absolute right-0 left-auto mt-2 w-[368px] max-w-[calc(100vw-1.5rem)] z-50 bg-white dark:bg-slate-900/95 dark:backdrop-blur-xl border border-slate-200 dark:border-white/12 rounded-xl shadow-xl overflow-hidden text-right">
+                  <div className="fixed inset-x-3 top-20 sm:absolute sm:inset-x-auto sm:left-0 sm:top-auto sm:mt-2 sm:w-[368px] max-h-[80dvh] overflow-y-auto z-[70] bg-white dark:bg-slate-900/95 dark:backdrop-blur-xl border border-slate-200 dark:border-white/12 rounded-xl shadow-xl text-right">
                     {/* Popover Header */}
                     <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
@@ -2087,7 +2087,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.96 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed bottom-24 lg:bottom-5 left-1/2 -translate-x-1/2 z-50 max-w-[92vw] inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900/90 dark:bg-teal-800/90 backdrop-blur-xl border border-white/15 text-white text-xs font-medium shadow-xl no-print"
+            className="fixed bottom-24 lg:bottom-5 left-1/2 -translate-x-1/2 z-[95] max-w-[92vw] inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900/90 dark:bg-teal-800/90 backdrop-blur-xl border border-white/15 text-white text-xs font-medium shadow-xl no-print"
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span className="leading-relaxed">{toast}</span>

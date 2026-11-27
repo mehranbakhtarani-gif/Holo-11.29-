@@ -2,6 +2,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
 import { useAccounting } from '../context/AccountingContext';
 import { formatMoney, getTodayShamsi, toPersianDigits } from '../lib/format';
+import {
+  buildLocalFxResponseFromRates,
+  detectOptionalBackendServer,
+  isJsonHttpResponse,
+} from '../lib/staticRuntimeGuard';
 import { ActiveModule } from '../types/accounting';
 
 interface LiveFxItem {
@@ -28,7 +33,6 @@ interface LiveFxResponse {
 
 const DISPLAY_ORDER: ('USD' | 'CNY' | 'AED' | 'EUR')[] = ['USD', 'CNY', 'AED', 'EUR'];
 const CACHED_FX_STORAGE_KEY = 'holoo_apex_cached_live_fx_v1';
-const LIVE_FX_API_BASE = 'https://holoo-apex-api.mehranbakhtarani.workers.dev';
 
 interface CachedLiveFxPayload extends LiveFxResponse {
   savedShamsiDate?: string;
@@ -61,9 +65,11 @@ function saveCachedFx(payload: LiveFxResponse): CachedLiveFxPayload {
 export const LiveFxTickerCard: React.FC<{
   onNavigate: (mod: ActiveModule, intent?: string, subKey?: string) => void;
 }> = ({ onNavigate }) => {
-  const { profile, upsertExchangeRate, showToast, logActivity } = useAccounting();
-  const [data, setData] = useState<CachedLiveFxPayload | null>(() => loadCachedFx());
-  const [loading, setLoading] = useState(() => !loadCachedFx());
+  const { profile, exchangeRates, upsertExchangeRate, showToast, logActivity } = useAccounting();
+  const [data, setData] = useState<CachedLiveFxPayload | null>(
+    () => loadCachedFx() || buildLocalFxResponseFromRates(exchangeRates)
+  );
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [syncingToErp, setSyncingToErp] = useState(false);
   const [isOfflineFallback, setIsOfflineFallback] = useState(false);
@@ -71,15 +77,13 @@ export const LiveFxTickerCard: React.FC<{
 
   const fetchRates = useCallback(async (force = false) => {
     const cached = loadCachedFx();
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      if (cached) {
-        setData(cached);
-        setIsOfflineFallback(true);
-        setError(null);
-      } else {
-        setIsOfflineFallback(true);
-        setError('در حالت آفلاین هستید؛ نرخ ذخیره\u200cشده قبلی موجود نیست.');
-      }
+    const localFallback = cached || buildLocalFxResponseFromRates(exchangeRates);
+    const hasBackend = await detectOptionalBackendServer();
+
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !hasBackend) {
+      setData(localFallback);
+      setIsOfflineFallback(true);
+      setError(null);
       setLoading(false);
       setRefreshing(false);
       return;
@@ -87,39 +91,32 @@ export const LiveFxTickerCard: React.FC<{
 
     try {
       if (force) setRefreshing(true);
-      else if (!cached) setLoading(true);
       setError(null);
-      const res = await fetch(`${LIVE_FX_API_BASE}/api/live-fx${force ? '?refresh=1' : ''}`);
-      if (!res.ok) throw new Error('دریافت نرخ زنده ناموفق بود.');
+      const res = await fetch(force ? '/api/live-fx?refresh=1' : '/api/live-fx');
+      if (!res.ok || !isJsonHttpResponse(res)) throw new Error('دریافت نرخ زنده ناموفق بود.');
       const json = (await res.json()) as LiveFxResponse;
       if (Array.isArray(json.items) && json.items.length > 0) {
         setData(saveCachedFx(json));
         setIsOfflineFallback(false);
-      } else if (cached) {
-        setData(cached);
-        setIsOfflineFallback(true);
       } else {
-        setError('نرخ لحظه\u200cای از منبع دریافت نشد.');
+        setData(localFallback);
+        setIsOfflineFallback(true);
       }
     } catch {
-      if (cached) {
-        setData(cached);
-        setIsOfflineFallback(true);
-        setError(null);
-      } else {
-        setError('اتصال به سرور نرخ زنده ارز برقرار نشد.');
-      }
+      setData(localFallback);
+      setIsOfflineFallback(true);
+      setError(null);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [exchangeRates]);
 
   useEffect(() => {
     fetchRates(false);
     const timer = window.setInterval(() => {
       fetchRates(false);
-    }, 300_000);
+    }, 180_000);
     return () => window.clearInterval(timer);
   }, [fetchRates]);
 

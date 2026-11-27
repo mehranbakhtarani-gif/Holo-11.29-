@@ -931,7 +931,7 @@ export const CorporateView: React.FC<CorporateViewProps> = ({ initialIntent, cle
               await paySalariesVoucher(payrollMonth, payBankCode, payrollTotals.net);
               setShowPaySalaryModal(false);
             }}
-            className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 text-xs"
+            className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 text-xs"
           >
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -985,8 +985,8 @@ export const CorporateView: React.FC<CorporateViewProps> = ({ initialIntent, cle
 
       {/* Printable Official Payslip Modal */}
       {selectedPayslip && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 space-y-4 print-container text-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 print-container text-xs">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">

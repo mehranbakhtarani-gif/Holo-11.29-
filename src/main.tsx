@@ -11,6 +11,10 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { AccountingProvider } from './context/AccountingContext';
 import { WorkspaceExtensionsProvider } from './context/WorkspaceExtensionsContext';
 import { setOfflineSwState, setOfflineSwUpdater } from './lib/offlineStatus';
+import { initUiThemeFromStorage } from './lib/uiThemeCustomizer';
+
+// Hydrate user-customized brand & accent colors from localStorage immediately on boot
+initUiThemeFromStorage();
 
 // Register PWA service worker for full offline caching & installability
 const updateSW = registerSW({
