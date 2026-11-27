@@ -7,6 +7,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
   query,
   runTransaction,
@@ -3444,9 +3445,13 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                   collection(db, 'invoices'),
                   where('sourceInvoiceId', '==', payload.sourceInvoiceId),
                   where('invoiceType', '==', 'sale_return'),
-                  where('ownerId', '==', ownerId)
+                  where('ownerId', '==', ownerId),
+                  limit(401)
                 );
                 const returnsSnap = await tx.get(returnsQuery);
+                if (returnsSnap.size > 400) {
+                  throw new Error('تعداد برگشت‌های مرجع از سقف امن تراکنش بیشتر است؛ برای جلوگیری از ثبت ناقص هیچ تغییری اعمال نشد.');
+                }
                 const liveReturns: Invoice[] = returnsSnap.docs
                   .filter((returnDoc) => returnDoc.data().ownerId === ownerId)
                   .map((returnDoc) => ({ ...returnDoc.data(), id: returnDoc.id } as Invoice));
