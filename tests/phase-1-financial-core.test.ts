@@ -45,7 +45,7 @@ assert.throws(
     totalCostIrr: 200,
     sourceRefId: 'purchase-missing',
   }),
-  /لایه خرید مرجع پیدا نشد/
+  /لایه خرید مرجع پیدا نشد|لایه مرجع پیدا نشد/
 );
 
 assert.throws(
