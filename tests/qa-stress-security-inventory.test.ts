@@ -124,6 +124,26 @@ console.log('Running QA Stress, Inventory Integration, Accounting Math & Securit
   }), /مانده مجاز: 5/);
   logPass('Cumulative sale-return guard', 'rejects a second partial return that would exceed the original sold quantity');
 
+  const splitLineOriginalSale: Invoice = {
+    ...originalSale,
+    items: [
+      { ...originalSale.items[0], quantity: 4, lineTotal: 400 },
+      { ...originalSale.items[0], quantity: 6, lineTotal: 600 },
+    ],
+  };
+  assert.throws(() => planAtomicInvoiceCommit({
+    invoiceId: 'sale_return_split_lines',
+    voucherId: 'voucher_return_split_lines',
+    nextVoucherNumber: 4,
+    ownerId,
+    deviceId: 'qa_runner',
+    payload: overReturnPayload,
+    products: [],
+    originalInvoice: splitLineOriginalSale,
+    existingInvoices: [splitLineOriginalSale, previousReturn],
+  }), /مانده مجاز: 5/);
+  logPass('Cumulative sale-return duplicate-line guard', 'aggregates all original sale lines for the same product before enforcing the remaining returnable quantity');
+
   const originalFifoLayers = [
     { layerId: 'fifo_a', qty: 5, unitCostIrr: 100, totalCostIrr: 500 },
     { layerId: 'fifo_b', qty: 5, unitCostIrr: 200, totalCostIrr: 1_000 },
