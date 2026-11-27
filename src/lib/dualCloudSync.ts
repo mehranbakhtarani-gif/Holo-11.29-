@@ -15,7 +15,7 @@ export async function encodeSupabaseSnapshot(snapshotJson: string): Promise<stri
   return JSON.stringify({ kind: SUPABASE_ENCRYPTED_SNAPSHOT_KIND, envelope });
 }
 
-export async function decodeSupabaseSnapshot(rawJson: string): Promise<string> {
+export async function decodeSupabaseSnapshot(rawJson: string, allowLegacyPlaintext = false): Promise<string> {
   let parsed: unknown;
   try { parsed = JSON.parse(rawJson); } catch { throw new Error('ساختار نسخه ابری Supabase معتبر نیست.'); }
   if (parsed && typeof parsed === 'object' &&
@@ -26,8 +26,8 @@ export async function decodeSupabaseSnapshot(rawJson: string): Promise<string> {
     if (!result.ok || !result.snapshotJson) throw new Error(result.error || 'رمزگشایی Supabase ناموفق بود.');
     return result.snapshotJson;
   }
-  // Legacy plaintext rows are readable for an explicit migration/restore path only.
-  return rawJson;
+  if (allowLegacyPlaintext) return rawJson;
+  throw new Error('این نسخه ابری قدیمی و بدون رمزگذاری است؛ برای مهاجرت باید بازیابی دستی و تأییدشده انجام شود.');
 }
 
 export type ConflictResolutionPolicy = 'last_write_wins' | 'first_write_wins';
@@ -948,7 +948,8 @@ export async function pushSnapshotToSupabase(params: {
 
 export async function pullSnapshotFromSupabase(
   idToken?: string | null,
-  backupId?: string
+  backupId?: string,
+  allowLegacyPlaintext = false
 ): Promise<{
   ok: boolean;
   found?: boolean;
@@ -989,7 +990,7 @@ export async function pullSnapshotFromSupabase(
     if (!resp.ok) {
       return { ok: false, error: json.error || 'خطا در بازیابی از Supabase' };
     }
-    const decoded = json.snapshotJson ? await decodeSupabaseSnapshot(json.snapshotJson) : undefined;
+    const decoded = json.snapshotJson ? await decodeSupabaseSnapshot(json.snapshotJson, allowLegacyPlaintext) : undefined;
     return { ok: true, ...json, ...(decoded ? { snapshotJson: decoded } : {}) };
   } catch {
     return { ok: false, error: 'ارتباط با Supabase برقرار نشد.' };
