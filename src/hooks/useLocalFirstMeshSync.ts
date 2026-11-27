@@ -882,6 +882,10 @@ export function useLocalFirstMeshSync() {
         return false;
       }
 
+      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) {
+        showToast('نوشتن در پوشه محلی تا پایان بازیابی پشتیبان متوقف است.');
+        return false;
+      }
       dirHandleRef.current = res.handle;
       const built = buildTaggedSnapshot();
       const writeRes = await writeMirrorToSelectedFolder(res.handle, built.snapshotJson);
