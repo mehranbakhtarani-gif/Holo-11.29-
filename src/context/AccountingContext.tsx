@@ -380,6 +380,7 @@ const DEMO_OWNER = 'demo_holoo_apex';
 
 // Prevent duplicate concurrent payroll submissions within one workspace and period.
 const inFlightPayrollPosts = new Set<string>();
+const inFlightSalesOrderDispatches = new Set<string>();
 
 const DEFAULT_PROFILE: CompanyProfile = {
   uid: DEMO_OWNER,
@@ -6020,73 +6021,81 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     ) => {
       const order = salesOrders.find((o) => o.id === orderId);
       if (!order) return;
-      const candidateDispatchNumber =
-        `DSP-${profile.fiscalYear}-${Math.floor(100 + Math.random() * 899)}`;
-      let dispatchNumber = order.dispatchNumber || candidateDispatchNumber;
+      const lockKey = `${ownerId}:${orderId}`;
+      if (inFlightSalesOrderDispatches.has(lockKey)) {
+        showToast('ثبت حواله این سفارش در حال انجام است؛ از ارسال هم‌زمان جلوگیری شد.', 'warning');
+        return;
+      }
+      inFlightSalesOrderDispatches.add(lockKey);
+      try {
+        const candidateDispatchNumber =
+          `DSP-${profile.fiscalYear}-${Math.floor(100 + Math.random() * 899)}`;
+        let dispatchNumber = order.dispatchNumber || candidateDispatchNumber;
 
-      if (user) {
-        try {
-          await runTransaction(db, async (tx) => {
-            const orderRef = doc(db, 'salesOrders', orderId);
-            const orderSnap = await tx.get(orderRef);
-            if (!orderSnap.exists()) throw new Error('ORDER_NOT_FOUND');
-            const liveOrder = orderSnap.data() as SalesOrder;
-            if (liveOrder.status !== 'ordered') throw new Error('ORDER_NOT_DISPATCHABLE');
-            dispatchNumber = liveOrder.dispatchNumber || candidateDispatchNumber;
-            tx.update(orderRef, {
-              dispatchNumber,
-              dispatchDate: payload.dispatchDate,
-              driverName: payload.driverName,
-              plateNumber: payload.plateNumber,
-              items: payload.items,
-              status: 'dispatched',
-              _version: (liveOrder._version ?? 1) + 1,
-              updatedByDevice: deviceId,
-              updatedAt: serverTimestamp(),
+        if (user) {
+          try {
+            await runTransaction(db, async (tx) => {
+              const orderRef = doc(db, 'salesOrders', orderId);
+              const orderSnap = await tx.get(orderRef);
+              if (!orderSnap.exists()) throw new Error('ORDER_NOT_FOUND');
+              const liveOrder = orderSnap.data() as SalesOrder;
+              if (liveOrder.status !== 'ordered') throw new Error('ORDER_NOT_DISPATCHABLE');
+              dispatchNumber = liveOrder.dispatchNumber || candidateDispatchNumber;
+              tx.update(orderRef, {
+                dispatchNumber,
+                dispatchDate: payload.dispatchDate,
+                driverName: payload.driverName,
+                plateNumber: payload.plateNumber,
+                items: payload.items,
+                status: 'dispatched',
+                _version: (liveOrder._version ?? 1) + 1,
+                updatedByDevice: deviceId,
+                updatedAt: serverTimestamp(),
+              });
             });
-          });
-        } catch (err) {
-          if (err instanceof Error && err.message === 'ORDER_NOT_DISPATCHABLE') {
+          } catch (err) {
+            if (err instanceof Error && err.message === 'ORDER_NOT_DISPATCHABLE') {
+              showToast('این سفارش قبلاً حواله شده یا در وضعیت قابل ارسال نیست؛ تغییری اعمال نشد.', 'warning');
+              return;
+            }
+            handleFirestoreError(err, OperationType.UPDATE, `salesOrders/${orderId}`);
+            return;
+          }
+        } else {
+          if (order.status !== 'ordered') {
             showToast('این سفارش قبلاً حواله شده یا در وضعیت قابل ارسال نیست؛ تغییری اعمال نشد.', 'warning');
             return;
           }
-          handleFirestoreError(err, OperationType.UPDATE, `salesOrders/${orderId}`);
-          return;
+          setSalesOrders((prev) =>
+            prev.map((current) =>
+              current.id === orderId && current.status === 'ordered'
+                ? {
+                    ...current,
+                    dispatchNumber,
+                    dispatchDate: payload.dispatchDate,
+                    driverName: payload.driverName,
+                    plateNumber: payload.plateNumber,
+                    items: payload.items,
+                    status: 'dispatched',
+                    _version: (current._version ?? 1) + 1,
+                    updatedByDevice: deviceId,
+                  }
+                : current
+            )
+          );
         }
-      } else {
-        let dispatched = false;
-        setSalesOrders((prev) =>
-          prev.map((current) => {
-            if (current.id !== orderId || current.status !== 'ordered') return current;
-            dispatched = true;
-            dispatchNumber = current.dispatchNumber || candidateDispatchNumber;
-            return {
-              ...current,
-              dispatchNumber,
-              dispatchDate: payload.dispatchDate,
-              driverName: payload.driverName,
-              plateNumber: payload.plateNumber,
-              items: payload.items,
-              status: 'dispatched',
-              _version: (current._version ?? 1) + 1,
-              updatedByDevice: deviceId,
-            };
-          })
-        );
-        if (!dispatched) {
-          showToast('این سفارش قبلاً حواله شده یا در وضعیت قابل ارسال نیست؛ تغییری اعمال نشد.', 'warning');
-          return;
-        }
-      }
 
-      logActivity(
-        'انبار و باسکول',
-        `صدور حواله خروج ${dispatchNumber}`,
-        `توزین نهایی سفارش ${order.orderNumber} (${order.partyName})`
-      );
-      showToast(`حواله خروج باسکول ${dispatchNumber} ثبت شد.`);
+        logActivity(
+          'انبار و باسکول',
+          `صدور حواله خروج ${dispatchNumber}`,
+          `توزین نهایی سفارش ${order.orderNumber} (${order.partyName})`
+        );
+        showToast(`حواله خروج باسکول ${dispatchNumber} ثبت شد.`);
+      } finally {
+        inFlightSalesOrderDispatches.delete(lockKey);
+      }
     },
-    [user, deviceId, salesOrders, profile.fiscalYear, logActivity, showToast]
+    [user, deviceId, salesOrders, ownerId, profile.fiscalYear, logActivity, showToast]
   );
 
   const invoiceSalesOrder = useCallback(
