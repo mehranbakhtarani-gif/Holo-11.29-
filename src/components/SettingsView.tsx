@@ -55,7 +55,7 @@ import { cleanupOrphanedStagedDocumentAttachmentBundles, exportEncryptedDocument
 import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
 import { requireBackupSessionPassphrase } from '../lib/backupSession';
 import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
-import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
+import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, loadOperationalWorkspace, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -514,7 +514,17 @@ export const SettingsView: React.FC<{
         showToast('برای پشتیبان یکپارچه، ابتدا قفل پشتیبان رمزگذاری‌شده را باز کنید.', 'error');
         return;
       }
-      const workspaceJson = exportBackupJson();
+      const baseWorkspace = JSON.parse(exportBackupJson()) as Record<string, unknown>;
+      const operationalWorkspace = await loadOperationalWorkspace();
+      const workspaceJson = JSON.stringify({
+        ...baseWorkspace,
+        warehouses: operationalWorkspace?.warehouses ?? [],
+        taxReports: operationalWorkspace?.taxReports ?? [],
+        localProfiles: operationalWorkspace?.localProfiles ?? [],
+        syncOutbox: operationalWorkspace?.syncOutbox ?? [],
+        syncInbox: operationalWorkspace?.syncInbox ?? [],
+        localRevision: operationalWorkspace?.localRevision ?? 1,
+      }, null, 2);
       if (new Blob([workspaceJson]).size > 8_000_000) {
         showToast('حجم اطلاعات حسابداری از سقف ۸ مگابایت مسیر بازیابی فعلی بیشتر است؛ خروجی یکپارچه متوقف شد.', 'error');
         return;
