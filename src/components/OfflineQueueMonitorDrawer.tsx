@@ -146,13 +146,13 @@ export const OfflineQueueMonitorDrawer: React.FC<{
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-slate-950/55 backdrop-blur-xs no-print"
+      dir="ltr" className="fixed inset-0 z-50 flex justify-end overflow-hidden bg-slate-950/55 backdrop-blur-xs no-print"
       role="dialog"
       aria-modal="true"
       aria-label="مانیتور صف آفلاین و همگام‌سازی سه‌دستگاهی"
     >
       <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-2xl bg-white dark:bg-slate-950 h-full shadow-2xl border-r border-slate-200 dark:border-slate-800 flex flex-col">
+      <div dir="rtl" className="relative z-10 w-full max-w-[min(42rem,100vw)] min-w-0 h-[100dvh] max-h-[100dvh] overflow-hidden bg-white dark:bg-slate-950 shadow-2xl border-r border-slate-200 dark:border-slate-800 flex flex-col">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
