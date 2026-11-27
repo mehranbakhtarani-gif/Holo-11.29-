@@ -23,8 +23,11 @@ import {
 } from '../src/lib/bankReconciliationEngine';
 import {
   canRoleAccessSensitivity,
+  deleteDocumentAttachment,
+  exportEncryptedDocumentAttachmentBundle,
   listDocumentAttachments,
   retrieveVerifiedAttachment,
+  restoreEncryptedDocumentAttachmentBundle,
   saveDocumentAttachment,
 } from '../src/lib/documentVault';
 import { evaluateMultiDeviceSyncState } from '../src/lib/dualCloudSync';
@@ -1252,6 +1255,26 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
     assert.equal(allowed.integrityValid, true);
     assert.equal(allowed.record.dataUrl, 'data:application/pdf;base64,JVBERi0xLjQK');
   }
+
+  const encryptedBundleJson = await exportEncryptedDocumentAttachmentBundle();
+  assert.equal(encryptedBundleJson.includes('data:application/pdf;base64,JVBERi0xLjQK'), false,
+    'Portable attachment bundle must not contain plaintext file bytes');
+  const tamperedBundle = JSON.parse(encryptedBundleJson) as {
+    format: string; schemaVersion: number; exportedAt: string;
+    attachments: Array<{ encryptedEnvelope: string }>;
+  };
+  tamperedBundle.attachments[0].encryptedEnvelope = tamperedBundle.attachments[0].encryptedEnvelope.replace(/.$/, 'A');
+  await assert.rejects(
+    () => restoreEncryptedDocumentAttachmentBundle(JSON.stringify(tamperedBundle)),
+    /رمزگشایی|خراب|معتبر/
+  );
+
+  const removed = await deleteDocumentAttachment(saved.meta.id, 'finance_manager');
+  assert.equal(removed.ok, true);
+  const restored = await restoreEncryptedDocumentAttachmentBundle(encryptedBundleJson);
+  assert.equal(restored.restored, 1);
+  const afterRestore = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
+  assert.equal(afterRestore.ok, true);
   lockBackupSession();
 });
 
