@@ -10,6 +10,7 @@ import React, {
 import {
   getChangedWorkspaceExtensionKeys,
   mergeRemoteArray,
+  mergeWorkspaceExtensionField,
 } from '../lib/workspaceExtensionsMerge';
 import {
   collection,
@@ -311,7 +312,33 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
             const patch: Record<string, unknown> = {};
             for (const key of changedKeys) {
-              patch[key as string] = bounded[key];
+              const remoteValue = Object.prototype.hasOwnProperty.call(remote, key)
+                ? remote[key]
+                : previous[key];
+              const merged = mergeWorkspaceExtensionField(
+                previous[key],
+                bounded[key],
+                remoteValue
+              );
+              if (!merged.ok) {
+                throw new Error(
+                  `Workspace extension concurrent conflict in ${String(key)}: ${merged.conflicts.join(', ')}`
+                );
+              }
+              if (
+                (Array.isArray(merged.value) && merged.value.length > (key === 'reservedInvoices' ? 50 :
+                  key === 'favoriteMenus' ? 30 : key === 'pettyCashItems' ? 200 :
+                  key === 'recurringTemplates' ? 50 : key === 'bankLoans' ? 50 :
+                  key === 'dyeLots' ? 250 : key === 'warehouseSlips' ? 200 :
+                  key === 'bomFormulas' ? 100 : key === 'installmentPlans' ? 120 :
+                  key === 'volumeDiscountRules' ? 50 : key === 'fiscalArchives' ? 25 : Number.MAX_SAFE_INTEGER)) ||
+                ((key === 'productMetaMap' || key === 'moadianLinks') &&
+                  merged.value && typeof merged.value === 'object' &&
+                  Object.keys(merged.value as Record<string, unknown>).length > 500)
+              ) {
+                throw new Error(`Workspace extension concurrent merge exceeds the cloud limit for ${String(key)}`);
+              }
+              patch[key as string] = merged.value;
             }
             if (Object.keys(patch).length === 0) return remoteVersion;
 
