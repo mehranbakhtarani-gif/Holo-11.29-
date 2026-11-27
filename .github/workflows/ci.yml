@@ -36,5 +36,7 @@ jobs:
         run: npm run lint:rules
       - name: Test suite
         run: npm test
+      - name: Firestore Emulator security tests
+        run: npm run test:rules
       - name: Production build
         run: npm run build
