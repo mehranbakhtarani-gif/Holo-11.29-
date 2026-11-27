@@ -1217,6 +1217,222 @@ export async function commitChequeStatusOperationalTx(
   });
 }
 
+
+/** Atomically commits local fixed-asset depreciation balances and their permanent ledger voucher. */
+export async function commitDepreciationOperationalTx(
+  payload: {
+    assetUpdates: Array<{
+      id: string;
+      expectedAccumulatedDepreciation: number;
+      depreciationAmount: number;
+      accumulatedDepreciation: number;
+    }>;
+    voucher: Voucher;
+  },
+  options?: { dbOverride?: IDBDatabase }
+): Promise<boolean> {
+  const usingOverride = Boolean(options?.dbOverride);
+  if (!usingOverride && !isIndexedDbAvailable()) return false;
+  const { assetUpdates, voucher } = payload ?? ({} as typeof payload);
+  if (!Array.isArray(assetUpdates) || assetUpdates.length === 0 || assetUpdates.length > 400) {
+    throw new Error('ATOMIC_DEPRECIATION_INVALID_ASSETS: فهرست دارایی‌های استهلاک معتبر نیست.');
+  }
+  const seenAssetIds = new Set<string>();
+  for (const update of assetUpdates) {
+    if (
+      !update ||
+      typeof update.id !== 'string' ||
+      !update.id.trim() ||
+      seenAssetIds.has(update.id) ||
+      !Number.isSafeInteger(update.expectedAccumulatedDepreciation) ||
+      update.expectedAccumulatedDepreciation < 0 ||
+      !Number.isSafeInteger(update.depreciationAmount) ||
+      update.depreciationAmount <= 0 ||
+      !Number.isSafeInteger(update.accumulatedDepreciation) ||
+      update.accumulatedDepreciation !== update.expectedAccumulatedDepreciation + update.depreciationAmount
+    ) {
+      throw new Error('ATOMIC_DEPRECIATION_INVALID_ASSET_UPDATE: تغییر مانده استهلاک دارایی نامعتبر یا تکراری است.');
+    }
+    seenAssetIds.add(update.id);
+  }
+  if (
+    !voucher ||
+    typeof voucher.id !== 'string' ||
+    !voucher.id.trim() ||
+    voucher.status !== 'permanent' ||
+    voucher.voucherType !== 'depreciation' ||
+    typeof voucher.referenceId !== 'string' ||
+    !voucher.referenceId.trim() ||
+    !Array.isArray(voucher.lines) ||
+    voucher.lines.length < 2 ||
+    !Number.isSafeInteger(voucher.totalDebit) ||
+    !Number.isSafeInteger(voucher.totalCredit) ||
+    voucher.totalDebit <= 0 ||
+    voucher.totalDebit !== voucher.totalCredit
+  ) {
+    throw new Error('ATOMIC_DEPRECIATION_INVALID_VOUCHER: سند دائمی استهلاک معتبر یا متوازن نیست.');
+  }
+  let debit = 0;
+  let credit = 0;
+  for (const line of voucher.lines) {
+    if (
+      !Number.isSafeInteger(line?.debit) || Number(line.debit) < 0 ||
+      !Number.isSafeInteger(line?.credit) || Number(line.credit) < 0 ||
+      (Number(line.debit) > 0 && Number(line.credit) > 0)
+    ) {
+      throw new Error('ATOMIC_DEPRECIATION_INVALID_LINE: ردیف سند استهلاک نامعتبر است.');
+    }
+    debit += Number(line.debit);
+    credit += Number(line.credit);
+    if (!Number.isSafeInteger(debit) || !Number.isSafeInteger(credit)) {
+      throw new Error('ATOMIC_DEPRECIATION_UNSAFE_TOTAL: جمع سند استهلاک خارج از محدوده امن است.');
+    }
+  }
+  if (debit !== voucher.totalDebit || credit !== voucher.totalCredit || debit !== credit) {
+    throw new Error('ATOMIC_DEPRECIATION_UNBALANCED_VOUCHER: جمع ردیف‌ها با سربرگ سند استهلاک تراز نیست.');
+  }
+
+  const db = options?.dbOverride ?? (await openOperationalDb());
+  const committedAt = new Date().toISOString();
+  const closeIfOwned = () => {
+    if (!usingOverride) {
+      try { db.close(); } catch { /* ignore close errors */ }
+    }
+  };
+  return new Promise((resolve, reject) => {
+    let tx: IDBTransaction | null = null;
+    let settled = false;
+    const abortAndReject = (error: unknown) => {
+      if (tx) {
+        try { tx.abort(); } catch { /* ignore abort race */ }
+      }
+      if (!settled) {
+        settled = true;
+        closeIfOwned();
+        reject(error instanceof Error ? error : new Error(String(error || 'Atomic depreciation rollback')));
+      }
+    };
+    try {
+      tx = db.transaction(['meta', 'assets', 'vouchers'], 'readwrite');
+      const assetStore = tx.objectStore('assets');
+      const voucherStore = tx.objectStore('vouchers');
+      const liveAssets = new Map<string, FixedAsset>();
+      let remainingReads = assetUpdates.length + 2;
+      const finishRead = () => {
+        if (settled || --remainingReads !== 0) return;
+        try {
+          const currentVoucher = (tx as IDBTransaction).objectStore('vouchers');
+          // The voucher existence check is captured separately below; all reads must finish before writes.
+          if (voucherExists) {
+            throw new Error('ATOMIC_DEPRECIATION_DUPLICATE_VOUCHER: سند استهلاک این دوره قبلاً ثبت شده است.');
+          }
+          for (const update of assetUpdates) {
+            const live = liveAssets.get(update.id);
+            if (!live) {
+              throw new Error(`ATOMIC_DEPRECIATION_ASSET_NOT_FOUND: دارایی ${update.id} در پایگاه محلی پیدا نشد.`);
+            }
+            if (
+              live.accumulatedDepreciation !== update.expectedAccumulatedDepreciation ||
+              !Number.isSafeInteger(live.purchaseCost) ||
+              live.purchaseCost <= 0 ||
+              !Number.isSafeInteger(live.salvageValue) ||
+              live.salvageValue < 0 ||
+              live.salvageValue > live.purchaseCost ||
+              update.accumulatedDepreciation > live.purchaseCost - live.salvageValue
+            ) {
+              throw new Error(`ATOMIC_DEPRECIATION_STALE_OR_INVALID_ASSET: دارایی ${update.id} تغییر کرده یا مانده استهلاک آن نامعتبر است.`);
+            }
+          }
+          for (const update of assetUpdates) {
+            const live = liveAssets.get(update.id)!;
+            const request = assetStore.put({
+              ...live,
+              accumulatedDepreciation: update.accumulatedDepreciation,
+            });
+            request.onerror = () => abortAndReject(request.error ?? new Error('Depreciation asset write failed'));
+          }
+          const voucherWrite = currentVoucher.put(voucher);
+          voucherWrite.onerror = () => abortAndReject(voucherWrite.error ?? new Error('Depreciation voucher write failed'));
+          const metaWrite = tx!.objectStore('meta').put({
+            key: 'workspace_meta',
+            localRevision: nextRevision,
+            updatedAt: committedAt,
+            schemaVersion: OP_DB_VERSION,
+          });
+          metaWrite.onerror = () => abortAndReject(metaWrite.error ?? new Error('Depreciation revision write failed'));
+        } catch (error) {
+          abortAndReject(error);
+        }
+      };
+      let voucherExists = false;
+      let nextRevision = 0;
+      const voucherRead = voucherStore.get(voucher.id);
+      voucherRead.onsuccess = () => {
+        voucherExists = Boolean(voucherRead.result);
+        finishRead();
+      };
+      voucherRead.onerror = () => abortAndReject(voucherRead.error ?? new Error('Depreciation voucher read failed'));
+      const metaRead = tx.objectStore('meta').get('workspace_meta');
+      metaRead.onsuccess = () => {
+        try {
+          const revision = Number((metaRead.result as { localRevision?: number } | undefined)?.localRevision ?? 0);
+          if (!Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER) {
+            throw new Error('ATOMIC_DEPRECIATION_INVALID_REVISION: شماره بازبینی فضای کاری معتبر نیست.');
+          }
+          nextRevision = revision + 1;
+          finishRead();
+        } catch (error) {
+          abortAndReject(error);
+        }
+      };
+      metaRead.onerror = () => abortAndReject(metaRead.error ?? new Error('Depreciation revision read failed'));
+      for (const update of assetUpdates) {
+        const request = assetStore.get(update.id);
+        request.onsuccess = () => {
+          const live = request.result as FixedAsset | undefined;
+          if (live) liveAssets.set(update.id, live);
+          finishRead();
+        };
+        request.onerror = () => abortAndReject(request.error ?? new Error('Depreciation asset read failed'));
+      }
+      tx.oncomplete = () => {
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          resolve(true);
+        }
+      };
+      tx.onerror = () => {
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic depreciation commit failed'));
+        }
+      };
+      tx.onabort = () => {
+        resetOperationalDiffCache();
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic depreciation aborted'));
+        }
+      };
+    } catch (error) {
+      resetOperationalDiffCache();
+      if (tx) {
+        try { tx.abort(); } catch { /* ignore abort race */ }
+      }
+      closeIfOwned();
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    }
+  });
+}
+
 export async function commitStockAdjustmentOperationalTx(
   payload: {
     updatedProducts: Product[];
