@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { commitChequeStatusOperationalTx, commitInvoiceOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
-import type { Cheque, Invoice, Product, Voucher } from '../src/types/accounting';
+import { commitChequeStatusOperationalTx, commitDepreciationOperationalTx, commitInvoiceOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
+import type { Cheque, FixedAsset, Invoice, Product, Voucher } from '../src/types/accounting';
 
 /**
  * ACID Transactional In-Memory IndexedDB Simulator
@@ -12,7 +12,7 @@ import type { Cheque, Invoice, Product, Voucher } from '../src/types/accounting'
  * - On `tx.abort()` OR any store request error, staged writes are discarded (100% ROLLBACK).
  */
 interface SimulatedIdbOptions {
-  failOnStore?: 'products' | 'vouchers' | 'cheques' | 'invoices' | 'meta';
+  failOnStore?: 'products' | 'vouchers' | 'cheques' | 'invoices' | 'assets' | 'meta';
   failMode?: 'throw' | 'async_error';
   errorMessage?: string;
 }
@@ -22,6 +22,7 @@ function createTransactionalIdbSimulator(initialData?: {
   vouchers?: Voucher[];
   cheques?: Cheque[];
   invoices?: Invoice[];
+  assets?: FixedAsset[];
   meta?: Array<{ key: string; [k: string]: unknown }>;
 }) {
   const stores: Record<string, Map<string, any>> = {
@@ -30,6 +31,7 @@ function createTransactionalIdbSimulator(initialData?: {
     vouchers: new Map((initialData?.vouchers ?? []).map((v) => [v.id, structuredClone(v)])),
     cheques: new Map((initialData?.cheques ?? []).map((c) => [c.id, structuredClone(c)])),
     invoices: new Map((initialData?.invoices ?? []).map((i) => [i.id, structuredClone(i)])),
+    assets: new Map((initialData?.assets ?? []).map((a) => [a.id, structuredClone(a)])),
   };
 
   let abortCount = 0;
@@ -770,6 +772,101 @@ async function runTests() {
   assert.equal(simUnbalanced.stores.invoices.size, 0);
   assert.equal(simUnbalanced.stores.meta.get('workspace_meta').localRevision, 3);
   console.log('✓ 6. ROLLBACK verified on unbalanced double-entry voucher — zero inventory/treasury drift');
+
+
+  // =========================================================================
+  // 7. ATOMIC FIXED-ASSET DEPRECIATION (assets + permanent voucher + revision)
+  // =========================================================================
+  const asset: FixedAsset = {
+    id: 'asset_1',
+    ownerId: 'local_owner',
+    assetCode: 'FA-001',
+    title: 'تجهیزات اداری',
+    purchaseDate: '1404/01/01',
+    purchaseCost: 120_000_000,
+    salvageValue: 12_000_000,
+    usefulLifeYears: 5,
+    accumulatedDepreciation: 10_000_000,
+  };
+  const depreciationVoucher: Voucher = {
+    ...balancedVoucher,
+    id: 'vch_dep_1',
+    voucherNumber: 103,
+    voucherType: 'depreciation',
+    referenceId: 'depreciation:1405:آبان',
+    totalDebit: 1_800_000,
+    totalCredit: 1_800_000,
+    lines: [
+      { accountCode: '80301', accountTitle: 'هزینه استهلاک', description: 'استهلاک', debit: 1_800_000, credit: 0 },
+      { accountCode: '20201', accountTitle: 'استهلاک انباشته', description: 'استهلاک', debit: 0, credit: 1_800_000 },
+    ],
+  };
+  const depreciationSim = createTransactionalIdbSimulator({
+    assets: [asset],
+    meta: [{ key: 'workspace_meta', localRevision: 12 }],
+  });
+  const depreciationCommitted = await commitDepreciationOperationalTx({
+    assetUpdates: [{
+      id: asset.id,
+      expectedAccumulatedDepreciation: 10_000_000,
+      depreciationAmount: 1_800_000,
+      accumulatedDepreciation: 11_800_000,
+    }],
+    voucher: depreciationVoucher,
+  }, { dbOverride: depreciationSim.db });
+  assert.equal(depreciationCommitted, true);
+  assert.equal(depreciationSim.stores.assets.get(asset.id).accumulatedDepreciation, 11_800_000);
+  assert.equal(depreciationSim.stores.vouchers.get(depreciationVoucher.id).referenceId, depreciationVoucher.referenceId);
+  assert.equal(depreciationSim.stores.meta.get('workspace_meta').localRevision, 13);
+  console.log('✓ 7. Depreciation asset balances, permanent voucher and workspace revision commit atomically');
+
+  const depreciationRollbackSim = createTransactionalIdbSimulator({
+    assets: [asset],
+    meta: [{ key: 'workspace_meta', localRevision: 20 }],
+  });
+  depreciationRollbackSim.setFailure({
+    failOnStore: 'vouchers',
+    failMode: 'async_error',
+    errorMessage: 'ConstraintError: depreciation voucher write rejected',
+  });
+  await assert.rejects(
+    () => commitDepreciationOperationalTx({
+      assetUpdates: [{
+        id: asset.id,
+        expectedAccumulatedDepreciation: 10_000_000,
+        depreciationAmount: 1_800_000,
+        accumulatedDepreciation: 11_800_000,
+      }],
+      voucher: { ...depreciationVoucher, id: 'vch_dep_rollback' },
+    }, { dbOverride: depreciationRollbackSim.db }),
+    /depreciation voucher write rejected/
+  );
+  assert.equal(depreciationRollbackSim.getStats().abortCount, 1);
+  assert.equal(depreciationRollbackSim.stores.assets.get(asset.id).accumulatedDepreciation, 10_000_000);
+  assert.equal(depreciationRollbackSim.stores.vouchers.size, 0);
+  assert.equal(depreciationRollbackSim.stores.meta.get('workspace_meta').localRevision, 20);
+  console.log('✓ 7a. Failed depreciation voucher write rolls back asset balance and revision');
+
+  const staleDepreciationSim = createTransactionalIdbSimulator({
+    assets: [{ ...asset, accumulatedDepreciation: 10_500_000 }],
+    meta: [{ key: 'workspace_meta', localRevision: 21 }],
+  });
+  await assert.rejects(
+    () => commitDepreciationOperationalTx({
+      assetUpdates: [{
+        id: asset.id,
+        expectedAccumulatedDepreciation: 10_000_000,
+        depreciationAmount: 1_800_000,
+        accumulatedDepreciation: 11_800_000,
+      }],
+      voucher: { ...depreciationVoucher, id: 'vch_dep_stale' },
+    }, { dbOverride: staleDepreciationSim.db }),
+    /ATOMIC_DEPRECIATION_STALE_OR_INVALID_ASSET/
+  );
+  assert.equal(staleDepreciationSim.stores.assets.get(asset.id).accumulatedDepreciation, 10_500_000);
+  assert.equal(staleDepreciationSim.stores.vouchers.size, 0);
+  assert.equal(staleDepreciationSim.stores.meta.get('workspace_meta').localRevision, 21);
+  console.log('✓ 7b. Stale depreciation balances are rejected without overwriting newer asset state');
 
   console.log('\nALL OFFLINE-FIRST & ATOMIC INDEXEDDB ROLLBACK AUDIT TESTS PASSED ✅');
 }
