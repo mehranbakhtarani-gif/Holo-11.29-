@@ -174,7 +174,7 @@ function validateStore(key: string, raw: string): void {
       }
       break;
     case 'holoo_apex_supabase_revision_v1':
-      if (!/^\\d+$/.test(raw)) throw new Error('شماره بازبینی همگام‌سازی معتبر نیست.');
+      if (!/^\d+$/.test(raw)) throw new Error('شماره بازبینی همگام‌سازی معتبر نیست.');
       break;
     case 'holoo_apex_supabase_auto_backup_v1':
       if (raw !== '0' && raw !== '1') throw new Error('تنظیم پشتیبان‌گیری خودکار معتبر نیست.');
