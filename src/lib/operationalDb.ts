@@ -601,6 +601,105 @@ export async function commitInvoiceOperationalTx(
 }
 
 /**
+ * Atomically dispatches a local sales order against its current IndexedDB record.
+ * The live status, owner, version, order update, and workspace revision are checked
+ * and committed in one readwrite transaction to prevent stale React-state dispatches.
+ */
+export async function commitSalesOrderDispatchOperationalTx(input: {
+  orderId: string;
+  ownerId: string;
+  dispatchNumber: string;
+  dispatchDate: string;
+  driverName: string;
+  plateNumber: string;
+  items: SalesOrder['items'];
+  updatedByDevice: string;
+}): Promise<SalesOrder> {
+  if (!isIndexedDbAvailable()) {
+    throw new Error('پایگاه‌داده عملیاتی محلی در دسترس نیست؛ حواله خروج ثبت نشد.');
+  }
+  const db = await openOperationalDb();
+  return new Promise((resolve, reject) => {
+    let tx: IDBTransaction;
+    let committedOrder: SalesOrder | null = null;
+    try {
+      tx = db.transaction(['salesOrders', 'meta'], 'readwrite');
+      const orderStore = tx.objectStore('salesOrders');
+      const metaStore = tx.objectStore('meta');
+      const orderRequest = orderStore.get(input.orderId);
+      const metaRequest = metaStore.get('workspace_meta');
+      let orderReady = false;
+      let metaReady = false;
+      let nextRevision = 0;
+
+      const commitIfReady = () => {
+        if (!orderReady || !metaReady || committedOrder) return;
+        const liveOrder = orderRequest.result as SalesOrder | undefined;
+        const meta = metaRequest.result as { localRevision?: number } | undefined;
+        if (!liveOrder || liveOrder.ownerId !== input.ownerId) {
+          tx.abort();
+          reject(new Error('سفارش در فضای کاری محلی یافت نشد یا متعلق به این شرکت نیست.'));
+          return;
+        }
+        if (liveOrder.status !== 'ordered') {
+          tx.abort();
+          reject(new Error('این سفارش قبلاً حواله شده یا در وضعیت قابل ارسال نیست.'));
+          return;
+        }
+        const revision = Math.max(1, Number(meta?.localRevision) || 1);
+        const version = Math.max(1, Number(liveOrder._version) || 1);
+        if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER ||
+            !Number.isSafeInteger(version) || version >= Number.MAX_SAFE_INTEGER) {
+          tx.abort();
+          reject(new Error('نسخه سفارش یا فضای کاری از محدوده امن خارج شده است.'));
+          return;
+        }
+        nextRevision = revision + 1;
+        committedOrder = {
+          ...liveOrder,
+          dispatchNumber: liveOrder.dispatchNumber || input.dispatchNumber,
+          dispatchDate: input.dispatchDate,
+          driverName: input.driverName,
+          plateNumber: input.plateNumber,
+          items: input.items,
+          status: 'dispatched',
+          _version: version + 1,
+          updatedByDevice: input.updatedByDevice.slice(0, 64),
+        };
+        orderStore.put(committedOrder);
+        metaStore.put({
+          key: 'workspace_meta',
+          localRevision: nextRevision,
+          updatedAt: new Date().toISOString(),
+          schemaVersion: OP_DB_VERSION,
+        });
+      };
+
+      orderRequest.onsuccess = () => { orderReady = true; commitIfReady(); };
+      orderRequest.onerror = () => { try { tx.abort(); } catch { /* transaction already inactive */ } };
+      metaRequest.onsuccess = () => { metaReady = true; commitIfReady(); };
+      metaRequest.onerror = () => { try { tx.abort(); } catch { /* transaction already inactive */ } };
+      tx.oncomplete = () => {
+        db.close();
+        if (committedOrder) resolve(committedOrder);
+        else reject(new Error('ثبت اتمیک حواله خروج کامل نشد.'));
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error ?? new Error('خطا در ثبت اتمیک حواله خروج.'));
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error ?? new Error('تراکنش حواله خروج لغو شد؛ هیچ تغییری اعمال نشد.'));
+      };
+    } catch (error) {
+      db.close();
+      reject(error);
+    }
+  });
+}
+
+/**
  * Hydrates the full operational workspace from IndexedDB on application boot.
  * Returns null if the operational database has not been seeded yet.
  */
