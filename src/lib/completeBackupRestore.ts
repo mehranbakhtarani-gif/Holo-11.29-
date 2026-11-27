@@ -186,6 +186,7 @@ export async function restoreCompleteBackupPackage(
 export async function resumePendingCompleteBackupRestore(): Promise<CompleteBackupRestoreResult | null> {
   const journal = await getActiveOperationalRestoreJournal();
   if (!journal) return null;
+  announceRestoreBarrier(true);
   if (journal.state === 'staging') {
     // Commit intent was never written; by invariant neither live database was changed.
     await discardStagedDocumentAttachmentBundle(journal.restoreId);
@@ -197,7 +198,7 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
     const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
     await transitionOperationalRestoreJournal(journal.restoreId, ['workspace_applied'], 'committed', {});
     try { await discardStagedDocumentAttachmentBundle(journal.restoreId); } catch { /* cleanup is retryable */ }
-    announceRestoreBarrier(false);
+    announceRestoreBarrier(true, true);
     return {
       restoreId: journal.restoreId,
       restoredAttachments: attachments.applied,
@@ -213,7 +214,7 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
   }
   await transitionOperationalRestoreJournal(journal.restoreId, ['workspace_applied'], 'committed', {});
   try { await discardStagedDocumentAttachmentBundle(journal.restoreId); } catch { /* cleanup is retryable */ }
-  announceRestoreBarrier(false);
+  announceRestoreBarrier(true, true);
   return {
     restoreId: journal.restoreId,
     restoredAttachments: attachments.applied,
