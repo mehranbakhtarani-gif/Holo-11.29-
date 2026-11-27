@@ -104,6 +104,7 @@ import {
   commitInvoiceOperationalTx,
   commitSalesOrderDispatchOperationalTx,
   getOperationalDbStats,
+  isOperationalRestoreBarrierActive,
   loadOperationalWorkspace,
   OperationalDbStats,
   saveOperationalWorkspaceTx,
@@ -6937,6 +6938,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Synchronous flush on close / tab hide + background IndexedDB rolling snapshot on close
   useEffect(() => {
     const handleBeforeClose = () => {
+      if (isOperationalRestoreBarrierActive()) return;
       const cur = latestBackupRef.current;
       if (!cur.autoEnabled) return;
       try {
@@ -6981,8 +6983,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       hasMountedBackupRef.current = true;
       return;
     }
+    if (isOperationalRestoreBarrierActive()) return;
 
     const opDbTimer = window.setTimeout(async () => {
+      if (isOperationalRestoreBarrierActive()) return;
       try {
         await saveOperationalWorkspaceTx({
           profile,
@@ -7011,6 +7015,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }, 650);
 
     const fastTimer = window.setTimeout(() => {
+      if (isOperationalRestoreBarrierActive()) return;
       try {
         const cur = latestBackupRef.current;
         const payloadJson = cur.exportFn();
@@ -7027,6 +7032,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     const idbTimer = autoBackupOnClose && backupSessionUnlocked
       ? window.setTimeout(async () => {
+          if (isOperationalRestoreBarrierActive()) return;
           try {
             const cur = latestBackupRef.current;
             const payloadJson = cur.exportFn();
@@ -7051,6 +7057,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     // until all transactional readers and writers have been migrated and tested.
     const encryptedMirrorTimer = backupSessionUnlocked
       ? window.setTimeout(async () => {
+          if (isOperationalRestoreBarrierActive()) return;
           try {
             const workspaceId = String(profile.uid || DEMO_OWNER).trim();
             const encryptedMeta = await prepareEncryptedOperationalWorkspaceMigrationInDb(workspaceId);
