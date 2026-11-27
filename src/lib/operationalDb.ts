@@ -8,6 +8,7 @@
 import type { FinancialCollectionKind } from './offlineFirstCore';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
 import { requireBackupSessionPassphrase } from './backupSession';
+import { importAllBankReconciliationSessions } from './bankReconciliationEngine';
 import {
   Account,
   AuditActivityLog,
@@ -108,6 +109,7 @@ export interface OperationalWorkspaceData {
   syncInbox?: SyncInboxRecord[];
   localRevision?: number;
   updatedAt?: string;
+  bankReconciliationSessions?: Record<string, unknown>;
 }
 
 export interface SyncOutboxOperation {
@@ -329,6 +331,13 @@ export async function applyOperationalRestoreJournalWorkspace(
     }
     const workspace = parseOperationalWorkspaceSnapshot(verified.snapshotJson);
     const recordCount = countOperationalWorkspaceRecords(workspace);
+    if (workspace.bankReconciliationSessions !== undefined) {
+      if (!workspace.bankReconciliationSessions || typeof workspace.bankReconciliationSessions !== 'object' ||
+          Array.isArray(workspace.bankReconciliationSessions)) {
+        throw new Error('ساختار تطبیق بانکی در فضای کاری بازیابی معتبر نیست.');
+      }
+      importAllBankReconciliationSessions(workspace.bankReconciliationSessions);
+    }
     if (recordCount !== journal.workspaceRecordCount) {
       throw new Error('تعداد رکوردهای فضای کاری با ژورنال بازیابی مطابقت ندارد.');
     }
