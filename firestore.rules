@@ -43,6 +43,11 @@ service cloud.firestore {
       return val is string && val.size() >= 1 && val.size() <= maxLen;
     }
 
+    // IRR accounting amounts must remain exact JavaScript-safe integers at the trust boundary.
+    function isSafeIrrAmount(val) {
+      return val is int && val >= 0 && val <= 9007199254740991;
+    }
+
     function isOptionalString(data, field, maxLen) {
       return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
     }
@@ -166,9 +171,10 @@ service cloud.firestore {
         && isNonEmptyString(data.description, 300)
         && data.voucherType in ['opening', 'general', 'sales', 'purchase', 'treasury', 'payroll', 'depreciation', 'closing']
         && data.status in ['draft', 'permanent']
-        && data.totalDebit is number && data.totalDebit >= 0
-        && data.totalCredit is number && data.totalCredit >= 0
+        && isSafeIrrAmount(data.totalDebit)
+        && isSafeIrrAmount(data.totalCredit)
         && data.totalDebit == data.totalCredit
+        && (data.status == 'draft' || data.totalDebit > 0)
         && isOptionalString(data, 'currencyCode', 10)
         && (!('exchangeRate' in data) || (data.exchangeRate is number && data.exchangeRate > 0))
         && (!('foreignTotalDebit' in data) || (data.foreignTotalDebit is number && data.foreignTotalDebit >= 0))
@@ -203,14 +209,14 @@ service cloud.firestore {
         && (!('foreignDiscount' in data) || (data.foreignDiscount is number && data.foreignDiscount >= 0))
         && (!('foreignVatAmount' in data) || (data.foreignVatAmount is number && data.foreignVatAmount >= 0))
         && (!('foreignGrandTotal' in data) || (data.foreignGrandTotal is number && data.foreignGrandTotal >= 0))
-        && data.subtotal is number && data.subtotal >= 0
-        && data.discount is number && data.discount >= 0
-        && data.vatAmount is number && data.vatAmount >= 0
-        && data.grandTotal is number && data.grandTotal >= 0
-        && data.paidCash is number && data.paidCash >= 0
-        && data.paidBank is number && data.paidBank >= 0
-        && data.paidCheque is number && data.paidCheque >= 0
-        && data.creditAmount is number && data.creditAmount >= 0
+        && isSafeIrrAmount(data.subtotal)
+        && isSafeIrrAmount(data.discount)
+        && isSafeIrrAmount(data.vatAmount)
+        && isSafeIrrAmount(data.grandTotal)
+        && isSafeIrrAmount(data.paidCash)
+        && isSafeIrrAmount(data.paidBank)
+        && isSafeIrrAmount(data.paidCheque)
+        && isSafeIrrAmount(data.creditAmount)
         && data.status in ['issued', 'settled', 'cancelled']
         && isOptionalString(data, 'voucherId', 128)
         && data.items is list && data.items.size() >= 1 && data.items.size() <= 100 && data.items[0] is map
