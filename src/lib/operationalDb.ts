@@ -779,6 +779,16 @@ export async function loadPreparedEncryptedOperationalWorkspace(
     db.close();
   }
   if (!record || record.migrationState !== 'prepared' || typeof record.envelopeJson !== 'string') return null;
+  if (
+    record.schemaVersion !== 1 ||
+    !Number.isSafeInteger(record.recordCount) ||
+    record.recordCount < 0 ||
+    !Number.isSafeInteger(record.sourceRevision) ||
+    record.sourceRevision < 1 ||
+    !/^[a-f0-9]{64}$/i.test(record.plaintextSha256)
+  ) {
+    throw new Error('فراداده نسخه عملیاتی رمزگذاری‌شده نامعتبر است؛ بازیابی متوقف شد.');
+  }
 
   if (currentRevision !== record.sourceRevision) {
     throw new Error('نسخه رمزگذاری‌شده آماده‌شده قدیمی است و با داده عملیاتی فعلی تطابق ندارد.');
@@ -794,7 +804,18 @@ export async function loadPreparedEncryptedOperationalWorkspace(
   if (result.sha256 !== record.plaintextSha256) {
     throw new Error('اثر انگشت نسخه عملیاتی رمزگذاری‌شده با فراداده آن مطابقت ندارد.');
   }
-  return parseOperationalWorkspaceSnapshot(result.snapshotJson);
+  const workspace = parseOperationalWorkspaceSnapshot(result.snapshotJson);
+  const actualRecordCount = [
+    workspace.accounts, workspace.parties, workspace.products, workspace.vouchers,
+    workspace.invoices, workspace.cheques, workspace.employees, workspace.assets,
+    workspace.costCenters, workspace.currencies, workspace.exchangeRates,
+    workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
+    workspace.rbacOperators, workspace.auditLogs,
+  ].reduce((total, rows) => total + rows.length, 0);
+  if (actualRecordCount !== record.recordCount) {
+    throw new Error('تعداد رکوردهای فضای کاری با فراداده نسخه رمزگذاری‌شده مطابقت ندارد.');
+  }
+  return workspace;
 }
 
 export async function getPreparedEncryptedOperationalWorkspaceMeta(
