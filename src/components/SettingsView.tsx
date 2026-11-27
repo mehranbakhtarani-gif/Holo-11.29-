@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowDownToLine,
   ArrowUpFromLine,
+  Camera,
   CheckCircle2,
   ClipboardList,
   Cloud,
@@ -110,6 +111,7 @@ export const SettingsView: React.FC<{
     loginWithGoogle,
     logout,
     updateCompanyProfile,
+    updateProfilePhoto,
     exportBackupJson,
     importBackupJson,
     audioEnabled,
@@ -117,6 +119,9 @@ export const SettingsView: React.FC<{
     operationalDbStats,
     showToast,
   } = useAccounting();
+
+  const [profilePhotoBusy, setProfilePhotoBusy] = useState(false);
+  const profilePhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   const [sbSettingsPasscode, setSbSettingsPasscode] = useState('');
   const [pendingSwitchOpId, setPendingSwitchOpId] = useState<string | null>(null);
@@ -392,6 +397,67 @@ export const SettingsView: React.FC<{
       fiscalYear,
       currencyUnit,
     });
+  };
+
+  const handleProfilePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('فقط فایل‌های تصویری (JPG/PNG/WebP) مجاز هستند.', 'error');
+      return;
+    }
+    setProfilePhotoBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('خواندن فایل تصویر ناموفق بود.'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error('فرمت تصویر قابل پردازش نیست.'));
+          img.onload = () => {
+            const maxDim = 256;
+            const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              reject(new Error('امکان فشرده‌سازی تصویر وجود ندارد.'));
+              return;
+            }
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            let encoded = canvas.toDataURL('image/jpeg', 0.82);
+            if (encoded.length > 180_000) {
+              encoded = canvas.toDataURL('image/jpeg', 0.6);
+            }
+            if (encoded.length > 200_000) {
+              reject(new Error('حجم تصویر پس از فشرده‌سازی همچنان بیش از ۱۵۰ کیلوبایت است.'));
+              return;
+            }
+            resolve(encoded);
+          };
+          img.src = String(reader.result || '');
+        };
+        reader.readAsDataURL(file);
+      });
+      await updateProfilePhoto(dataUrl);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'ذخیره عکس پروفایل ناموفق بود.', 'error');
+    } finally {
+      setProfilePhotoBusy(false);
+    }
+  };
+
+  const handleRemoveProfilePhoto = async () => {
+    setProfilePhotoBusy(true);
+    try {
+      await updateProfilePhoto(null);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'حذف عکس پروفایل ناموفق بود.', 'error');
+    } finally {
+      setProfilePhotoBusy(false);
+    }
   };
 
   const handleDownloadBackup = () => {
@@ -1387,6 +1453,56 @@ export const SettingsView: React.FC<{
         <h2 className="text-sm font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-3">
           مشخصات حقوقی شرکت و تنظیمات پایه هلو
         </h2>
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-3">
+            {profile.profilePhotoData ? (
+              <img
+                src={profile.profilePhotoData}
+                alt={displayName || 'پروفایل کاربر'}
+                className="w-12 h-12 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-full bg-teal-700/10 text-teal-700 dark:text-teal-400 flex items-center justify-center font-bold text-sm shrink-0">
+                {(displayName || companyName || 'ه').slice(0, 1)}
+              </div>
+            )}
+            <div>
+              <div className="font-semibold text-slate-800 dark:text-slate-100">تصویر پروفایل مدیر مالی</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                فشرده‌سازی خودکار به فرمت JPEG (حداکثر ۱۵۰ کیلوبایت) با همگام‌سازی ابری
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              ref={profilePhotoInputRef}
+              type="file"
+              accept="image/*"
+              onChange={(e) => void handleProfilePhotoChange(e)}
+              className="hidden"
+            />
+            <button
+              type="button"
+              disabled={profilePhotoBusy}
+              onClick={() => profilePhotoInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold disabled:opacity-50"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>{profilePhotoBusy ? 'در حال ذخیره...' : 'انتخاب تصویر'}</span>
+            </button>
+            {profile.profilePhotoData && (
+              <button
+                type="button"
+                disabled={profilePhotoBusy}
+                onClick={() => void handleRemoveProfilePhoto()}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-medium disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>حذف</span>
+              </button>
+            )}
+          </div>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-slate-500 mb-1">نام رسمی شرکت (درج در فاکتور رسمی)</label>

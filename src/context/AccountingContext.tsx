@@ -398,10 +398,24 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [includeDraftsInReports, setIncludeDraftsInReports] = useState<boolean>(false);
   const [operationalDbStats, setOperationalDbStats] = useState<OperationalDbStats | null>(null);
 
+  const toastTimerRef = useRef<number | null>(null);
+  const isValidProfilePhotoData = (val: unknown): val is string =>
+    typeof val === 'string' &&
+    val.startsWith('data:image/jpeg;base64,') &&
+    val.length <= 200_000;
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null && typeof window !== 'undefined') {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
   const [profile, setProfile] = useState<CompanyProfile>(() => {
     try {
       const savedPhoto = typeof window !== 'undefined' ? window.localStorage.getItem(`holoo_profile_photo_${DEMO_OWNER}`) : null;
-      return { ...DEFAULT_PROFILE, profilePhotoData: savedPhoto || undefined };
+      return { ...DEFAULT_PROFILE, profilePhotoData: isValidProfilePhotoData(savedPhoto) ? savedPhoto : undefined };
     } catch {
       return DEFAULT_PROFILE;
     }
@@ -484,14 +498,27 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     [rbacOperators, activeOperatorId, rbacPinHash, isPrivilegedOperator, hashRbacPin]
   );
 
+  const showToast = useCallback((msg: string, explicitTone?: AudioFeedbackTone) => {
+    setToast(msg);
+    const resolvedTone = explicitTone ?? inferToastTone(msg);
+    playFeedbackForTone(resolvedTone);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast((prev) => (prev === msg ? null : prev));
+    }, 4500);
+  }, []);
+
   const setActiveOperatorId = useCallback(
     (id: string) => {
       const res = switchActiveOperator(id);
       if (!res.ok && res.error) {
-        setToast(res.error);
+        showToast(res.error, 'error');
       }
     },
-    [switchActiveOperator]
+    [switchActiveOperator, showToast]
   );
 
   const configureRbacSwitchPin = useCallback(
@@ -530,15 +557,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     },
     [activeOperator, rbacPinHash, hashRbacPin]
   );
-
-  const showToast = useCallback((msg: string, explicitTone?: AudioFeedbackTone) => {
-    setToast(msg);
-    const resolvedTone = explicitTone ?? inferToastTone(msg);
-    playFeedbackForTone(resolvedTone);
-    window.setTimeout(() => {
-      setToast((prev) => (prev === msg ? null : prev));
-    }, 4500);
-  }, []);
 
   const assertPermission = useCallback(
     (perm: Parameters<typeof checkOperatorPermission>[1], internalBypass = false): boolean => {
@@ -939,12 +957,21 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                   uid: d.uid,
                   displayName: d.displayName,
                   email: d.email,
-                  profilePhotoData: typeof d.profilePhotoData === 'string' ? d.profilePhotoData : undefined,
+                  profilePhotoData: isValidProfilePhotoData(d.profilePhotoData) ? d.profilePhotoData : undefined,
                   companyName: d.companyName,
                   economicCode: d.economicCode,
                   nationalId: d.nationalId,
                   fiscalYear: d.fiscalYear,
                   currencyUnit: d.currencyUnit || 'IRT',
+                  defaultCostingMethod:
+                    d.defaultCostingMethod === 'fifo' ||
+                    d.defaultCostingMethod === 'moving_average' ||
+                    d.defaultCostingMethod === 'periodic_average'
+                      ? d.defaultCostingMethod
+                      : 'fifo',
+                  closedFiscalYears: Array.isArray(d.closedFiscalYears)
+                    ? d.closedFiscalYears.filter((y: unknown): y is string => typeof y === 'string').slice(0, 30)
+                    : undefined,
                   role: 'accountant',
                 });
               }
@@ -1106,7 +1133,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (user) {
         const path = `users/${user.uid}`;
         try {
-          await updateDoc(doc(db, 'users', user.uid), {
+          const cloudPatch: Record<string, unknown> = {
             displayName: next.displayName.slice(0, 120),
             companyName: next.companyName.slice(0, 160),
             economicCode: (next.economicCode || '').slice(0, 32),
@@ -1114,7 +1141,20 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             fiscalYear: next.fiscalYear.slice(0, 16),
             currencyUnit: next.currencyUnit,
             updatedAt: serverTimestamp(),
-          });
+          };
+          if (
+            next.defaultCostingMethod === 'fifo' ||
+            next.defaultCostingMethod === 'moving_average' ||
+            next.defaultCostingMethod === 'periodic_average'
+          ) {
+            cloudPatch.defaultCostingMethod = next.defaultCostingMethod;
+          }
+          if (Array.isArray(next.closedFiscalYears)) {
+            cloudPatch.closedFiscalYears = next.closedFiscalYears
+              .filter((y): y is string => typeof y === 'string')
+              .slice(0, 30);
+          }
+          await updateDoc(doc(db, 'users', user.uid), cloudPatch);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, path);
         }
@@ -6146,6 +6186,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             ...(typeof pr.economicCode === 'string' ? { economicCode: pr.economicCode.slice(0, 32) } : {}),
             ...(typeof pr.nationalId === 'string' ? { nationalId: pr.nationalId.slice(0, 32) } : {}),
             ...(pr.currencyUnit === 'IRR' || pr.currencyUnit === 'IRT' ? { currencyUnit: pr.currencyUnit } : {}),
+            ...(pr.defaultCostingMethod === 'fifo' ||
+            pr.defaultCostingMethod === 'moving_average' ||
+            pr.defaultCostingMethod === 'periodic_average'
+              ? { defaultCostingMethod: pr.defaultCostingMethod }
+              : {}),
+            ...(Array.isArray(pr.closedFiscalYears)
+              ? {
+                  closedFiscalYears: pr.closedFiscalYears
+                    .filter((y): y is string => typeof y === 'string')
+                    .slice(0, 30),
+                }
+              : {}),
+            ...(isValidProfilePhotoData(pr.profilePhotoData) ? { profilePhotoData: pr.profilePhotoData } : {}),
           }));
         }
 

@@ -194,7 +194,11 @@ export const SmartVisionScannerModal: React.FC<SmartVisionScannerModalProps> = (
       const accountsHint = leafAccounts.slice(0, 24).map((a) => `${a.code}:${a.title}`);
       const resp = await fetch('/api/ai/vision-scan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'HolooApex',
+        },
         body: JSON.stringify({
           imageBase64: base64,
           mimeType,

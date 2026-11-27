@@ -387,6 +387,47 @@ async function main() {
     assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoOperationalBottomRow.tsx')), false);
   });
 
+  // 11. Full-audit deep pass (F-01 through F-08) regression invariants
+  await test('F-01..F-08: Firestore rules, subpath cache warming, AI CSRF headers, Worker public FX CORS, avatar UI, and toast timer', () => {
+    const rulesSrc = fs.readFileSync(path.resolve('firestore.rules'), 'utf8');
+    // F-01: strict JPEG data URL validation + allowed in users update affectedKeys
+    assert.equal(rulesSrc.includes("^data:image/jpeg;base64,[A-Za-z0-9+/=]+$"), true, 'firestore.rules must enforce strict JPEG base64 format for profilePhotoData');
+    assert.equal(rulesSrc.includes("'defaultCostingMethod', 'closedFiscalYears', 'profilePhotoData', 'updatedAt'"), true, 'users/{userId} update must allow profilePhotoData, closedFiscalYears, and defaultCostingMethod');
+    // F-02: RBAC roles aligned with TypeScript RbacRoleKey
+    assert.equal(rulesSrc.includes("'treasurer', 'auditor_readonly'"), true, 'firestore.rules must allow treasurer and auditor_readonly RBAC roles');
+    // F-03: voucher update allows integrityHash
+    assert.equal(rulesSrc.includes("affectedKeys().hasOnly(['status', 'integrityHash', '_version', 'updatedByDevice', 'updatedAt'])"), true, 'vouchers update must allow integrityHash on finalization');
+
+    // F-04: Profile photo wired in App header and SettingsView
+    const appSrc = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
+    assert.equal(appSrc.includes('profile.profilePhotoData || financeDirectorAvatar'), true, 'App header must render custom profile.profilePhotoData when present');
+    const settingsSrc = fs.readFileSync(path.resolve('src/components/SettingsView.tsx'), 'utf8');
+    assert.equal(settingsSrc.includes('updateProfilePhoto'), true, 'SettingsView must wire updateProfilePhoto UI');
+
+    // F-05: warmOfflineCacheNow uses BASE_URL instead of root-absolute '/'
+    const offlineStatusSrc = fs.readFileSync(path.resolve('src/lib/offlineStatus.ts'), 'utf8');
+    assert.equal(offlineStatusSrc.includes('import.meta.env?.BASE_URL'), true, 'warmOfflineCacheNow must resolve asset URLs via BASE_URL');
+    assert.equal(offlineStatusSrc.includes("'/manifest.webmanifest'"), false, 'warmOfflineCacheNow must not hardcode root-absolute /manifest.webmanifest');
+
+    // F-06: AI modals send X-Requested-With CSRF header and credentials
+    const visionSrc = fs.readFileSync(path.resolve('src/components/dashboard/SmartVisionScannerModal.tsx'), 'utf8');
+    assert.equal(visionSrc.includes("'X-Requested-With': 'HolooApex'"), true, 'SmartVisionScannerModal must send X-Requested-With header');
+    const copilotSrc = fs.readFileSync(path.resolve('src/components/SmartCopilotDrawer.tsx'), 'utf8');
+    assert.equal(copilotSrc.includes("'X-Requested-With': 'HolooApex'"), true, 'SmartCopilotDrawer must send X-Requested-With header');
+
+    // F-07: Worker allows public read CORS on /api/live-fx & /api/health while keeping strict CORS on /api/supabase/*
+    const workerSrc = fs.readFileSync(path.resolve('worker/index.js'), 'utf8');
+    assert.equal(workerSrc.includes('publicOut('), true, 'Worker must serve public read-only /api/health and /api/live-fx with public CORS');
+    assert.equal(workerSrc.includes('CORS_ORIGIN_DENIED'), true, 'Worker must still reject disallowed origins on /api/supabase/*');
+    const fxSrc = fs.readFileSync(path.resolve('src/components/LiveFxTickerCard.tsx'), 'utf8');
+    assert.equal(fxSrc.includes('navigator.onLine === false'), true, 'LiveFxTickerCard must use explicit navigator.onLine === false check');
+
+    // F-08: AccountingContext uses toastTimerRef and showToast in setActiveOperatorId
+    const ctxSrc = fs.readFileSync(path.resolve('src/context/AccountingContext.tsx'), 'utf8');
+    assert.equal(ctxSrc.includes('toastTimerRef'), true, 'AccountingContext must clear previous toast timer via toastTimerRef');
+    assert.equal(ctxSrc.includes("showToast(res.error, 'error')"), true, 'setActiveOperatorId must use showToast for auto-dismiss');
+  });
+
   console.log(`\nAll ${passed} audit remediation assertions passed!`);
 }
 

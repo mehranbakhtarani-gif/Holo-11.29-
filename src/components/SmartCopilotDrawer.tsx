@@ -503,7 +503,11 @@ export const SmartCopilotDrawer: React.FC<{
 
         const resp = await fetch('/api/ai/copilot', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'HolooApex',
+          },
           body: JSON.stringify({
             message: trimmed,
             history: messages.slice(-6).map((m) => ({ role: m.role, text: m.text })),

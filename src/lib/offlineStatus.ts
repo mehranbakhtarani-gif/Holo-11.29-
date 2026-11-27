@@ -156,14 +156,15 @@ export async function warmOfflineCacheNow(): Promise<{ cachedCount: number; cach
   if (typeof caches === 'undefined') {
     return { cachedCount: 0, cacheName };
   }
+  const base = (import.meta.env?.BASE_URL || './').replace(/\/?$/, '/');
   const urlsToWarm = [
-    '/',
-    '/index.html',
-    '/icon.svg',
-    '/pwa-192x192.png',
-    '/pwa-512x512.png',
-    '/apple-touch-icon.png',
-    '/manifest.webmanifest',
+    base,
+    `${base}index.html`,
+    `${base}icon.svg`,
+    `${base}pwa-192x192.png`,
+    `${base}pwa-512x512.png`,
+    `${base}apple-touch-icon.png`,
+    `${base}manifest.webmanifest`,
   ];
   let cachedCount = 0;
   try {

@@ -55,7 +55,7 @@ service cloud.firestore {
     // --- Entity Validation Blueprints (Anti-Update-Gap) ---
     function isValidUserProfile(data) {
       return data.keys().hasAll(['uid', 'displayName', 'companyName', 'fiscalYear', 'currencyUnit', 'role', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'profilePhotoData', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'defaultCostingMethod', 'closedFiscalYears', 'profilePhotoData', 'role', 'createdAt', 'updatedAt'])
         && data.uid == request.auth.uid
         && isValidId(data.uid)
         && isNonEmptyString(data.displayName, 120)
@@ -65,7 +65,9 @@ service cloud.firestore {
         && isOptionalString(data, 'nationalId', 32)
         && isNonEmptyString(data.fiscalYear, 16)
         && data.currencyUnit in ['IRR', 'IRT']
-        && isOptionalString(data, 'profilePhotoData', 200000)
+        && (!('defaultCostingMethod' in data) || data.defaultCostingMethod in ['fifo', 'moving_average', 'periodic_average'])
+        && (!('closedFiscalYears' in data) || (data.closedFiscalYears is list && data.closedFiscalYears.size() <= 30 && (data.closedFiscalYears.size() == 0 || data.closedFiscalYears[0] is string)))
+        && (!('profilePhotoData' in data) || (data.profilePhotoData is string && data.profilePhotoData.size() <= 200000 && data.profilePhotoData.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$')))
         && data.role == 'accountant'
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -415,7 +417,7 @@ service cloud.firestore {
         && data.ownerId == request.auth.uid
         && isValidId(data.ownerId)
         && isNonEmptyString(data.fullName, 140)
-        && data.role in ['finance_manager', 'accountant', 'warehouse_keeper', 'sales_officer', 'auditor']
+        && data.role in ['finance_manager', 'accountant', 'warehouse_keeper', 'sales_officer', 'treasurer', 'auditor_readonly', 'auditor']
         && isOptionalString(data, 'email', 200)
         && data.active is bool
         && data.permissions is map
@@ -430,7 +432,7 @@ service cloud.firestore {
         && isValidId(data.ownerId)
         && isNonEmptyString(data.timestamp, 40)
         && isNonEmptyString(data.operatorName, 120)
-        && data.operatorRole in ['finance_manager', 'accountant', 'warehouse_keeper', 'sales_officer', 'auditor']
+        && data.operatorRole in ['finance_manager', 'accountant', 'warehouse_keeper', 'sales_officer', 'treasurer', 'auditor_readonly', 'auditor']
         && isNonEmptyString(data.module, 80)
         && isNonEmptyString(data.action, 160)
         && isNonEmptyString(data.details, 400)
@@ -551,7 +553,7 @@ service cloud.firestore {
           && incoming().role == existing().role
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'updatedAt'])
+          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'defaultCostingMethod', 'closedFiscalYears', 'profilePhotoData', 'updatedAt'])
         )
       );
       allow delete: if false;
@@ -655,11 +657,11 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
-            incoming().diff(existing()).affectedKeys().hasOnly(['voucherNumber', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['voucherNumber', 'integrityHash', 'updatedAt']) ||
             (
               existing().status != 'permanent' && (
-                incoming().diff(existing()).affectedKeys().hasOnly(['status', '_version', 'updatedByDevice', 'updatedAt']) ||
-                incoming().diff(existing()).affectedKeys().hasOnly(['date', 'description', 'voucherType', 'lines', 'totalDebit', 'totalCredit', 'currencyCode', 'exchangeRate', 'foreignTotalDebit', 'foreignTotalCredit', 'status', '_version', 'updatedByDevice', 'updatedAt'])
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'integrityHash', '_version', 'updatedByDevice', 'updatedAt']) ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['date', 'description', 'voucherType', 'lines', 'totalDebit', 'totalCredit', 'currencyCode', 'exchangeRate', 'foreignTotalDebit', 'foreignTotalCredit', 'status', 'integrityHash', '_version', 'updatedByDevice', 'updatedAt'])
               )
             )
           )

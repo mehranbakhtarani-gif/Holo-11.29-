@@ -72,15 +72,20 @@ export const LiveFxTickerCard: React.FC<{
   const [isOfflineFallback, setIsOfflineFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const workerBackoffRef = React.useRef(false);
+
   const fetchRates = useCallback(async (force = false) => {
     const cached = loadCachedFx();
     const localFallback = cached || buildLocalFxResponseFromRates(exchangeRates);
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       setData(localFallback);
       setIsOfflineFallback(true);
       setError(null);
       setLoading(false);
       setRefreshing(false);
+      return;
+    }
+    if (!force && workerBackoffRef.current) {
       return;
     }
 
@@ -93,6 +98,7 @@ export const LiveFxTickerCard: React.FC<{
       if (!res.ok || !isJsonHttpResponse(res)) throw new Error('دریافت نرخ زنده ناموفق بود.');
       const json = (await res.json()) as LiveFxResponse;
       if (Array.isArray(json.items) && json.items.length > 0) {
+        workerBackoffRef.current = false;
         setData(saveCachedFx(json));
         setIsOfflineFallback(false);
       } else {
@@ -100,6 +106,7 @@ export const LiveFxTickerCard: React.FC<{
         setIsOfflineFallback(true);
       }
     } catch {
+      workerBackoffRef.current = true;
       setData(localFallback);
       setIsOfflineFallback(true);
       setError(null);
@@ -111,10 +118,18 @@ export const LiveFxTickerCard: React.FC<{
 
   useEffect(() => {
     fetchRates(false);
+    const onOnline = () => {
+      workerBackoffRef.current = false;
+      void fetchRates(false);
+    };
+    window.addEventListener('online', onOnline);
     const timer = window.setInterval(() => {
       fetchRates(false);
     }, 180_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.clearInterval(timer);
+    };
   }, [fetchRates]);
 
   const orderedItems = DISPLAY_ORDER.map((code) => data?.items.find((i) => i.code === code)).filter(
