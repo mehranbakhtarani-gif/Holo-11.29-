@@ -1193,6 +1193,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `accounts/${id}`);
+          throw err;
         }
       } else {
         setAccounts((prev) => [...prev, full]);
@@ -1221,6 +1222,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'accounts', accountId), updatePayload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `accounts/${accountId}`);
+          throw err;
         }
       } else {
         setAccounts((prev) =>
@@ -1251,6 +1253,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'accounts', accountId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `accounts/${accountId}`);
+          throw err;
         }
       } else {
         setAccounts((prev) => prev.filter((a) => a.id !== accountId));
@@ -1292,6 +1295,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `parties/${id}`);
+          throw err;
         }
       } else {
         setParties((prev) => [full, ...prev]);
@@ -1388,6 +1392,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'parties', partyId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `parties/${partyId}`);
+          throw err;
         }
       } else {
         setParties((prev) => prev.filter((p) => p.id !== partyId));
@@ -2044,6 +2049,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `products/${id}`);
+          throw err;
         }
       } else {
         setProducts((prev) => [full, ...prev]);
@@ -2089,6 +2095,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await updateDoc(doc(db, 'products', productId), payload);
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `products/${productId}`);
+          throw err;
         }
       } else {
         setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, ...patch } : p)));
@@ -2113,6 +2120,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'products', productId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `products/${productId}`);
+          throw err;
         }
       } else {
         setProducts((prev) => prev.filter((p) => p.id !== productId));
@@ -2134,6 +2142,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `products/${productId}`);
+          throw err;
         }
       } else {
         setProducts((prev) =>
