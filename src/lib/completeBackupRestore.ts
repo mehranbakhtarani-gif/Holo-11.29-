@@ -7,6 +7,7 @@ import {
   parseOperationalWorkspaceSnapshot,
   countOperationalWorkspaceRecords,
   transitionOperationalRestoreJournal,
+  updateStagingOperationalRestoreJournal,
   type OperationalRestoreJournalRecord,
 } from './operationalDb';
 import {
@@ -119,18 +120,11 @@ export async function restoreCompleteBackupPackage(
 
   // Freeze local persistence and all sync paths before any staging work begins.
   announceRestoreBarrier(true);
-  let staged = false;
+  let journalCreated = false;
   let commitIntentWritten = false;
   try {
-    const stagedManifest = await stageEncryptedDocumentAttachmentBundle(
-      restoreId,
-      attachmentBundleJson,
-      packageDigest,
-      options.allowLegacyUnboundAttachmentMetadata === true
-    );
-    staged = true;
-    await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
-
+    // Persist the preparation journal before writing any attachment staging rows.
+    // A newly opened tab can now discover the in-progress preparation on startup.
     const now = new Date().toISOString();
     const journal: OperationalRestoreJournalRecord = {
       restoreId,
@@ -140,15 +134,29 @@ export async function restoreCompleteBackupPackage(
       workspacePlaintextSha256: verified.sha256,
       workspaceSchemaVersion: 2,
       workspaceRecordCount,
-      attachmentManifestDigest: stagedManifest.manifestDigest,
-      attachmentCount: stagedManifest.rowCount,
+      // Temporary valid digest until the staged attachment manifest is verified.
+      attachmentManifestDigest: packageDigest,
+      attachmentCount: 0,
       packageSchemaVersion: 2,
       state: 'staging',
       createdAt: now,
       updatedAt: now,
     };
-
     await createOperationalRestoreJournal(journal);
+    journalCreated = true;
+
+    const stagedManifest = await stageEncryptedDocumentAttachmentBundle(
+      restoreId,
+      attachmentBundleJson,
+      packageDigest,
+      options.allowLegacyUnboundAttachmentMetadata === true
+    );
+    await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
+    await updateStagingOperationalRestoreJournal(
+      restoreId,
+      stagedManifest.manifestDigest,
+      stagedManifest.rowCount
+    );
     await transitionOperationalRestoreJournal(restoreId, ['staging'], 'commit_requested', {});
     commitIntentWritten = true;
 
@@ -178,10 +186,11 @@ export async function restoreCompleteBackupPackage(
     const durableCommitIntent = durableJournal?.restoreId === restoreId &&
       durableJournal.state !== 'staging' && durableJournal.state !== 'committed';
     if (!commitIntentWritten && !durableCommitIntent) {
-      if (staged) {
+      if (journalCreated) {
+        // Stage writes may have partially succeeded before the staging call rejected.
         try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* no live data was touched */ }
+        try { await discardStagingOperationalRestoreJournal(restoreId); } catch { /* journal may already be absent */ }
       }
-      try { await discardStagingOperationalRestoreJournal(restoreId); } catch { /* journal may not have been created */ }
       const remainingJournal = await getActiveOperationalRestoreJournal().catch(() => ({ restoreId: 'unknown' } as OperationalRestoreJournalRecord));
       if (!remainingJournal) announceRestoreBarrier(false);
       else announceRestoreBarrier(true);
