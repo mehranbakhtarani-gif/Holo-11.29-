@@ -176,9 +176,14 @@ export async function restoreCompleteBackupPackage(
         try { await discardStagedDocumentAttachmentBundle(restoreId); } catch { /* no live data was touched */ }
       }
       try { await discardStagingOperationalRestoreJournal(restoreId); } catch { /* journal may not have been created */ }
-      announceRestoreBarrier(false);
+      const remainingJournal = await getActiveOperationalRestoreJournal().catch(() => ({ restoreId: 'unknown' } as OperationalRestoreJournalRecord));
+      if (!remainingJournal) announceRestoreBarrier(false);
+      else announceRestoreBarrier(true);
     } else if (durableJournal?.restoreId === restoreId) {
       await markRecoveryFailure(durableJournal, error);
+    } else {
+      // Another tab may have won the restore-journal race. Keep this tab fail-closed.
+      announceRestoreBarrier(true);
     }
     throw error;
   }
