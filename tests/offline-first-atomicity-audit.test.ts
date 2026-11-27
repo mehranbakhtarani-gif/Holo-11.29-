@@ -495,6 +495,18 @@ async function runTests() {
   assert.equal(duplicateProductSim.stores.invoices.size, 0);
   console.log('✓ 2d. Invoice rejects duplicate product mutations before writes');
 
+  const duplicateChequeSim = createTransactionalIdbSimulator();
+  await assert.rejects(
+    () => commitInvoiceOperationalTx(
+      { updatedProducts: [], cheques: [cheque, cheque], invoice },
+      { dbOverride: duplicateChequeSim.db }
+    ),
+    /ATOMIC_ROLLBACK_INVALID_CHEQUE/
+  );
+  assert.equal(duplicateChequeSim.stores.cheques.size, 0);
+  assert.equal(duplicateChequeSim.stores.invoices.size, 0);
+  console.log('✓ 2e. Invoice rejects duplicate treasury cheque IDs before writes');
+
   const overflowRevisionSim = createTransactionalIdbSimulator({
     products: [initialProduct],
     meta: [{ key: 'workspace_meta', localRevision: Number.MAX_SAFE_INTEGER }],
@@ -508,7 +520,7 @@ async function runTests() {
   );
   assert.equal(overflowRevisionSim.stores.products.get('prod_1').stock, 10);
   assert.equal(overflowRevisionSim.stores.invoices.size, 0);
-  console.log('✓ 2e. Invoice rejects unsafe workspace revision without partial writes');
+  console.log('✓ 2f. Invoice rejects unsafe workspace revision without partial writes');
 
   const sim = createTransactionalIdbSimulator({ products: [initialProduct] });
 
