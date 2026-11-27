@@ -14,6 +14,8 @@
 
 import { RbacRoleKey } from '../types/accounting';
 import { computeSha256Hex } from './moneyMath';
+import { decryptAndVerifyBackupEnvelope, encryptBackupEnvelope } from './offlineFirstCore';
+import { isBackupSessionUnlocked, requireBackupSessionPassphrase } from './backupSession';
 
 export type AttachmentEntityType =
   | 'invoice'
@@ -41,7 +43,13 @@ export interface DocumentAttachmentMeta {
 }
 
 export interface DocumentAttachmentRecord extends DocumentAttachmentMeta {
-  dataUrl: string; // Base64 Data URL stored locally in IndexedDB
+  dataUrl: string; // Decrypted content returned to authorized callers only
+}
+
+interface StoredDocumentAttachmentRecord extends DocumentAttachmentMeta {
+  encryptedEnvelope?: string;
+  /** Legacy plaintext field; retained only until explicit encrypted migration on read. */
+  dataUrl?: string;
 }
 
 export const ALLOWED_ATTACHMENT_MIMES = new Set([
@@ -59,7 +67,7 @@ const VAULT_STORE = 'attachments';
 
 // In-memory storage is permitted only in non-browser test runtimes. A browser must never
 // report a durable attachment write when IndexedDB is unavailable or has failed.
-const memoryVault = new Map<string, DocumentAttachmentRecord>();
+const memoryVault = new Map<string, StoredDocumentAttachmentRecord>();
 
 function isNonBrowserTestRuntime(): boolean {
   return typeof window === 'undefined';
@@ -141,8 +149,15 @@ export async function saveDocumentAttachment(params: {
     };
   }
 
+  if (!isBackupSessionUnlocked()) {
+    return { ok: false, error: 'برای ذخیره امن پیوست، ابتدا قفل پشتیبان رمزگذاری‌شده را در تنظیمات باز کنید.' };
+  }
+  let passphrase: string;
+  try { passphrase = requireBackupSessionPassphrase(); }
+  catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'قفل پشتیبان باز نیست.' }; }
+
   const sha256 = await computeSha256Hex(params.dataUrl);
-  const record: DocumentAttachmentRecord = {
+  const meta: DocumentAttachmentMeta = {
     id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     entityType: params.entityType,
     entityId: params.entityId.trim(),
@@ -156,8 +171,15 @@ export async function saveDocumentAttachment(params: {
     uploadedBy: params.uploadedBy,
     uploadedByRole: params.uploadedByRole,
     notes: params.notes?.trim() || undefined,
-    dataUrl: params.dataUrl,
   };
+  let encryptedEnvelope: string;
+  try {
+    const envelope = await encryptBackupEnvelope(JSON.stringify({ dataUrl: params.dataUrl, mimeType: mime, sha256 }), passphrase);
+    encryptedEnvelope = JSON.stringify(envelope);
+  } catch (err) {
+    return { ok: false, error: `رمزگذاری پیوست ناموفق بود؛ فایل ذخیره نشد. ${err instanceof Error ? err.message : ''}`.trim() };
+  }
+  const storedRecord: StoredDocumentAttachmentRecord = { ...meta, encryptedEnvelope };
 
   if (isIdbAvailable()) {
     let db: IDBDatabase | null = null;
@@ -165,7 +187,7 @@ export async function saveDocumentAttachment(params: {
       db = await openVaultDb();
       await new Promise<void>((resolve, reject) => {
         const tx = db!.transaction(VAULT_STORE, 'readwrite');
-        tx.objectStore(VAULT_STORE).put(record);
+        tx.objectStore(VAULT_STORE).put(storedRecord);
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error ?? new Error('Document Vault transaction failed'));
         tx.onabort = () => reject(tx.error ?? new Error('Document Vault transaction aborted'));
@@ -176,12 +198,11 @@ export async function saveDocumentAttachment(params: {
       db?.close();
     }
   } else if (isNonBrowserTestRuntime()) {
-    memoryVault.set(record.id, record);
+    memoryVault.set(storedRecord.id, storedRecord);
   } else {
     return { ok: false, error: 'ذخیره پایدار اسناد در این مرورگر در دسترس نیست؛ برای جلوگیری از ازدست‌رفتن فایل، عملیات لغو شد.' };
   }
 
-  const { dataUrl: _omit, ...meta } = record;
   return { ok: true, meta };
 }
 
@@ -190,15 +211,15 @@ export async function listDocumentAttachments(filter?: {
   entityId?: string;
   viewerRole?: RbacRoleKey;
 }): Promise<DocumentAttachmentMeta[]> {
-  let rows: DocumentAttachmentRecord[] = [];
+  let rows: StoredDocumentAttachmentRecord[] = [];
   if (isIdbAvailable()) {
     let db: IDBDatabase | null = null;
     try {
       db = await openVaultDb();
-      rows = await new Promise<DocumentAttachmentRecord[]>((resolve, reject) => {
+      rows = await new Promise<StoredDocumentAttachmentRecord[]>((resolve, reject) => {
         const tx = db!.transaction(VAULT_STORE, 'readonly');
         const req = tx.objectStore(VAULT_STORE).getAll();
-        req.onsuccess = () => resolve((req.result as DocumentAttachmentRecord[]) || []);
+        req.onsuccess = () => resolve((req.result as StoredDocumentAttachmentRecord[]) || []);
         req.onerror = () => reject(req.error);
       });
     } catch (err) {
@@ -235,15 +256,15 @@ export async function retrieveVerifiedAttachment(
   | { ok: true; record: DocumentAttachmentRecord; integrityValid: boolean }
   | { ok: false; error: string }
 > {
-  let record: DocumentAttachmentRecord | undefined;
+  let stored: StoredDocumentAttachmentRecord | undefined;
   if (isIdbAvailable()) {
     let db: IDBDatabase | null = null;
     try {
       db = await openVaultDb();
-      record = await new Promise<DocumentAttachmentRecord | undefined>((resolve, reject) => {
+      stored = await new Promise<StoredDocumentAttachmentRecord | undefined>((resolve, reject) => {
         const tx = db!.transaction(VAULT_STORE, 'readonly');
         const req = tx.objectStore(VAULT_STORE).get(attachmentId);
-        req.onsuccess = () => resolve(req.result as DocumentAttachmentRecord | undefined);
+        req.onsuccess = () => resolve(req.result as StoredDocumentAttachmentRecord | undefined);
         req.onerror = () => reject(req.error ?? new Error('Document Vault read failed'));
       });
     } catch (err) {
@@ -252,24 +273,50 @@ export async function retrieveVerifiedAttachment(
       db?.close();
     }
   } else if (isNonBrowserTestRuntime()) {
-    record = memoryVault.get(attachmentId);
+    stored = memoryVault.get(attachmentId);
   } else {
     return { ok: false, error: 'بایگانی پایدار اسناد در این مرورگر در دسترس نیست.' };
   }
 
-  if (!record) {
+  if (!stored) {
     return { ok: false, error: 'مدرک مورد نظر در بایگانی محلی یافت نشد.' };
   }
-  if (!canRoleAccessSensitivity(viewerRole, record.sensitivity)) {
+  if (!canRoleAccessSensitivity(viewerRole, stored.sensitivity)) {
     return {
       ok: false,
       error: 'سطح دسترسی نقش فعلی برای مشاهده این مدرک محرمانه کافی نیست.',
     };
   }
 
-  const recomputed = await computeSha256Hex(record.dataUrl);
-  const integrityValid = recomputed === record.sha256;
-  return { ok: true, record, integrityValid };
+  let dataUrl: string;
+  if (stored.encryptedEnvelope) {
+    if (!isBackupSessionUnlocked()) return { ok: false, error: 'برای بازکردن پیوست رمزگذاری‌شده، ابتدا قفل پشتیبان را باز کنید.' };
+    const verified = await decryptAndVerifyBackupEnvelope(stored.encryptedEnvelope, requireBackupSessionPassphrase());
+    if (!verified.ok || !verified.snapshotJson) return { ok: false, error: verified.error || 'رمزگشایی پیوست ناموفق بود.' };
+    try {
+      const payload = JSON.parse(verified.snapshotJson) as { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
+      if (typeof payload.dataUrl !== 'string' || typeof payload.mimeType !== 'string' || typeof payload.sha256 !== 'string' || payload.mimeType !== stored.mimeType || payload.sha256 !== stored.sha256) return { ok: false, error: 'ساختار یا فراداده پیوست رمزگذاری‌شده معتبر نیست.' };
+      dataUrl = payload.dataUrl;
+    } catch { return { ok: false, error: 'محتوای رمزگشایی‌شده پیوست ساختار معتبری ندارد.' }; }
+  } else if (typeof stored.dataUrl === 'string') {
+    if (!isBackupSessionUnlocked()) return { ok: false, error: 'این پیوست از نسخه قدیمی و رمزگذاری‌نشده است؛ برای مهاجرت امن ابتدا قفل پشتیبان را باز کنید.' };
+    dataUrl = stored.dataUrl;
+    try {
+      const envelope = await encryptBackupEnvelope(JSON.stringify({ dataUrl, mimeType: stored.mimeType, sha256: stored.sha256 }), requireBackupSessionPassphrase());
+      const migrated: StoredDocumentAttachmentRecord = { ...stored, encryptedEnvelope: JSON.stringify(envelope) };
+      delete migrated.dataUrl;
+      if (isIdbAvailable()) {
+        const db = await openVaultDb();
+        try { await new Promise<void>((resolve, reject) => { const tx = db.transaction(VAULT_STORE, 'readwrite'); tx.objectStore(VAULT_STORE).put(migrated); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); }); }
+        finally { db.close(); }
+      } else if (isNonBrowserTestRuntime()) memoryVault.set(migrated.id, migrated);
+    } catch (err) { return { ok: false, error: `مهاجرت رمزگذاری‌شده پیوست قدیمی ناموفق بود: ${err instanceof Error ? err.message : ''}` }; }
+  } else return { ok: false, error: 'پیوست فاقد محتوای قابل بازیابی است.' };
+
+  const recomputed = await computeSha256Hex(dataUrl);
+  const integrityValid = recomputed === stored.sha256;
+  const { encryptedEnvelope: _envelope, dataUrl: _legacy, ...meta } = stored;
+  return { ok: true, record: { ...meta, dataUrl }, integrityValid };
 }
 
 export async function deleteDocumentAttachment(
