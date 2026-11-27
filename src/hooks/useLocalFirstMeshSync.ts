@@ -59,7 +59,7 @@ import {
   resolveEffectiveOperatingMode,
   type OperatingMode,
 } from '../lib/offlineFirstCore';
-import { isInboxOperationProcessed, recordInboxOperation } from '../lib/operationalDb';
+import { getActiveOperationalRestoreJournal, isInboxOperationProcessed, recordInboxOperation } from '../lib/operationalDb';
 
 const ONBOARDING_DISMISSED_KEY = 'holoo_apex_mesh_onboarding_dismissed_v1';
 const REMOTE_IMPORT_SYNC_EVENT = 'holoo:remote-import-applied';
@@ -154,6 +154,35 @@ export function useLocalFirstMeshSync() {
     }));
   });
   const [isP2PSyncing, setIsP2PSyncing] = useState(false);
+  const [restoreBarrierActive, setRestoreBarrierActive] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const refreshBarrier = async () => {
+      try {
+        const journal = await getActiveOperationalRestoreJournal();
+        if (mounted) setRestoreBarrierActive(Boolean(journal));
+      } catch {
+        if (mounted) setRestoreBarrierActive(true);
+      }
+    };
+    const onBarrierEvent = (event: Event) => {
+      const active = (event as CustomEvent<{ active?: boolean }>).detail?.active;
+      setRestoreBarrierActive(active !== false);
+    };
+    refreshBarrier();
+    window.addEventListener('holoo:restore-barrier', onBarrierEvent);
+    const channel = typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel('holoo-complete-restore')
+      : null;
+    if (channel) channel.onmessage = (event) => setRestoreBarrierActive(event.data?.active !== false);
+    return () => {
+      mounted = false;
+      window.removeEventListener('holoo:restore-barrier', onBarrierEvent);
+      channel?.close();
+    };
+  }, []);
+
 
   // ---- First-Launch Setup Wizard ----
   const [needsInitialSetup, setNeedsInitialSetup] = useState<boolean>(() => {
@@ -335,7 +364,7 @@ export function useLocalFirstMeshSync() {
 
   // ---- PeerJS 3-Device Mesh Lifecycle ("On-Open" + Visibility + Online Reconnect) ----
   useEffect(() => {
-    if (!selectedPeerId || !isOnline) {
+    if (!selectedPeerId || !isOnline || restoreBarrierActive) {
       if (connectorRef.current) {
         connectorRef.current.stop();
         connectorRef.current = null;
@@ -369,6 +398,7 @@ export function useLocalFirstMeshSync() {
         return buildRelayEnvelopesFromOutbox(items, built.snapshotJson);
       },
       onRemoteStateReceived: async ({
+        if (restoreBarrierActive) return [];
         fromPeerId,
         snapshotJson,
         vectorClock: remoteClock,
@@ -607,6 +637,7 @@ export function useLocalFirstMeshSync() {
         }
       },
       onPeerAckReceived: async ({ fromPeerId, receivedOperationIds }) => {
+        if (restoreBarrierActive) return;
         for (const opId of receivedOperationIds) {
           await markDexieOutboxPeerDelivered(opId, fromPeerId);
         }
@@ -677,6 +708,7 @@ export function useLocalFirstMeshSync() {
     selectedPeerId,
     meshPassphrase,
     isOnline,
+    restoreBarrierActive,
     buildTaggedSnapshot,
     writeSnapshotToLocalFolder,
     refreshOutboxAndLogs,
@@ -733,6 +765,7 @@ export function useLocalFirstMeshSync() {
   );
 
   useEffect(() => {
+    if (restoreBarrierActive) return;
     const timer = window.setTimeout(() => {
       void (async () => {
         const built = buildTaggedSnapshot();
@@ -1098,6 +1131,7 @@ export function useLocalFirstMeshSync() {
   );
 
   const triggerP2PSyncNow = useCallback(async () => {
+    if (restoreBarrierActive) { showToast('همگام‌سازی همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
     if (!selectedPeerId) {
       setNeedsInitialSetup(true);
       playWarningTone();
