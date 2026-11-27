@@ -484,12 +484,12 @@ async function runTests() {
   );
   assert.match(
     meshSyncSrc,
-    /\/const handleOnline = \\\(\\\) => \\\{\\s\*if \\\(!isOnline \\\|\\\|[^\\n]*!connectorRef\\\.current\\\) return;\//,
+    /const handleOnline = \(\) => \{\s*if \(!isOnline \|\|[^\n]*!connectorRef\.current\) return;/,
     'useLocalFirstMeshSync.ts handleOnline must respect isOnline (operatingMode !== local)'
   );
   assert.match(
     meshSyncSrc,
-    /\/const handleVisibility = \\\(\\\) => \\\{\\s\*if \\\(!isOnline \\\|\\\|[^\\n]*!connectorRef\\\.current\\\) return;\//,
+    /const handleVisibility = \(\) => \{\s*if \(!isOnline \|\|[^\n]*!connectorRef\.current\) return;/,
     'useLocalFirstMeshSync.ts handleVisibility must respect isOnline'
   );
 
