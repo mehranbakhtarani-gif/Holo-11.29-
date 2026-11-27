@@ -479,7 +479,7 @@ async function runTests() {
   // Verify operatingMode-aware `isOnline` guards in useLocalFirstMeshSync.ts
   assert.match(
     meshSyncSrc,
-    /if\\s*\\(\\s*!selectedPeerId\\s*\\|\\|\\s*!isOnline\\s*\\|\\|\\s*restoreBarrierActive\\s*\\)/,
+    /if\s*\(\s*!selectedPeerId\s*\|\|\s*!isOnline\s*\|\|\s*restoreBarrierActive\s*\)/,
     'useLocalFirstMeshSync.ts must skip PeerMeshConnector instantiation when offline, in local mode, or during restore recovery'
   );
   assert.match(
