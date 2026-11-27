@@ -599,6 +599,14 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
         db.close();
         reject(journalRequest.error ?? new Error('بررسی مانع بازیابی عملیاتی ناموفق بود.'));
       };
+      journalTx.onerror = () => {
+        db.close();
+        reject(journalTx.error ?? new Error('تراکنش بررسی مانع بازیابی شکست خورد.'));
+      };
+      journalTx.onabort = () => {
+        db.close();
+        reject(journalTx.error ?? new Error('تراکنش بررسی مانع بازیابی لغو شد.'));
+      };
     };
     req.onerror = () => reject(req.error ?? new Error('Failed to open operational IndexedDB'));
     req.onblocked = () =>
