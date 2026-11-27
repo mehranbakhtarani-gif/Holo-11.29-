@@ -177,6 +177,16 @@ function openVaultDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
   });
 }
 
+function getBase64DataUrlByteLength(dataUrl: string, mimeType: string): number | null {
+  const prefix = `data:${mimeType};base64,`;
+  if (!dataUrl.toLowerCase().startsWith(prefix.toLowerCase())) return null;
+  const payload = dataUrl.slice(prefix.length);
+  if (!payload || payload.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(payload)) return null;
+  const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+  const bytes = (payload.length / 4) * 3 - padding;
+  return Number.isSafeInteger(bytes) && bytes > 0 && bytes <= MAX_ATTACHMENT_BYTES ? bytes : null;
+}
+
 function sanitizeFileName(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim().slice(0, 120) || 'document';
 }
@@ -204,7 +214,7 @@ export async function saveDocumentAttachment(params: {
   if (!params.entityId.trim()) {
     return { ok: false, error: 'شناسه سند یا عملیات مرتبط الزامی است.' };
   }
-  if (!params.dataUrl.toLowerCase().startsWith(`data:${mime};base64,`)) {
+  if (getBase64DataUrlByteLength(params.dataUrl, mime) === null) {
     return { ok: false, error: 'قالب محتوای فایل معتبر نیست.' };
   }
 
@@ -513,7 +523,7 @@ export async function restoreEncryptedDocumentAttachmentBundle(bundleJson: strin
     let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
     try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
     catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
-    if (typeof payload.dataUrl !== 'string' || !payload.dataUrl.toLowerCase().startsWith(`data:${candidate.mimeType};base64,`) || payload.mimeType !== candidate.mimeType ||
+    if (typeof payload.dataUrl !== 'string' || getBase64DataUrlByteLength(payload.dataUrl, candidate.mimeType) === null || payload.mimeType !== candidate.mimeType ||
         payload.sha256 !== candidate.sha256 || await computeSha256Hex(payload.dataUrl) !== candidate.sha256) {
       throw new Error('مهر صحت یا فراداده محتوای یکی از پیوست‌ها معتبر نیست.');
     }
