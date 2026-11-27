@@ -7,6 +7,7 @@ import {
   computeIncomeStatement,
   computePartyBalances,
   computeTrialBalance,
+  getUnreturnedConsumedCostLayers,
   planAtomicInvoiceCommit,
   planInvoiceCancellation,
   planProformaToSaleConversion,
@@ -18,6 +19,7 @@ import {
   RBAC_ROLE_PRESETS,
 } from '../src/lib/enterpriseAccounting';
 import { allocateProportionalIrr, mulQtyByIrr, percentOfIrr } from '../src/lib/moneyMath';
+import { applyInventoryMovementStep } from '../src/lib/inventoryCostingEngine';
 import { auditPendingApprovalItems } from '../src/lib/smartAutomationEngine';
 import { fuzzyFilterAndRank } from '../src/lib/fuzzySearch';
 import {
@@ -121,6 +123,45 @@ console.log('Running QA Stress, Inventory Integration, Accounting Math & Securit
     existingInvoices: [originalSale, previousReturn],
   }), /مانده مجاز: 5/);
   logPass('Cumulative sale-return guard', 'rejects a second partial return that would exceed the original sold quantity');
+
+  const originalFifoLayers = [
+    { layerId: 'fifo_a', qty: 5, unitCostIrr: 100, totalCostIrr: 500 },
+    { layerId: 'fifo_b', qty: 5, unitCostIrr: 200, totalCostIrr: 1_000 },
+  ];
+  const unreturnedLayers = getUnreturnedConsumedCostLayers(originalFifoLayers, 3);
+  assert.deepEqual(unreturnedLayers, [
+    { layerId: 'fifo_a', qty: 5, unitCostIrr: 100, totalCostIrr: 500 },
+    { layerId: 'fifo_b', qty: 2, unitCostIrr: 200, totalCostIrr: 400 },
+  ]);
+  const secondPartialReturn = applyInventoryMovementStep({
+    productId: 'product_return_1',
+    costingMethod: 'fifo',
+    stockQty: 3,
+    totalValueIrr: 600,
+    weightedAvgUnitCostIrr: 200,
+    layers: [{
+      layerId: 'ret_previous',
+      date: '1405/01/11',
+      sourceRef: originalSale.id,
+      warehouse: originalSale.warehouse,
+      originalQty: 3,
+      remainingQty: 3,
+      unitCostIrr: 200,
+      totalCostIrr: 600,
+    }],
+  }, {
+    id: 'return_second_partial',
+    date: '1405/01/12',
+    kind: 'sale_return',
+    productId: 'product_return_1',
+    warehouse: originalSale.warehouse,
+    qty: 3,
+    sourceRefId: originalSale.id,
+    originalConsumedLayers: unreturnedLayers,
+  });
+  assert.equal(secondPartialReturn.cogsOrCostIrr, 500, 'Second partial return must restore 2×200 + 1×100, not repeat 3×200');
+  assert.equal(secondPartialReturn.nextState.stockQty, 6);
+  logPass('FIFO partial-return layer remainder', 'second partial return resumes from unreturned historical layers and restores exact 500 IRR');
 }
 
 
