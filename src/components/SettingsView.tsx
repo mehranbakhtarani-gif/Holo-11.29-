@@ -52,6 +52,8 @@ import { useInvoiceSettings } from '../lib/invoiceSettings';
 import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { exportEncryptedDocumentAttachmentBundle, restoreEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
+import { decryptAndVerifyBackupEnvelope, encryptBackupEnvelope } from '../lib/offlineFirstCore';
+import { requireBackupSessionPassphrase } from '../lib/backupSession';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -478,13 +480,13 @@ export const SettingsView: React.FC<{
         showToast('حجم اطلاعات حسابداری از سقف ۸ مگابایت مسیر بازیابی فعلی بیشتر است؛ خروجی یکپارچه متوقف شد.', 'error');
         return;
       }
-      const workspace = JSON.parse(workspaceJson) as Record<string, unknown>;
+      const workspaceEnvelope = await encryptBackupEnvelope(workspaceJson, requireBackupSessionPassphrase());
       const attachmentBundle = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as Record<string, unknown>;
       const packageJson = JSON.stringify({
         format: 'holoo-apex-complete-backup',
-        schemaVersion: 1,
+        schemaVersion: 2,
         exportedAt: new Date().toISOString(),
-        workspace,
+        workspaceEnvelope,
         documentAttachments: attachmentBundle,
       }, null, 2);
       const blob = new Blob([packageJson], { type: 'application/json;charset=utf-8;' });
@@ -518,33 +520,63 @@ export const SettingsView: React.FC<{
       if (typeof reader.result !== 'string') return;
       try {
         const parsed = JSON.parse(reader.result) as Record<string, unknown>;
-        if (parsed.format === 'holoo-apex-complete-backup' && parsed.schemaVersion === 1) {
+        if (parsed.format === 'holoo-apex-complete-backup' &&
+            (parsed.schemaVersion === 1 || parsed.schemaVersion === 2)) {
           if (!backupSessionUnlocked) {
             showToast('برای بازیابی بسته یکپارچه ابتدا قفل پشتیبان را با همان رمز باز کنید.', 'error');
             return;
           }
-          if (!parsed.workspace || typeof parsed.workspace !== 'object' ||
-              !Array.isArray((parsed.workspace as Record<string, unknown>).accounts) ||
-              !Array.isArray((parsed.workspace as Record<string, unknown>).vouchers) ||
-              !((parsed.workspace as Record<string, unknown>).accounts as unknown[]).some((account) =>
+          if (!parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
+            showToast('بخش پیوست‌های بسته پشتیبان وجود ندارد یا معتبر نیست.', 'error');
+            return;
+          }
+
+          let workspaceJson: string;
+          if (parsed.schemaVersion === 2) {
+            if (!parsed.workspaceEnvelope || typeof parsed.workspaceEnvelope !== 'object') {
+              showToast('پاکت رمزگذاری‌شده اطلاعات حسابداری در بسته وجود ندارد.', 'error');
+              return;
+            }
+            const verified = await decryptAndVerifyBackupEnvelope(
+              JSON.stringify(parsed.workspaceEnvelope),
+              requireBackupSessionPassphrase()
+            );
+            if (!verified.ok || !verified.snapshotJson) {
+              throw new Error(verified.error || 'رمزگشایی اطلاعات حسابداری ناموفق بود.');
+            }
+            workspaceJson = verified.snapshotJson;
+          } else {
+            if (!parsed.workspace || typeof parsed.workspace !== 'object') {
+              showToast('اطلاعات حسابداری بسته قدیمی معتبر نیست.', 'error');
+              return;
+            }
+            const legacyAccepted = window.confirm(
+              'این بسته نسخه قدیمی است و اطلاعات حسابداری آن رمزگذاری نشده است. فقط در صورت اعتماد به فایل و پذیرش این محدودیت ادامه دهید.'
+            );
+            if (!legacyAccepted) return;
+            workspaceJson = JSON.stringify(parsed.workspace);
+          }
+
+          const workspace = JSON.parse(workspaceJson) as Record<string, unknown>;
+          if (!Array.isArray(workspace.accounts) || !Array.isArray(workspace.vouchers) ||
+              !(workspace.accounts as unknown[]).some((account) =>
                 !!account && typeof account === 'object' &&
                 typeof (account as Record<string, unknown>).code === 'string' &&
                 typeof (account as Record<string, unknown>).title === 'string'
-              ) ||
-              !parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
-            showToast('ساختار بسته پشتیبان یکپارچه معتبر نیست.', 'error');
+              )) {
+            showToast('ساختار اطلاعات حسابداری در بسته معتبر نیست.', 'error');
             return;
           }
           const proceed = window.confirm(
             'بازیابی پیوست‌ها و اطلاعات حسابداری در دو مخزن مستقل انجام می‌شود و هنوز تراکنش اتمیک بین آن‌ها وجود ندارد. اگر مرحله دوم شکست بخورد، ممکن است بازیابی ناقص بماند. آیا ادامه می‌دهید؟'
           );
           if (!proceed) return;
-          // Attachment restore validates the full bundle before its IndexedDB transaction.
+          // Attachment restore validates the full bundle before its single IndexedDB transaction.
           // Workspace import follows afterward; cross-store rollback is not yet atomic.
           const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(
             JSON.stringify(parsed.documentAttachments)
           );
-          const workspaceImported = importBackupJson(JSON.stringify(parsed.workspace));
+          const workspaceImported = importBackupJson(workspaceJson);
           if (!workspaceImported) {
             showToast(`پیوست‌ها بازیابی شدند (${attachmentResult.restored})، اما ورود اطلاعات حسابداری کامل نشد؛ وضعیت را بررسی کنید.`, 'error');
             return;
