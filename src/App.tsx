@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import {
   Activity,
@@ -117,6 +117,7 @@ export default function App() {
   const {
     user,
     profile,
+    updateProfilePhoto,
     accounts,
     parties,
     cheques,
@@ -251,6 +252,51 @@ export default function App() {
   const [showChequePopover, setShowChequePopover] = useState(false);
   const [showCloudPopover, setShowCloudPopover] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAvatarFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('لطفاً یک فایل تصویری انتخاب کنید.');
+      return;
+    }
+    try {
+      const imageUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('read failed'));
+        reader.onerror = () => reject(new Error('read failed'));
+        reader.readAsDataURL(file);
+      });
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error('invalid image'));
+        element.src = imageUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('canvas unavailable');
+      const side = Math.min(image.width, image.height);
+      const sx = (image.width - side) / 2;
+      const sy = (image.height - side) / 2;
+      ctx.drawImage(image, sx, sy, side, side, 0, 0, 256, 256);
+      let quality = 0.82;
+      let photoData = canvas.toDataURL('image/jpeg', quality);
+      while (photoData.length > 200_000 && quality > 0.45) {
+        quality -= 0.08;
+        photoData = canvas.toDataURL('image/jpeg', quality);
+      }
+      if (photoData.length > 200_000) throw new Error('تصویر انتخابی بیش از حد حجیم است.');
+      await updateProfilePhoto(photoData);
+      setAvatarError(false);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ذخیره عکس پروفایل ناموفق بود.');
+    }
+  }, [showToast, updateProfilePhoto]);
 
   const combinedPendingQueueCount = localMesh.pendingOutboxCount + pendingQueueCount;
 
@@ -1819,23 +1865,31 @@ export default function App() {
             <span className="hidden sm:block h-5 w-px bg-slate-200 dark:bg-white/10 mx-0.5" aria-hidden="true" />
 
             {/* User Profile Avatar & Name */}
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              aria-label="انتخاب عکس پروفایل"
+              onChange={handleAvatarFileChange}
+            />
             <button
               type="button"
-              onClick={() => navigate('settings', 'rbac', 'tool-rbac')}
-              title="پروفایل کاربر و مدیریت دسترسی‌ها"
+              onClick={() => avatarInputRef.current?.click()}
+              title="برای انتخاب یا تغییر عکس پروفایل کلیک کنید"
+              aria-label="تغییر عکس پروفایل"
               className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
             >
-              {!avatarError ? (
+              {profile.profilePhotoData && !avatarError ? (
                 <img
-                  src="/src/assets/images/avatar_finance_director_1795265732394.jpg"
-                  alt={activeOperator.fullName}
-                  referrerPolicy="no-referrer"
+                  src={profile.profilePhotoData}
+                  alt={`عکس پروفایل ${profile.displayName || activeOperator.fullName}`}
                   onError={() => setAvatarError(true)}
                   className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-white/15"
                 />
               ) : (
                 <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
-                  {activeOperator.fullName.slice(0, 1)}
+                  {(profile.displayName || activeOperator.fullName).slice(0, 1)}
                 </div>
               )}
               <div className="hidden xl:flex flex-col text-right leading-tight">

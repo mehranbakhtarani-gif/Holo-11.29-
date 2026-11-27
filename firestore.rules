@@ -65,6 +65,7 @@ service cloud.firestore {
         && isOptionalString(data, 'nationalId', 32)
         && isNonEmptyString(data.fiscalYear, 16)
         && data.currencyUnit in ['IRR', 'IRT']
+        && isOptionalString(data, 'profilePhotoData', 200000)
         && data.role == 'accountant'
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -550,7 +551,7 @@ service cloud.firestore {
           && incoming().role == existing().role
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'updatedAt'])
+          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'companyName', 'economicCode', 'nationalId', 'fiscalYear', 'currencyUnit', 'profilePhotoData', 'updatedAt'])
         )
       );
       allow delete: if false;

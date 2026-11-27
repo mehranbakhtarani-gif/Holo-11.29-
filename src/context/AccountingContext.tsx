@@ -3,6 +3,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -171,6 +172,7 @@ interface AccountingContextValue {
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   updateCompanyProfile: (patch: Partial<CompanyProfile>) => Promise<void>;
+  updateProfilePhoto: (photoData: string | null) => Promise<void>;
   setCurrencyUnit: (unit: CurrencyUnit) => Promise<void>;
   // Accounts CRUD
   addAccount: (acc: Omit<Account, 'id' | 'ownerId'>) => Promise<void>;
@@ -381,7 +383,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [includeDraftsInReports, setIncludeDraftsInReports] = useState<boolean>(false);
   const [operationalDbStats, setOperationalDbStats] = useState<OperationalDbStats | null>(null);
 
-  const [profile, setProfile] = useState<CompanyProfile>(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<CompanyProfile>(() => {
+    try {
+      const savedPhoto = typeof window !== 'undefined' ? window.localStorage.getItem(`holoo_profile_photo_${DEMO_OWNER}`) : null;
+      return { ...DEFAULT_PROFILE, profilePhotoData: savedPhoto || undefined };
+    } catch {
+      return DEFAULT_PROFILE;
+    }
+  });
   const [accounts, setAccounts] = useState<Account[]>(initialSeed.accounts);
   const [parties, setParties] = useState<Party[]>(initialSeed.parties);
   const [products, setProducts] = useState<Product[]>(initialSeed.products);
@@ -816,6 +825,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                   uid: d.uid,
                   displayName: d.displayName,
                   email: d.email,
+                  profilePhotoData: typeof d.profilePhotoData === 'string' ? d.profilePhotoData : undefined,
                   companyName: d.companyName,
                   economicCode: d.economicCode,
                   nationalId: d.nationalId,
@@ -998,6 +1008,37 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       showToast('مشخصات شرکتی و سال مالی ذخیره شد.');
     },
     [profile, user, showToast, assertPermission]
+  );
+
+  const updateProfilePhoto = useCallback(
+    async (photoData: string | null) => {
+      if (photoData && (!photoData.startsWith('data:image/jpeg;base64,') || photoData.length > 200_000)) {
+        throw new Error('تصویر باید JPEG و حداکثر ۱۵۰ کیلوبایت باشد.');
+      }
+      const next = { ...profile, profilePhotoData: photoData || undefined };
+      setProfile(next);
+      try {
+        if (typeof window !== 'undefined') {
+          const key = `holoo_profile_photo_${user?.uid || profile.uid}`;
+          if (photoData) window.localStorage.setItem(key, photoData);
+          else window.localStorage.removeItem(key);
+        }
+      } catch {
+        // Firestore remains the durable store when local storage is unavailable.
+      }
+      if (user) {
+        try {
+          await updateDoc(doc(db, 'users', user.uid), {
+            profilePhotoData: photoData || deleteField(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+        }
+      }
+      showToast(photoData ? 'عکس پروفایل ذخیره شد.' : 'عکس پروفایل حذف شد.');
+    },
+    [profile, user, showToast]
   );
 
   const setCurrencyUnit = useCallback(
@@ -6308,6 +6349,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         loginWithGoogle,
         logout,
         updateCompanyProfile,
+        updateProfilePhoto,
         setCurrencyUnit,
         addAccount,
         updateAccount,
