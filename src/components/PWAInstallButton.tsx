@@ -109,6 +109,7 @@ export const PwaUpdateBanner: React.FC<{
   const [needRefresh, setNeedRefresh] = React.useState(false);
   const [applying, setApplying] = React.useState(false);
   const [dismissed, setDismissed] = React.useState(false);
+  const [updateError, setUpdateError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let unsub: (() => void) | undefined;
@@ -125,10 +126,22 @@ export const PwaUpdateBanner: React.FC<{
   if (!needRefresh || dismissed) return null;
 
   const handleApply = async () => {
+    if (applying) return;
     setApplying(true);
+    setUpdateError(null);
     try {
       const { safeApplySwUpdateWithBackup } = await import('../lib/offlineStatus');
-      await safeApplySwUpdateWithBackup(onCreatePreUpdateBackup);
+      const result = await safeApplySwUpdateWithBackup(onCreatePreUpdateBackup);
+      if (!result.applied) {
+        setUpdateError(result.error || 'بروزرسانی انجام نشد. دوباره تلاش کنید.');
+        return;
+      }
+      // The updater resolves only after controllerchange; the PWA runtime
+      // reloads the page with the newly activated worker.
+      setNeedRefresh(false);
+      setDismissed(true);
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : 'بروزرسانی ناموفق بود.');
     } finally {
       setApplying(false);
     }
@@ -136,19 +149,29 @@ export const PwaUpdateBanner: React.FC<{
 
   return (
     <div className="fixed bottom-24 lg:bottom-4 right-3 left-3 sm:right-auto sm:left-4 sm:max-w-md z-[60] flex flex-wrap items-center gap-3 rounded-xl bg-indigo-700 px-4 py-2.5 text-xs font-semibold text-white shadow-xl border border-indigo-400/30 no-print">
-      <span>نسخه جدید هلو Apex آماده نصب است (اطلاعات محلی محفوظ می‌ماند).</span>
+      <span>
+        {applying
+          ? 'در حال فعال‌سازی نسخه جدید؛ لطفاً برنامه را نبندید...'
+          : 'نسخه جدید هلو Apex آماده نصب است (اطلاعات محلی محفوظ می‌ماند).'}
+      </span>
+      {updateError && (
+        <span role="alert" className="w-full text-amber-100 font-medium">
+          {updateError}
+        </span>
+      )}
       <button
         type="button"
         onClick={() => void handleApply()}
         disabled={applying}
         className="px-3 py-1 rounded-lg bg-white text-indigo-800 hover:bg-indigo-50 font-bold disabled:opacity-60 whitespace-nowrap"
       >
-        {applying ? 'پشتیبان ایمنی و بروزرسانی...' : 'پشتیبان و بروزرسانی'}
+        {applying ? 'در حال بروزرسانی...' : 'پشتیبان و بروزرسانی'}
       </button>
       <button
         type="button"
         onClick={() => setDismissed(true)}
-        className="text-indigo-200 hover:text-white"
+        disabled={applying}
+        className="text-indigo-200 hover:text-white disabled:opacity-50"
         aria-label="بستن اعلان بروزرسانی"
       >
         <X className="w-4 h-4" />
