@@ -49,9 +49,6 @@ import {
   loadReservedInvoices,
   ProductApexMeta,
   ReservedInvoice,
-  saveFavoriteMenus,
-  saveProductApexMeta,
-  saveReservedInvoices,
 } from '../lib/smartIntelligence';
 import { ActiveModule } from '../types/accounting';
 
@@ -213,11 +210,11 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     // Persist the complete extension state before publishing it to React state.
     // Storage/quota failures must reach the caller instead of creating a false-success UI.
     localStorage.setItem(LOCAL_EXT_STORAGE_KEY, JSON.stringify(next));
-    saveReservedInvoices(next.reservedInvoices);
-    saveFavoriteMenus(next.favoriteMenus);
-    for (const [k, v] of Object.entries(next.productMetaMap)) {
-      saveProductApexMeta(k, v);
-    }
+    // These legacy mirrors are still read by independent modules. Write them
+    // directly so quota/security errors cannot be swallowed by compatibility helpers.
+    localStorage.setItem('holoo_apex96_reserved_invoices_v1', JSON.stringify(next.reservedInvoices));
+    localStorage.setItem('holoo_apex96_favorite_menus', JSON.stringify(next.favoriteMenus));
+    localStorage.setItem('holoo_apex96_product_meta_v1', JSON.stringify(next.productMetaMap));
   }, []);
 
   // Push cloud patch safely matching firestore.rules bounds
