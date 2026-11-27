@@ -79,7 +79,7 @@ A separate technical gate plan now documents the store inventory, encrypted repo
 
 ### Newly identified extension data outside the encrypted shadow (2026-11-28)
 
-The application data inventory extends beyond the IndexedDB operational stores. `WorkspaceExtensionsContext` persists business-critical state under the localStorage key `holoo_apex96_workspace_extensions_v2`, including reserved invoices, product metadata, petty cash, recurring voucher templates, bank loans, dye lots, warehouse slips, BOM formulas, installment plans, volume-discount rules, Moadian invoice links, and fiscal archives. Selected extension state is also patched to the Firestore `workspaceExtensions` document.
+The application data inventory extends beyond the IndexedDB operational stores. `WorkspaceExtensionsContext` persists business-critical state under the localStorage key `holoo_apex96_workspace_extensions_v2`, including reserved invoices, product metadata, petty cash, recurring voucher templates, bank loans, dye lots, warehouse slips, BOM formulas, installment plans, volume-discount rules, Moadian invoice links, and fiscal archives. Separate localStorage keys also hold dashboard mode (`holoo_apex96_dashboard_mode`), favorite menus (`holoo_apex96_favorite_menus`), product metadata (`holoo_apex96_product_meta_v1`), and reserved invoices (`holoo_apex96_reserved_invoices_v1`). Selected extension state is also patched to the Firestore `workspaceExtensions` document.
 
 This state is not included by `loadOperationalWorkspace()` or the current `secureWorkspace` encrypted shadow. Consequently, the shadow is not a complete application/workspace backup and is not eligible for cutover.
 
