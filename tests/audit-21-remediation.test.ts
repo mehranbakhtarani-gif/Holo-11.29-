@@ -400,7 +400,7 @@ async function main() {
 
     // F-04: Profile photo wired in App header and SettingsView
     const appSrc = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
-    assert.equal(appSrc.includes('profile.profilePhotoData || financeDirectorAvatar'), true, 'App header must render custom profile.profilePhotoData when present');
+    assert.equal(appSrc.includes('profile.profilePhotoData && !avatarError'), true, 'App header must render custom profile.profilePhotoData when present and handle image load errors');
     const settingsSrc = fs.readFileSync(path.resolve('src/components/SettingsView.tsx'), 'utf8');
     assert.equal(settingsSrc.includes('updateProfilePhoto'), true, 'SettingsView must wire updateProfilePhoto UI');
 
