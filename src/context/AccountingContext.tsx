@@ -1482,10 +1482,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const sameYearMax = vouchers
         .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === voucherFy)
         .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
-      const nextNumber =
-        voucherFy === profile.fiscalYear
-          ? await reserveNextVoucherNumber(sameYearMax)
-          : sameYearMax + 1;
+      // The final number is reserved in the same transaction that writes the voucher.
+      // This avoids consuming numbers on failed writes and prevents concurrent collisions.
+      let nextNumber = sameYearMax + 1;
       const id = generateSafeId('vch');
 
       const normCode = normalizeCurrencyCode(payload.currencyCode);
@@ -1505,7 +1504,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           )
         : undefined;
 
-      const baseFull: Voucher = {
+      let baseFull: Voucher = {
         id,
         ownerId,
         voucherNumber: nextNumber,
@@ -1530,38 +1529,78 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         _version: 1,
         updatedByDevice: deviceId,
       };
-      const full: Voucher =
+      let full: Voucher =
         baseFull.status === 'permanent'
           ? { ...baseFull, integrityHash: computeVoucherIntegrityHash(baseFull) }
           : baseFull;
 
       if (user) {
         try {
-          await setDoc(doc(db, 'vouchers', id), {
-            ownerId,
-            voucherNumber: nextNumber,
-            date: full.date.slice(0, 20),
-            description: full.description,
-            voucherType: full.voucherType,
-            status: full.status,
-            totalDebit,
-            totalCredit,
-            ...(isFx && safeRate
-              ? {
-                  currencyCode: normCode.slice(0, 10),
-                  exchangeRate: safeRate,
-                  foreignTotalDebit: foreignTotalDebit ?? 0,
-                  foreignTotalCredit: foreignTotalCredit ?? 0,
-                }
-              : {}),
-            ...(full.referenceId ? { referenceId: full.referenceId.slice(0, 128) } : {}),
-            lines: full.lines,
-            ...(full.integrityHash ? { integrityHash: full.integrityHash } : {}),
-            ...(full.fiscalYear ? { fiscalYear: full.fiscalYear.slice(0, 16) } : {}),
-            _version: 1,
-            updatedByDevice: deviceId.slice(0, 64),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            throw new Error('برای ثبت سند حسابداری در فضای ابری، اتصال اینترنت لازم است.');
+          }
+          const voucherRef = doc(db, 'vouchers', id);
+          const counterRef = doc(db, 'counters', user.uid);
+          full = await runTransaction(db, async (tx) => {
+            const [voucherSnap, counterSnap] = await Promise.all([
+              tx.get(voucherRef),
+              tx.get(counterRef),
+            ]);
+            if (voucherSnap.exists()) {
+              throw new Error('شناسه سند تکراری است؛ ثبت متوقف شد.');
+            }
+            const currentMax = counterSnap.exists()
+              ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, sameYearMax)
+              : sameYearMax;
+            nextNumber = currentMax + 1;
+            baseFull = { ...baseFull, voucherNumber: nextNumber };
+            const transactionVoucher: Voucher =
+              baseFull.status === 'permanent'
+                ? { ...baseFull, integrityHash: computeVoucherIntegrityHash(baseFull) }
+                : baseFull;
+            tx.set(voucherRef, {
+              ownerId,
+              voucherNumber: nextNumber,
+              date: transactionVoucher.date.slice(0, 20),
+              description: transactionVoucher.description,
+              voucherType: transactionVoucher.voucherType,
+              status: transactionVoucher.status,
+              totalDebit,
+              totalCredit,
+              ...(isFx && safeRate
+                ? {
+                    currencyCode: normCode.slice(0, 10),
+                    exchangeRate: safeRate,
+                    foreignTotalDebit: foreignTotalDebit ?? 0,
+                    foreignTotalCredit: foreignTotalCredit ?? 0,
+                  }
+                : {}),
+              ...(transactionVoucher.referenceId ? { referenceId: transactionVoucher.referenceId.slice(0, 128) } : {}),
+              lines: transactionVoucher.lines,
+              ...(transactionVoucher.integrityHash ? { integrityHash: transactionVoucher.integrityHash } : {}),
+              ...(transactionVoucher.fiscalYear ? { fiscalYear: transactionVoucher.fiscalYear.slice(0, 16) } : {}),
+              _version: 1,
+              updatedByDevice: deviceId.slice(0, 64),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            if (counterSnap.exists()) {
+              tx.update(counterRef, {
+                lastVoucherNumber: nextNumber,
+                updatedByDevice: deviceId.slice(0, 64),
+                updatedAt: serverTimestamp(),
+              });
+            } else {
+              tx.set(counterRef, {
+                ownerId: user.uid,
+                lastVoucherNumber: nextNumber,
+                lastInvoiceSeq: 102,
+                updatedByDevice: deviceId.slice(0, 64),
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            }
+            return transactionVoucher;
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `vouchers/${id}`);
