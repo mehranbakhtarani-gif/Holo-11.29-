@@ -3729,51 +3729,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
         const preparedReversalVoucher = buildReversalVoucher(nextNum);
 
-        // Single atomic offline batch: products + invoice + reversing voucher + linked cheques ALL together!
-        const applyOfflineCancelBatch = async () => {
-          const batch = writeBatch(db);
-          for (const [pid, delta] of plan.productDeltas.entries()) {
-            batch.update(doc(db, 'products', pid), {
-              stock: delta.stock,
-              buyPrice: delta.buyPrice,
-              costLayers: delta.costLayers,
-              inventoryValueIrr: delta.inventoryValueIrr,
-              _version: delta.prevVersion + 1,
-              updatedByDevice: deviceId.slice(0, 64),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          batch.update(doc(db, 'invoices', invoiceId), {
-            status: 'cancelled',
-            _version: (inv._version ?? 1) + 1,
-            updatedByDevice: deviceId.slice(0, 64),
-            updatedAt: serverTimestamp(),
-          });
-          if (preparedReversalVoucher) {
-            batch.set(
-              doc(db, 'vouchers', preparedReversalVoucher.id),
-              serializeReversalVoucher(preparedReversalVoucher)
-            );
-          }
-          for (const chqId of plan.chequeIdsToCancel) {
-            const chq = cheques.find((c) => c.id === chqId);
-            if (!chq) continue;
-            batch.update(doc(db, 'cheques', chq.id), {
-              status: 'cancelled',
-              notes: `${chq.notes || ''} (ابطال خودکار همراه فاکتور ${inv.invoiceNumber})`.slice(0, 300),
-              _version: (chq._version ?? 1) + 1,
-              updatedByDevice: deviceId.slice(0, 64),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          await batch.commit();
-        };
-
         if (user) {
-          const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
-          if (isOfflineNow) {
-            await applyOfflineCancelBatch();
-          } else {
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            throw new Error('ابطال فاکتور به کنترل هم‌زمانی Firestore نیاز دارد؛ در حالت آفلاین هیچ تغییری اعمال نشد. پس از اتصال مجدد دوباره تلاش کنید.');
+          }
             try {
               const invRef = doc(db, 'invoices', invoiceId);
               const counterRef = doc(db, 'counters', user.uid);
@@ -3875,12 +3834,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 return;
               }
             } catch (err) {
-              if (isFirestoreOfflineError(err)) {
-                await applyOfflineCancelBatch();
-              } else {
-                handleFirestoreError(err, OperationType.UPDATE, `atomic-cancel-invoice/${invoiceId}`);
-                return;
-              }
+              handleFirestoreError(err, OperationType.UPDATE, `atomic-cancel-invoice/${invoiceId}`);
+              throw err;
             }
           }
         } else {
