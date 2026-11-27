@@ -2254,9 +2254,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                       typeof prodSnap.data().inventoryValueIrr === 'number'
                         ? prodSnap.data().inventoryValueIrr
                         : prod.inventoryValueIrr,
-                    _version: Number(prodSnap.data()._version) || 1,
-                  }
-                : prod;
+                _version: Number(prodSnap.data()._version) || 1,
+              };
 
               const livePlan = planStockAdjustmentWithCostLayers({
                 product: liveProd,
