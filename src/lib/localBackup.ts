@@ -19,6 +19,7 @@ export interface LocalBackupSnapshotMeta {
   invoiceCount: number;
   productCount: number;
   sizeKb: number;
+  encryptionStatus?: 'encrypted' | 'legacy-plaintext';
 }
 
 export interface LocalBackupSnapshot extends LocalBackupSnapshotMeta {
@@ -347,6 +348,7 @@ function listLocalSnapshotsRaw(db: IDBDatabase): Promise<LocalBackupSnapshot[]> 
 
 export async function listLocalSnapshots(): Promise<LocalBackupSnapshotMeta[]> {
   const syncSnap = readSyncCloseSnapshot();
+  const legacySyncSnap = readLegacyPlaintextSyncCloseSnapshot();
   try {
     const db = await openBackupDb();
     const rows = await listLocalSnapshotsRaw(db);
@@ -363,12 +365,20 @@ export async function listLocalSnapshots(): Promise<LocalBackupSnapshotMeta[]> {
       rows.unshift(syncSnap);
       rows.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
     }
+    if (legacySyncSnap && !rows.some((r) => r.id === legacySyncSnap.id)) {
+      rows.push(legacySyncSnap);
+      rows.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+    }
     db.close();
-    return rows.slice(0, MAX_SNAPSHOTS).map(({ payloadJson: _p, encryptedEnvelope: _e, ...meta }) => meta);
+    return rows.slice(0, MAX_SNAPSHOTS).map((row) => {
+      const { payloadJson: _p, encryptedEnvelope: _e, ...meta } = row;
+      return { ...meta, encryptionStatus: row.encryptedEnvelope ? 'encrypted' as const : 'legacy-plaintext' as const };
+    });
   } catch {
-    if (syncSnap) {
-      const { payloadJson: _p, encryptedEnvelope: _e, ...meta } = syncSnap;
-      return [meta];
+    const fallback = syncSnap ?? legacySyncSnap;
+    if (fallback) {
+      const { payloadJson: _p, encryptedEnvelope: _e, ...meta } = fallback;
+      return [{ ...meta, encryptionStatus: fallback.encryptedEnvelope ? 'encrypted' as const : 'legacy-plaintext' as const }];
     }
     return [];
   }
@@ -378,6 +388,8 @@ export async function loadLocalSnapshotPayload(
   snapshotId: string,
   allowLegacyPlaintext = false
 ): Promise<string | null> {
+  const legacySyncSnap = allowLegacyPlaintext ? readLegacyPlaintextSyncCloseSnapshot() : null;
+  if (legacySyncSnap && legacySyncSnap.id === snapshotId) return legacySyncSnap.payloadJson ?? null;
   const syncSnap = readSyncCloseSnapshot();
   if (syncSnap && syncSnap.id === snapshotId) {
     if (syncSnap.encryptedEnvelope) {
