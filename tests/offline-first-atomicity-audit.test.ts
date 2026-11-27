@@ -473,7 +473,7 @@ async function runTests() {
     meta: [{ key: 'workspace_meta', localRevision: 30 }],
   });
   const chequeTransitionOk = await commitChequeStatusOperationalTx(
-    { cheque: transitionedCheque, voucher: chequeVoucher },
+    { cheque: transitionedCheque, expectedStatus: cheque.status, voucher: chequeVoucher },
     { dbOverride: chequeTxSim.db }
   );
   assert.equal(chequeTransitionOk, true);
@@ -493,7 +493,7 @@ async function runTests() {
   });
   await assert.rejects(
     () => commitChequeStatusOperationalTx(
-      { cheque: transitionedCheque, voucher: chequeVoucher },
+      { cheque: transitionedCheque, expectedStatus: cheque.status, voucher: chequeVoucher },
       { dbOverride: chequeRollbackSim.db }
     ),
     /cheque transition voucher rejected/
