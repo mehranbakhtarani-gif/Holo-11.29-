@@ -155,7 +155,7 @@ export async function restoreCompleteBackupPackage(
       options.allowLegacyUnboundAttachmentMetadata === true
     );
     await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
-    await updateStagingOperationalRestoreJournal(
+    const stagedJournal = await updateStagingOperationalRestoreJournal(
       restoreId,
       stagedManifest.manifestDigest,
       stagedManifest.rowCount
@@ -167,8 +167,8 @@ export async function restoreCompleteBackupPackage(
     const attachmentResult = await applyStagedDocumentAttachmentBundle(
       restoreId,
       packageDigest,
-      journal.attachmentManifestDigest,
-      journal.attachmentCount
+      stagedJournal.attachmentManifestDigest,
+      stagedJournal.attachmentCount
     );
     const active = await getActiveOperationalRestoreJournal();
     if (!active || active.restoreId !== restoreId || active.state !== 'workspace_applied') {
