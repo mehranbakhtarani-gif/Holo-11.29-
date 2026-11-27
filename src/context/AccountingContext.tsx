@@ -4632,6 +4632,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const addFixedAsset = useCallback(
     async (asset: Omit<FixedAsset, 'id' | 'ownerId'>) => {
       if (!assertPermission('canManageSettings')) throw new Error('عدم دسترسی برای ثبت دارایی ثابت.');
+      calculateMonthlyDepreciation({ ...asset, id: 'asset-validation', ownerId } as FixedAsset);
       const id = generateSafeId('ast');
       const full: FixedAsset = { ...asset, id, ownerId };
       if (user) {
@@ -4664,6 +4665,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const updateFixedAsset = useCallback(
     async (assetId: string, patch: Partial<Omit<FixedAsset, 'id' | 'ownerId' | 'assetCode'>>) => {
       if (!assertPermission('canManageSettings')) throw new Error('عدم دسترسی برای ویرایش دارایی ثابت.');
+      const existingAsset = assets.find((asset) => asset.id === assetId);
+      if (!existingAsset) throw new Error('دارایی موردنظر پیدا نشد.');
+      calculateMonthlyDepreciation({ ...existingAsset, ...patch });
       if (user) {
         try {
           const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -4684,7 +4688,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       showToast('مشخصات دارایی ثابت ویرایش شد.');
     },
-    [user, showToast, assertPermission]
+    [assets, user, showToast, assertPermission]
   );
 
   const deleteFixedAsset = useCallback(
