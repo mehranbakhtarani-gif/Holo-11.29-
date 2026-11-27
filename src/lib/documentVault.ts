@@ -590,7 +590,9 @@ export async function stageEncryptedDocumentAttachmentBundle(
 /** Verify staged attachment count and digest without exposing ciphertext to callers. */
 export async function verifyStagedDocumentAttachmentBundle(
   restoreId: string,
-  expectedPackageDigest: string
+  expectedPackageDigest: string,
+  expectedManifestDigest?: string,
+  expectedRowCount?: number
 ): Promise<StagedDocumentRestoreManifest> {
   validateRestoreId(restoreId);
   if (!isIdbAvailable()) throw new Error('خواندن staging پیوست‌ها در این محیط در دسترس نیست.');
@@ -605,8 +607,10 @@ export async function verifyStagedDocumentAttachmentBundle(
       manifestRequest.onsuccess = () => { manifest = manifestRequest.result ?? null; };
       rowsRequest.onsuccess = () => { rows = rowsRequest.result ?? []; };
       tx.oncomplete = async () => {
-        if (!manifest || manifest.packageDigest !== expectedPackageDigest || (manifest.state !== 'staged' && manifest.state !== 'applied') ||
-            rows.length !== manifest.rowCount) {
+        if (!manifest || manifest.packageDigest !== expectedPackageDigest ||
+            (expectedManifestDigest && manifest.manifestDigest !== expectedManifestDigest) ||
+            (expectedRowCount !== undefined && manifest.rowCount !== expectedRowCount) ||
+            (manifest.state !== 'staged' && manifest.state !== 'applied') || rows.length !== manifest.rowCount) {
           reject(new Error('manifest staging پیوست‌ها با بسته بازیابی مطابقت ندارد.'));
           return;
         }
@@ -629,13 +633,15 @@ export async function verifyStagedDocumentAttachmentBundle(
  */
 export async function applyStagedDocumentAttachmentBundle(
   restoreId: string,
-  expectedPackageDigest: string
+  expectedPackageDigest: string,
+  expectedManifestDigest?: string,
+  expectedRowCount?: number
 ): Promise<{ applied: number }> {
   validateRestoreId(restoreId);
   if (!isIdbAvailable()) throw new Error('اعمال staging پیوست‌ها در این محیط در دسترس نیست.');
   // Re-authenticate the staged manifest and its complete encrypted row set before
   // the live attachments store is touched. This also supports crash recovery retries.
-  await verifyStagedDocumentAttachmentBundle(restoreId, expectedPackageDigest);
+  await verifyStagedDocumentAttachmentBundle(restoreId, expectedPackageDigest, expectedManifestDigest, expectedRowCount);
   const db = await openVaultDb();
   try {
     return await new Promise((resolve, reject) => {
