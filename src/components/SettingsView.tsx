@@ -95,6 +95,8 @@ export const SettingsView: React.FC<{
     localSnapshots,
     lastLocalBackupAt,
     backupSessionUnlocked,
+    encryptedOperationalWorkspaceMeta,
+    prepareEncryptedOperationalWorkspaceMigration,
     unlockBackupSession,
     lockBackupSession,
     triggerLocalBackupNow,
@@ -1317,6 +1319,42 @@ export const SettingsView: React.FC<{
               className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200">
               قفل‌کردن پشتیبان‌ها
             </button>
+          )}
+        </div>
+
+        <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-bold text-slate-900 dark:text-white">آماده‌سازی مهاجرت پایگاه داده عملیاتی</div>
+            {encryptedOperationalWorkspaceMeta && (
+              <span className={
+                operationalDbStats?.localRevision === encryptedOperationalWorkspaceMeta.sourceRevision
+                  ? 'text-emerald-700 dark:text-emerald-400 font-semibold text-xs'
+                  : 'text-amber-700 dark:text-amber-400 font-semibold text-xs'
+              }>
+                {operationalDbStats?.localRevision === encryptedOperationalWorkspaceMeta.sourceRevision
+                  ? 'نسخه آماده معتبر'
+                  : 'نیازمند آماده‌سازی مجدد'}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-5">
+            این عملیات از تمام داده‌های عملیاتی فعلی یک نسخه AES-256-GCM رمزگذاری‌شده می‌سازد، آن را دوباره رمزگشایی و صحت‌سنجی می‌کند و فقط در صورت ثابت‌ماندن شماره نسخه منبع ذخیره می‌کند. داده‌های اصلی فعلاً دست‌نخورده باقی می‌مانند؛ این مرحله هنوز جایگزینی پایگاه داده نیست.
+          </p>
+          <button
+            type="button"
+            disabled={!backupSessionUnlocked}
+            onClick={() => void prepareEncryptedOperationalWorkspaceMigration()}
+            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white font-semibold text-sm"
+          >
+            آماده‌سازی و اعتبارسنجی نسخه رمزگذاری‌شده
+          </button>
+          {encryptedOperationalWorkspaceMeta && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+              <div>تعداد رکورد: <strong>{encryptedOperationalWorkspaceMeta.recordCount}</strong></div>
+              <div>نسخه منبع: <strong>{encryptedOperationalWorkspaceMeta.sourceRevision}</strong></div>
+              <div>نسخه طرح: <strong>{encryptedOperationalWorkspaceMeta.schemaVersion}</strong></div>
+              <div>زمان: <strong>{new Date(encryptedOperationalWorkspaceMeta.preparedAt).toLocaleString()}</strong></div>
+            </div>
           )}
         </div>
 
