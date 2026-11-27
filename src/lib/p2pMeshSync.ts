@@ -466,7 +466,10 @@ export async function encryptMeshPayloadAesGcm(passphrase: string, plaintext: st
 /** Decrypts an AES-256-GCM P2P mesh payload; rejects any tampered or wrong-passphrase ciphertext */
 export async function decryptMeshPayloadAesGcm(passphrase: string, payload: string): Promise<string> {
   if (!payload.startsWith(MESH_E2EE_PREFIX)) {
-    return payload;
+    throw new Error('Unencrypted P2P payload rejected; refusing encryption downgrade.');
+  }
+  if (!passphrase.trim()) {
+    throw new Error('P2P decryption passphrase is required.');
   }
   if (!globalThis.crypto?.subtle) {
     throw new Error('WebCrypto subtle API unavailable to decrypt E2EE P2P payload');
