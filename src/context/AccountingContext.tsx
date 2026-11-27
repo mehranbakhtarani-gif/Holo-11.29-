@@ -7213,10 +7213,27 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }, 4200)
       : undefined;
 
+    // Keep a verified encrypted shadow copy of the active operational workspace.
+    // Debouncing avoids running the 600k-iteration PBKDF2 derivation on every UI mutation.
+    // This remains a non-destructive mirror: legacy entity stores stay authoritative
+    // until all transactional readers and writers have been migrated and tested.
+    const encryptedMirrorTimer = backupSessionUnlocked
+      ? window.setTimeout(async () => {
+          try {
+            const workspaceId = String(profile.uid || DEMO_OWNER).trim();
+            const encryptedMeta = await prepareEncryptedOperationalWorkspaceMigrationInDb(workspaceId);
+            setEncryptedOperationalWorkspaceMeta(encryptedMeta);
+          } catch (error) {
+            console.error('[EncryptedWorkspace] Shadow mirror refresh failed:', error);
+          }
+        }, 5200)
+      : undefined;
+
     return () => {
       window.clearTimeout(opDbTimer);
       window.clearTimeout(fastTimer);
       if (idbTimer !== undefined) window.clearTimeout(idbTimer);
+      if (encryptedMirrorTimer !== undefined) window.clearTimeout(encryptedMirrorTimer);
     };
   }, [
     autoBackupOnClose,
