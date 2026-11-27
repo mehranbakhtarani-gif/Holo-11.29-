@@ -704,6 +704,9 @@ export function recalculateInventoryLedger(input: {
     let totalNetOutQty = 0;
     let totalSalesQty = 0;
     let totalWasteQty = 0;
+    let totalPurchaseReturnVarianceIrr = 0;
+    const purchaseLayerBalances = new Map<string, { remainingQty: number; remainingValueIrr: number }>();
+    const purchaseReturnCosts = new Map<string, { inventoryCostIrr: number; varianceIrr: number }>();
 
     // Pass 1: Pool all opening + purchases + surplus - purchase_returns across the entire period
     for (const m of sorted) {
@@ -718,14 +721,32 @@ export function recalculateInventoryLedger(input: {
         if (m.kind === 'purchase') {
           totalPurchasesQty = roundQty(totalPurchasesQty + q);
           totalPurchasesValueIrr += val;
+          purchaseLayerBalances.set(m.id, { remainingQty: q, remainingValueIrr: val });
         }
       } else if (m.kind === 'purchase_return') {
-        const val =
+        const invoiceReturnValueIrr =
           m.totalCostIrr !== undefined
-            ? Math.round(m.totalCostIrr)
-            : Math.round(q * (m.unitCostIrr ?? 0));
+            ? Math.max(0, Math.round(m.totalCostIrr))
+            : Math.max(0, Math.round(q * (m.unitCostIrr ?? 0)));
+        let inventoryCostRemovedIrr = invoiceReturnValueIrr;
+        let varianceIrr = 0;
+        if (m.sourceRefId) {
+          const sourceLayer = purchaseLayerBalances.get(m.sourceRefId);
+          if (!sourceLayer || q > sourceLayer.remainingQty + 0.00005) {
+            throw new Error('برگشت خرید در روش میانگین دوره‌ای به لایه خرید معتبر یا مقدار باقیمانده کافی متصل نیست.');
+          }
+          inventoryCostRemovedIrr =
+            q >= sourceLayer.remainingQty - 0.00005
+              ? sourceLayer.remainingValueIrr
+              : Math.round((sourceLayer.remainingValueIrr * q) / sourceLayer.remainingQty);
+          sourceLayer.remainingQty = roundQty(Math.max(0, sourceLayer.remainingQty - q));
+          sourceLayer.remainingValueIrr = Math.max(0, sourceLayer.remainingValueIrr - inventoryCostRemovedIrr);
+          varianceIrr = invoiceReturnValueIrr - inventoryCostRemovedIrr;
+        }
+        purchaseReturnCosts.set(m.id, { inventoryCostIrr: inventoryCostRemovedIrr, varianceIrr });
+        totalPurchaseReturnVarianceIrr += varianceIrr;
         availableQty = roundQty(Math.max(0, availableQty - q));
-        availableValueIrr = Math.max(0, availableValueIrr - val);
+        availableValueIrr = Math.max(0, availableValueIrr - inventoryCostRemovedIrr);
       } else if (m.kind === 'sale') {
         totalSalesQty = roundQty(totalSalesQty + q);
         totalNetOutQty = roundQty(totalNetOutQty + q);
@@ -791,10 +812,12 @@ export function recalculateInventoryLedger(input: {
             `موجودی انبار در تاریخ ${m.date} برای برگشت از خرید کافی نیست (موجودی: ${roundQty2(runningQty)}، برگشت: ${roundQty2(q)}).`
           );
         }
-        const val =
-          m.totalCostIrr !== undefined
+        const returnCost = purchaseReturnCosts.get(m.id);
+        const val = returnCost?.inventoryCostIrr ??
+          (m.totalCostIrr !== undefined
             ? Math.round(m.totalCostIrr)
-            : Math.round(q * (m.unitCostIrr ?? periodicUnitCostIrr));
+            : Math.round(q * (m.unitCostIrr ?? periodicUnitCostIrr)));
+        const varianceIrr = returnCost?.varianceIrr ?? 0;
         runningQty = roundQty(runningQty - q);
         runningVal = Math.max(0, runningVal - val);
         kardex.push({
@@ -811,7 +834,7 @@ export function recalculateInventoryLedger(input: {
           outValueIrr: val,
           balanceValueIrr: runningVal,
           cogsOrCostIrr: val,
-          purchaseReturnVarianceIrr: 0,
+          purchaseReturnVarianceIrr: varianceIrr,
         });
       } else if (m.kind === 'sale' || m.kind === 'waste' || m.kind === 'shortage') {
         if (!m.allowNegativeStock && runningQty + 0.0001 < q) {
@@ -922,7 +945,7 @@ export function recalculateInventoryLedger(input: {
       totalSalesQty: roundQty2(totalSalesQty),
       totalCogsIrr,
       totalWasteCostIrr,
-      totalPurchaseReturnVarianceIrr: 0,
+      totalPurchaseReturnVarianceIrr,
       conservationDeltaIrr: availableValueIrr - (totalCogsIrr + totalWasteCostIrr + endingValueIrr),
     };
   }
