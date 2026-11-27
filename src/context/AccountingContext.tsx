@@ -7187,7 +7187,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
     }, 1200);
 
-    const idbTimer = autoBackupOnClose
+    const idbTimer = autoBackupOnClose && backupSessionUnlocked
       ? window.setTimeout(async () => {
           try {
             const cur = latestBackupRef.current;
