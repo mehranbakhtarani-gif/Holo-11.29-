@@ -2701,7 +2701,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fiscalYear)
           .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
 
-        let committedVoucher: Voucher | null = null;
+        const committedVoucherRef: { current?: Voucher } = {};
         await runTransaction(db, async (tx) => {
           const [chequeSnap, voucherSnap, counterSnap] = await Promise.all([
             tx.get(chequeRef),
@@ -2735,7 +2735,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             ...voucherBase,
             integrityHash: computeVoucherIntegrityHash(voucherBase),
           };
-          committedVoucher = sealedVoucher;
+          committedVoucherRef.current = sealedVoucher;
           tx.set(chequeRef, chequeData);
           tx.set(voucherRef, {
             ownerId,
@@ -2772,10 +2772,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             });
           }
         });
-        if (committedVoucher) {
+        if (committedVoucherRef.current) {
           emitVoucherNotificationEvent({
             type: 'created_permanent',
-            voucher: committedVoucher,
+            voucher: committedVoucherRef.current,
             unit: profile.currencyUnit,
           });
         }
