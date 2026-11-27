@@ -53,45 +53,6 @@ function formatShamsiFromIso(iso: string): string {
   }
 }
 
-function buildCompactFirestoreSnapshot(rawSnapshotJson: string): {
-  snapshotMap: Record<string, unknown>;
-  sizeKb: number;
-} {
-  const parsed = JSON.parse(rawSnapshotJson) as Record<string, unknown>;
-  // Store structured native Maps/Lists (never JSON.stringify inside Firestore)
-  // Cap verbose auditLogs to latest 150 entries to stay comfortably under Firestore's 1 MiB document limit
-  const auditLogs = Array.isArray(parsed.auditLogs) ? parsed.auditLogs.slice(0, 150) : [];
-  const compactObj = stripUndefinedDeep({
-    version: String(parsed.version || 'holoo-apex-1.3'),
-    exportedAt: String(parsed.exportedAt || new Date().toISOString()),
-    profile: parsed.profile ?? {},
-    accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
-    parties: Array.isArray(parsed.parties) ? parsed.parties : [],
-    products: Array.isArray(parsed.products) ? parsed.products : [],
-    vouchers: Array.isArray(parsed.vouchers) ? parsed.vouchers : [],
-    invoices: Array.isArray(parsed.invoices) ? parsed.invoices : [],
-    cheques: Array.isArray(parsed.cheques) ? parsed.cheques : [],
-    employees: Array.isArray(parsed.employees) ? parsed.employees : [],
-    assets: Array.isArray(parsed.assets) ? parsed.assets : [],
-    costCenters: Array.isArray(parsed.costCenters) ? parsed.costCenters : [],
-    currencies: Array.isArray(parsed.currencies) ? parsed.currencies : [],
-    exchangeRates: Array.isArray(parsed.exchangeRates) ? parsed.exchangeRates : [],
-    importDossiers: Array.isArray(parsed.importDossiers) ? parsed.importDossiers : [],
-    salesOrders: Array.isArray(parsed.salesOrders) ? parsed.salesOrders : [],
-    subcontractJobs: Array.isArray(parsed.subcontractJobs) ? parsed.subcontractJobs : [],
-    rbacOperators: Array.isArray(parsed.rbacOperators) ? parsed.rbacOperators : [],
-    auditLogs,
-  });
-
-  const approxBytes = new Blob([JSON.stringify(compactObj)]).size;
-  if (approxBytes > 940_000) {
-    // Trim non-critical audit logs first if approaching Firestore's 1 MiB doc cap
-    compactObj.auditLogs = [];
-  }
-  const finalSizeKb = Math.min(1024, Math.max(1, Math.round(new Blob([JSON.stringify(compactObj)]).size / 1024)));
-  return { snapshotMap: compactObj, sizeKb: finalSizeKb };
-}
-
 export async function listAndPruneFirebaseBackups(
   ownerId: string,
   preferServer = false
