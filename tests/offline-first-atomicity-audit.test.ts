@@ -422,6 +422,14 @@ async function runTests() {
     /commitDepreciationOperationalTx/,
     'offline depreciation must use one IndexedDB transaction for asset balances and the permanent voucher'
   );
+  const yearEndIdx = accountingCtxSrc.indexOf('const runYearEndClosing = useCallback');
+  const yearEndEnd = accountingCtxSrc.indexOf('// ---------------- MULTI-CURRENCY & DAILY EXCHANGE RATES', yearEndIdx);
+  assert.ok(yearEndIdx !== -1 && yearEndEnd > yearEndIdx);
+  const yearEndBody = accountingCtxSrc.slice(yearEndIdx, yearEndEnd);
+  assert.match(yearEndBody, /existingClosing && options\?\.createNextYearOpening && !existingOpening/);
+  assert.match(yearEndBody, /existingOpening && !existingClosing/);
+  console.log('✓ 1a. Static audit passed for year-end recovery mismatch fail-closed guards');
+
   console.log('✓ 1. Static audit passed for offline guards, atomic financial operations and atomic depreciation');
 
   // =========================================================================
