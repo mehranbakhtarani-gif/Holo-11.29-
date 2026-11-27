@@ -346,6 +346,16 @@ async function runTests() {
   assert.match(renumberBody, /changedVouchers\.length > 450[\s\S]*هیچ تغییری اعمال نشد/);
   console.log('✓ Cloud voucher renumbering refuses multi-commit partial updates');
 
+  const dispatchOrderIdx = accountingCtxSrc.indexOf('const dispatchSalesOrder = useCallback');
+  assert.ok(dispatchOrderIdx !== -1, 'dispatchSalesOrder must exist');
+  const dispatchOrderEnd = accountingCtxSrc.indexOf('const invoiceSalesOrder = useCallback', dispatchOrderIdx);
+  const dispatchOrderBody = accountingCtxSrc.slice(dispatchOrderIdx, dispatchOrderEnd);
+  assert.ok(dispatchOrderBody.includes('runTransaction(db'));
+  assert.ok(dispatchOrderBody.includes("liveOrder.status !== 'ordered'"));
+  assert.ok(dispatchOrderBody.includes("throw new Error('ORDER_NOT_DISPATCHABLE')"));
+  assert.ok(dispatchOrderBody.includes("(liveOrder._version ?? 1) + 1"));
+  console.log('✓ Sales-order dispatch uses a transactional status/version guard');
+
   const invoiceOrderIdx = accountingCtxSrc.indexOf('const invoiceSalesOrder = useCallback');
   assert.ok(invoiceOrderIdx !== -1, 'invoiceSalesOrder must exist');
   const invoiceOrderGuard = accountingCtxSrc.slice(invoiceOrderIdx, invoiceOrderIdx + 1300);
