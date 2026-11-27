@@ -28,6 +28,18 @@ async function main() {
     () => decryptMeshPayloadAesGcm('   ', encryptedPayload),
     /passphrase is required/
   );
+  await assert.rejects(
+    () => decryptMeshPayloadAesGcm('wrong-test-secret', encryptedPayload),
+    undefined,
+    'wrong mesh passphrases must not decrypt state'
+  );
+  const tamperedPayload = encryptedPayload.slice(0, -3) +
+    (encryptedPayload.at(-3) === 'A' ? 'B' : 'A') + encryptedPayload.slice(-2);
+  await assert.rejects(
+    () => decryptMeshPayloadAesGcm('test-only-holoo-mesh-secret', tamperedPayload),
+    undefined,
+    'tampered mesh ciphertext must fail AES-GCM authentication'
+  );
   const passphrase = 'test-only-holoo-mesh-secret';
   const body: MeshWireMessageBody = {
     type: 'mesh:request_state',
