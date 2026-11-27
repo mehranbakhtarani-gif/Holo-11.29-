@@ -1238,6 +1238,34 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
 });
 
 // ============================================================================
+// TEST 12B: DOCUMENT VAULT MUST FAIL CLOSED WHEN BROWSER PERSISTENCE FAILS
+// ============================================================================
+test('12B. Document Vault Never Reports Success When Browser IndexedDB Is Unavailable', async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { indexedDB: { open: () => { throw new Error('simulated IndexedDB failure'); } } },
+  });
+  try {
+    const result = await saveDocumentAttachment({
+      entityType: 'invoice',
+      entityId: 'inv_no_persistence',
+      entityLabel: 'فاکتور بدون ذخیره پایدار',
+      fileName: 'invoice.pdf',
+      mimeType: 'application/pdf',
+      dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+      uploadedBy: 'آزمایش',
+      uploadedByRole: 'finance_manager',
+    });
+    assert.equal(result.ok, false, 'A failed IndexedDB write must never be reported as successful');
+    if (!result.ok) assert.match(result.error, /IndexedDB/);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'window', previous);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+// ============================================================================
 // TEST 13: STRICTLY ISOLATED FINANCIAL FORECASTING
 // ============================================================================
 test('13. Financial Forecasting Engine Produces 30/60/90-Day Estimates Without Mutating Ledger', () => {
