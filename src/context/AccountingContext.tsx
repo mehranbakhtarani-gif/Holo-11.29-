@@ -2223,29 +2223,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         };
       };
 
-      const commitOfflineStockAdjustBatch = async () => {
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'products', prod.id), {
-          stock: plan.productDelta.stock,
-          buyPrice: plan.productDelta.buyPrice,
-          costLayers: plan.productDelta.costLayers,
-          inventoryValueIrr: plan.productDelta.inventoryValueIrr,
-          _version: (prod._version ?? 1) + 1,
-          updatedByDevice: deviceId.slice(0, 64),
-          updatedAt: serverTimestamp(),
-        });
-        if (plan.voucher) {
-          batch.set(doc(db, 'vouchers', plan.voucher.id), buildVoucherFirestoreDoc(plan.voucher));
-        }
-        await batch.commit();
-      };
-
       if (user) {
-        const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
-        if (isOfflineNow) {
-          await commitOfflineStockAdjustBatch();
-        } else {
-          try {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          throw new Error('تعدیل موجودی ابری به کنترل نسخه و بهای تمام‌شده Firestore نیاز دارد؛ در حالت آفلاین هیچ تغییری اعمال نشد. پس از اتصال مجدد دوباره تلاش کنید.');
+        }
+        try {
             await runTransaction(db, async (tx) => {
               const counterRef = doc(db, 'counters', user.uid);
               const prodRef = doc(db, 'products', prod.id);
@@ -2255,8 +2237,13 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 : localMaxVoucherNum;
               const liveNextNum = currentMax + 1;
 
-              const liveProd: Product = prodSnap.exists()
-                ? {
+              if (!prodSnap.exists()) {
+                throw new Error('کالای هدف در فضای ابری پیدا نشد؛ تعدیل موجودی لغو شد.');
+              }
+              if (prodSnap.data().ownerId !== ownerId) {
+                throw new Error('مالکیت کالای هدف با فضای کاری فعلی مطابقت ندارد؛ تعدیل موجودی لغو شد.');
+              }
+              const liveProd: Product = {
                     ...prod,
                     stock: Number(prodSnap.data().stock) || 0,
                     buyPrice: Number(prodSnap.data().buyPrice) || 0,
@@ -2319,14 +2306,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 updatedAt: serverTimestamp(),
               });
             });
-          } catch (err) {
-            if (isFirestoreOfflineError(err)) {
-              await commitOfflineStockAdjustBatch();
-            } else {
-              handleFirestoreError(err, OperationType.UPDATE, `atomic-stock-adjust/${prod.id}`);
-              return;
-            }
-          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `atomic-stock-adjust/${prod.id}`);
+          throw err;
         }
       } else {
         // Local atomic state commit (only after full validation succeeded)
