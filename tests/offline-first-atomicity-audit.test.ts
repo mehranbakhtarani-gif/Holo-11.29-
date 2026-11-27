@@ -346,6 +346,15 @@ async function runTests() {
   assert.match(renumberBody, /changedVouchers\.length > 450[\s\S]*هیچ تغییری اعمال نشد/);
   console.log('✓ Cloud voucher renumbering refuses multi-commit partial updates');
 
+  const invoiceOrderIdx = accountingCtxSrc.indexOf('const invoiceSalesOrder = useCallback');
+  assert.ok(invoiceOrderIdx !== -1, 'invoiceSalesOrder must exist');
+  const invoiceOrderGuard = accountingCtxSrc.slice(invoiceOrderIdx, invoiceOrderIdx + 1300);
+  assert.ok(invoiceOrderGuard.includes('SAFETY GATE'));
+  assert.ok(invoiceOrderGuard.includes('اتمیک‌شدن ثبت فاکتور و پیوند سفارش'));
+  assert.ok(invoiceOrderGuard.includes('throw new Error(safetyMessage)'));
+  console.log('✓ Sales-order invoicing fails closed until invoice/order linkage is atomic');
+
+
 
 
 
