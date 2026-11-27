@@ -1355,17 +1355,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
           }
         } catch (err) {
-          if (isFirestoreOfflineError(err)) {
-            try {
-              await updateDoc(ref, payload);
-            } catch (offlineWriteError) {
-              handleFirestoreError(offlineWriteError, OperationType.UPDATE, `parties/${partyId}`);
-              throw offlineWriteError;
-            }
-          } else {
-            handleFirestoreError(err, OperationType.UPDATE, `parties/${partyId}`);
-            throw err;
-          }
+          handleFirestoreError(err, OperationType.UPDATE, `parties/${partyId}`);
+          throw err;
         }
       } else {
         setParties((prev) =>
