@@ -1444,7 +1444,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       // The final number is reserved in the same transaction that writes the voucher.
       // This avoids consuming numbers on failed writes and prevents concurrent collisions.
       let nextNumber = sameYearMax + 1;
-      const id = generateSafeId('vch');
+      const id =
+        (payload.voucherType === 'closing' || payload.voucherType === 'opening') && payload.referenceId
+          ? `vch_${sha256HexSync(`${ownerId}:${payload.referenceId}`).slice(0, 32)}`
+          : generateSafeId('vch');
 
       const normCode = normalizeCurrencyCode(payload.currencyCode);
       const isFx = isForeignCurrency(normCode) && Number(payload.exchangeRate) > 0;
