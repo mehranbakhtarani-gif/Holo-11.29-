@@ -3,6 +3,7 @@ import {
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
 } from '../src/lib/offlineFirstCore';
+import { unlockBackupSession, lockBackupSession, isBackupSessionUnlocked, requireBackupSessionPassphrase } from '../src/lib/backupSession';
 
 async function run() {
   const snapshot = JSON.stringify({
@@ -48,7 +49,16 @@ async function run() {
   );
   assert.equal(invalidDigest.ok, false);
 
-  console.log('Encrypted backup envelope hardening: 7 assertions passed');
+  assert.equal(isBackupSessionUnlocked(), false);
+  assert.throws(() => requireBackupSessionPassphrase());
+  unlockBackupSession(passphrase);
+  assert.equal(isBackupSessionUnlocked(), true);
+  assert.equal(requireBackupSessionPassphrase(), passphrase);
+  lockBackupSession();
+  assert.equal(isBackupSessionUnlocked(), false);
+  assert.throws(() => requireBackupSessionPassphrase());
+
+  console.log('Encrypted backup envelope hardening: 13 assertions passed');
 }
 
 run().catch((error) => {
