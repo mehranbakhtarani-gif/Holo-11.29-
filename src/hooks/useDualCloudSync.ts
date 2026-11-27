@@ -571,6 +571,7 @@ export function useDualCloudSync() {
     },
     [
       exportBackupJson,
+      backupSessionUnlocked,
       user,
       isOnline,
       deviceId,
@@ -651,7 +652,7 @@ export function useDualCloudSync() {
         setIsFirebaseBackingUp(false);
       }
     },
-    [user, isOnline, importBackupJson, logActivity, showToast, refreshFirebaseBackups]
+    [user, isOnline, backupSessionUnlocked, importBackupJson, logActivity, showToast, refreshFirebaseBackups]
   );
 
   const removeFirebaseBackup = useCallback(
@@ -1112,6 +1113,7 @@ export function useDualCloudSync() {
     },
     [
       exportBackupJson,
+      backupSessionUnlocked,
       isOnline,
       vouchers.length,
       invoices.length,
@@ -1202,7 +1204,7 @@ export function useDualCloudSync() {
         setIsSupabaseSyncing(false);
       }
     },
-    [isOnline, supabaseSessionToken, supabaseCookieAuthenticated, importBackupJson, logActivity, showToast]
+    [isOnline, backupSessionUnlocked, supabaseSessionToken, supabaseCookieAuthenticated, importBackupJson, logActivity, showToast]
   );
 
   const removeSupabaseBackup = useCallback(
