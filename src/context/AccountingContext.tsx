@@ -1784,6 +1784,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           await deleteDoc(doc(db, 'vouchers', voucherId));
         } catch (err) {
           handleFirestoreError(err, OperationType.DELETE, `vouchers/${voucherId}`);
+          throw err;
         }
       } else {
         setVouchers((prev) => prev.filter((v) => v.id !== voucherId));
@@ -1925,6 +1926,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, 'vouchers');
+        throw err;
       }
     } else {
       setVouchers((prev) =>
