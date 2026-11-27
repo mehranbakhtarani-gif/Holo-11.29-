@@ -1229,6 +1229,18 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
   });
   assert.equal(mismatchedMime.ok, false, 'Data URL MIME must match declared attachment MIME');
 
+  const malformedBase64 = await saveDocumentAttachment({
+    entityType: 'invoice',
+    entityId: 'inv_bad_base64',
+    entityLabel: 'Base64 خراب',
+    fileName: 'broken.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:application/pdf;base64,not-base64!!',
+    uploadedBy: 'کاربر',
+    uploadedByRole: 'finance_manager',
+  });
+  assert.equal(malformedBase64.ok, false, 'Attachment payload must be valid base64 before encryption');
+
   const saved = await saveDocumentAttachment({
     entityType: 'contract',
     entityId: 'cnt_405',
