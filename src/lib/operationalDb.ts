@@ -1326,19 +1326,21 @@ export function countOperationalWorkspaceRecords(workspace: OperationalWorkspace
     workspace.warehouses ?? [], workspace.taxReports ?? [], workspace.localProfiles ?? [],
     workspace.syncOutbox ?? [], workspace.syncInbox ?? [],
   ];
+  let extensionRecordCount = 0;
   if (workspace.workspaceExtensions !== undefined) {
     if (!workspace.workspaceExtensions || typeof workspace.workspaceExtensions !== 'object' || Array.isArray(workspace.workspaceExtensions)) {
       throw new Error('ساختار داده‌های تکمیلی فضای کاری معتبر نیست.');
     }
     for (const value of Object.values(workspace.workspaceExtensions)) {
-      if (Array.isArray(value)) collections.push(value);
-      else if (value && typeof value === 'object') collections.push(Object.values(value as Record<string, unknown>));
+      if (Array.isArray(value)) extensionRecordCount += value.length;
+      else if (value && typeof value === 'object') extensionRecordCount += Object.keys(value as Record<string, unknown>).length;
     }
   }
   if (!collections.every(Array.isArray)) {
     throw new Error('ساختار مجموعه رکوردهای فضای کاری معتبر نیست.');
   }
   const total = collections.reduce((sum, rows) => sum + rows.length, 0) +
+    extensionRecordCount +
     (workspace.businessLocalState ? countBusinessLocalStateSnapshotRecords(workspace.businessLocalState) : 0);
   if (!Number.isSafeInteger(total) || total < 0) {
     throw new Error('تعداد رکوردهای فضای کاری خارج از محدوده مجاز است.');
