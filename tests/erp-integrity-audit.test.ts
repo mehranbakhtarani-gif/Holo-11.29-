@@ -54,6 +54,7 @@ import {
   computeWarehouseProductKardex,
   evaluateWarehouseShortageSurplus,
   executeTrackedWarehouseTransfer,
+  receiveTrackedWarehouseTransfer,
 } from '../src/lib/multiWarehouseEngine';
 import {
   computeSandboxDiff,
@@ -805,6 +806,32 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
     defaultCostingMethod: 'fifo',
   });
   assert.equal(trf2.transferRecord.status, 'in_transit');
+
+  const receivedTransfer = receiveTrackedWarehouseTransfer({
+    product: trf2.updatedProduct,
+    transfer: trf2.transferRecord,
+    receivedDate: '1405/02/12',
+  });
+  assert.equal(receivedTransfer.transferRecord.status, 'received');
+  assert.equal(receivedTransfer.transferRecord.receivedDate, '1405/02/12');
+  assert.equal(receivedTransfer.updatedProduct.stock, 100);
+  assert.equal(receivedTransfer.updatedProduct.inventoryValueIrr, 400_000_000);
+  assert.equal(
+    receivedTransfer.updatedProduct.costLayers?.filter((layer) =>
+      layer.layerId.startsWith(`trf_${trf2.transferRecord.id}_`) &&
+      layer.warehouse === 'انبار تبریز'
+    ).reduce((sum, layer) => sum + layer.remainingQty, 0),
+    10
+  );
+  assert.throws(
+    () => receiveTrackedWarehouseTransfer({
+      product: receivedTransfer.updatedProduct,
+      transfer: receivedTransfer.transferRecord,
+      receivedDate: '1405/02/13',
+    }),
+    /فقط انتقال در راه/
+  );
+
 
   const matrix = computeMultiWarehouseMatrix({
     products: [trf2.updatedProduct],
