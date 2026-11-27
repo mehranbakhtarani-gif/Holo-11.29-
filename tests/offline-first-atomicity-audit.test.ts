@@ -428,7 +428,7 @@ async function runTests() {
   const yearEndBody = accountingCtxSrc.slice(yearEndIdx, yearEndEnd);
   assert.match(yearEndBody, /existingClosing && options\?\.createNextYearOpening && !existingOpening/);
   assert.match(yearEndBody, /existingOpening && !existingClosing/);
-  assert.match(yearEndBody, /existingClosingVoucher &&[\\s\\S]*voucherNumber/);
+  assert.match(yearEndBody, /existingClosingVoucher &&[\s\S]*voucherNumber/);
   console.log('✓ 1a. Static audit passed for year-end recovery mismatch fail-closed guards');
 
   console.log('✓ 1. Static audit passed for offline guards, atomic financial operations and atomic depreciation');
