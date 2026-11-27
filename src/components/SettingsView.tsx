@@ -141,10 +141,10 @@ export const SettingsView: React.FC<{
         if (!active) return;
         setPendingRestoreJournal(journal);
         setRestoreJournalReadError(null);
-        if (!journal && !isOperationalRestoreBarrierActive()) {
-          try { await cleanupOrphanedStagedDocumentAttachmentBundles(); }
-          catch (error) { console.warn('Orphaned pre-commit attachment staging cleanup was deferred.', error); }
-        }
+        // Staging may legitimately outlive this component's mount while a large
+        // encrypted package is being validated in another tab. Do not infer that
+        // an old manifest is orphaned from age alone; cleanup must be an explicit,
+        // journal-aware maintenance operation.
       })
       .catch((error) => { if (active) setRestoreJournalReadError(error instanceof Error ? error.message : 'وضعیت بازیابی قابل بررسی نیست.'); });
     return () => { active = false; };
