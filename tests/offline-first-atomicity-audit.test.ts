@@ -419,10 +419,10 @@ async function runTests() {
   const offlineDepreciationBranch = depreciationBody.slice(depreciationBody.lastIndexOf('} else {'));
   assert.match(
     offlineDepreciationBranch,
-    /ثبت استهلاک در حالت آفلاین موقتاً متوقف است/,
-    'offline depreciation must fail closed until asset and voucher writes share one IndexedDB transaction'
+    /commitDepreciationOperationalTx/,
+    'offline depreciation must use one IndexedDB transaction for asset balances and the permanent voucher'
   );
-  console.log('✓ 1. Static audit passed for offline guards, atomic financial operations and depreciation fail-closed behavior');
+  console.log('✓ 1. Static audit passed for offline guards, atomic financial operations and atomic depreciation');
 
   // =========================================================================
   // 2. ATOMIC COMMIT HAPPY PATH (Create Invoice: Inventory + Ledger + Treasury + Invoice)
@@ -809,6 +809,10 @@ async function runTests() {
     assetUpdates: [{
       id: asset.id,
       expectedAccumulatedDepreciation: 10_000_000,
+      expectedPurchaseCost: 120_000_000,
+      expectedSalvageValue: 12_000_000,
+      expectedUsefulLifeYears: 5,
+      expectedPurchaseDate: '1404/01/01',
       depreciationAmount: 1_800_000,
       accumulatedDepreciation: 11_800_000,
     }],
@@ -834,6 +838,10 @@ async function runTests() {
       assetUpdates: [{
         id: asset.id,
         expectedAccumulatedDepreciation: 10_000_000,
+        expectedPurchaseCost: 120_000_000,
+        expectedSalvageValue: 12_000_000,
+        expectedUsefulLifeYears: 5,
+        expectedPurchaseDate: '1404/01/01',
         depreciationAmount: 1_800_000,
         accumulatedDepreciation: 11_800_000,
       }],
@@ -856,6 +864,10 @@ async function runTests() {
       assetUpdates: [{
         id: asset.id,
         expectedAccumulatedDepreciation: 10_000_000,
+        expectedPurchaseCost: 120_000_000,
+        expectedSalvageValue: 12_000_000,
+        expectedUsefulLifeYears: 5,
+        expectedPurchaseDate: '1404/01/01',
         depreciationAmount: 1_800_000,
         accumulatedDepreciation: 11_800_000,
       }],
