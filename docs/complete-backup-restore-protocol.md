@@ -1,6 +1,6 @@
 # Recoverable Complete Backup Restore Protocol
 
-Status: design specification; implementation is not yet complete.
+Status: partially implemented foundation; this protocol is not yet safe to enable as the application-wide restore path.
 
 ## Current behavior and boundary
 
@@ -97,3 +97,17 @@ Use real browser IndexedDB integration tests (prefer the browser test runner alr
 ## Exit criteria
 
 The current confirmation-based restore remains in place until the v5/v2 staging stores, boot-time recovery barrier, idempotent apply transactions, real IndexedDB failure-injection tests, and cloud/P2P pause behavior are implemented and CI passes. Merge and deployment remain separate, explicitly authorized actions.
+
+## Implementation progress (2026-11-28)
+
+The first infrastructure pieces now exist on the feature branch:
+
+- Operational IndexedDB is schema v5 and creates a dedicated `restoreJournal` infrastructure store, deliberately excluded from ordinary entity-store counts and workspace exports.
+- Journal records validate the encrypted workspace envelope, SHA-256 digests, schema/count metadata, attachment manifest digest, and a monotonic restore state.
+- Journal reads fail closed if a row is malformed or more than one nonterminal restore exists.
+- A workspace apply primitive decrypts and validates the staged envelope, replaces all operational workspace collections in one read-write transaction, increments the local revision, and advances the journal to `workspace_applied` in that same transaction.
+- Document Vault is schema v2 and has separate `restoreStaging` and `restoreManifests` stores. Attachment rows are authenticated before staging; the staged row set is re-verified before application; live attachment replacement and the manifest's `applied` marker share one Document Vault transaction.
+- `src/lib/completeBackupRestore.ts` coordinates staging, commit intent, workspace apply, attachment apply, and terminal journal state, and exposes a resume function for interrupted commits.
+- A journal schema validation test is included in the regular test script.
+
+Not yet complete and therefore not enabled from Settings: boot-time recovery barrier and UI, ensuring every operational writer/cloud/P2P path respects the barrier, orphan-stage garbage collection, real-browser IndexedDB crash/failure-injection tests, and end-to-end integration of the new coordinator. Until those controls are implemented and CI passes, the existing confirmation-based Settings restore remains the active UI. Do not claim cross-database atomicity: each database commits its own replacement transaction, and the journal provides forward recovery rather than a distributed transaction.
