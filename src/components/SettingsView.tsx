@@ -473,7 +473,12 @@ export const SettingsView: React.FC<{
         showToast('برای پشتیبان یکپارچه، ابتدا قفل پشتیبان رمزگذاری‌شده را باز کنید.', 'error');
         return;
       }
-      const workspace = JSON.parse(exportBackupJson()) as Record<string, unknown>;
+      const workspaceJson = exportBackupJson();
+      if (new Blob([workspaceJson]).size > 8_000_000) {
+        showToast('حجم اطلاعات حسابداری از سقف ۸ مگابایت مسیر بازیابی فعلی بیشتر است؛ خروجی یکپارچه متوقف شد.', 'error');
+        return;
+      }
+      const workspace = JSON.parse(workspaceJson) as Record<string, unknown>;
       const attachmentBundle = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as Record<string, unknown>;
       const packageJson = JSON.stringify({
         format: 'holoo-apex-complete-backup',
@@ -483,6 +488,10 @@ export const SettingsView: React.FC<{
         documentAttachments: attachmentBundle,
       }, null, 2);
       const blob = new Blob([packageJson], { type: 'application/json;charset=utf-8;' });
+      if (blob.size > 100 * 1024 * 1024) {
+        showToast('حجم بسته پشتیبان از سقف ۱۰۰ مگابایت مسیر بازیابی بیشتر است.', 'error');
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       const dateStamp = new Date().toISOString().slice(0, 10);
