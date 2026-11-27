@@ -5,7 +5,7 @@
 - Exported backup files can be encrypted with PBKDF2-HMAC-SHA-256 and AES-256-GCM.
 - New encrypted exports use 600,000 PBKDF2 iterations.
 - Envelope validation rejects unsupported KDF/cipher identifiers, malformed SHA-256 digests, oversized ciphertext, invalid salt/nonce lengths, and undersized GCM payloads.
-- The local IndexedDB snapshot store, the synchronous localStorage close snapshot, and Firebase cloud backup documents still contain plaintext accounting payloads. The encrypted export flow does not protect these stores.
+- Operational IndexedDB entity stores and sync outbox/inbox records remain plaintext. The separate local backup snapshot store, Firebase cloud backup documents, and Supabase workspace snapshot writes use encrypted envelopes for new writes. The synchronous localStorage close snapshot is disabled for new plaintext payloads; legacy entries remain migration-only.
 
 ## Security design constraints
 
@@ -48,11 +48,9 @@
 - Tests cover restart/unlock, wrong passphrase, tampering, interrupted writes, large payload limits, offline close/reopen, cloud upload/download, and failed restore atomicity.
 - Do not enable encrypted-only mode or delete legacy data until all three deployed devices support the same envelope version and key workflow.
 
-## Decision required before implementation
+## Key lifecycle decision
 
-Choose the key lifecycle:
-- **Session passphrase (recommended):** operator unlocks backups after each app restart; unattended encrypted backups run only while unlocked.
-- **Platform-protected device key:** enables unattended backups on a supported device, but requires platform-specific secure storage and a separate recovery plan.
+The current implementation uses the **session passphrase** model: the operator unlocks backups after each app restart, and encrypted backup operations are available only while the in-memory session vault is unlocked. A platform-protected device key is not implemented.
 
 Do not store a passphrase or encryption key in localStorage, ordinary IndexedDB, Firestore, or source code.
 
@@ -73,3 +71,11 @@ Do not store a passphrase or encryption key in localStorage, ordinary IndexedDB,
 - Firestore documents are capped conservatively at 900 KiB for encrypted envelopes. Supabase payloads currently retain the existing API size ceiling; large encrypted backups still need a chunked/object-storage design.
 - The app must be tested with the same passphrase across devices. Losing the passphrase means encrypted backups cannot be recovered.
 - Automated verification must pass after the latest changes before this rollout can be considered validated.
+
+
+### Encrypted operational shadow mirror (2026-11-27)
+
+- When the session backup vault is unlocked, the application now schedules a debounced encrypted shadow snapshot after operational workspace changes.
+- The shadow copy is written to the dedicated `secureWorkspace` IndexedDB store only after encryption/decryption round-trip and SHA-256 verification.
+- The final IndexedDB write checks the source workspace revision in the same transaction as the encrypted record write. If the operational workspace changed while encryption was running, the stale encrypted copy is rejected.
+- This is a non-destructive dual-write preparation stage. The existing entity stores remain authoritative and plaintext; the encrypted shadow is not yet used as the active read source. No legacy entity records are deleted or rewritten by this process.
