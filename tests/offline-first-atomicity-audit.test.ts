@@ -485,6 +485,12 @@ async function runTests() {
   assert.match(payrollBody, /totalExpense !== totalNet \+ totalInsurance \+ totalTax/);
   assert.match(payrollBody, /ماه حقوق باید یک عنوان معتبر/);
 
+  assert.match(payrollBody, /inFlightPayrollPosts\\.has\\(payrollLockKey\\)/);
+  assert.match(payrollBody, /finally[\\s\\S]*inFlightPayrollPosts\\.delete\\(payrollLockKey\\)/);
+  assert.match(payrollBody, /sha256HexSync\\(\\`\\$\\{ownerId\\}:\\$\\{payrollReferenceId\\}\\`\\)/);
+  assert.match(accountingCtxSrc, /payload\\.voucherType === 'payroll'[\\s\\S]*startsWith\\('payroll:'\\)[\\s\\S]*payv_/);
+
+
   const depreciationIdx = accountingCtxSrc.indexOf('const postDepreciationVoucher = useCallback');
   const depreciationEnd = accountingCtxSrc.indexOf('const addCostCenter = useCallback', depreciationIdx);
   assert.ok(depreciationIdx !== -1 && depreciationEnd > depreciationIdx);
