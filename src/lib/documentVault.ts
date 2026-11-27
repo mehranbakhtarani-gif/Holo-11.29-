@@ -747,7 +747,7 @@ export async function stageEncryptedDocumentAttachmentBundle(
     seen.add(candidate.id);
     const verified = await decryptAndVerifyBackupEnvelope(candidate.encryptedEnvelope, passphrase);
     if (!verified.ok || !verified.snapshotJson) throw new Error(verified.error || 'رمزگشایی یکی از پیوست‌ها ناموفق بود.');
-    let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown };
+    let payload: { dataUrl?: unknown; mimeType?: unknown; sha256?: unknown; metadataSha256?: unknown };
     try { payload = JSON.parse(verified.snapshotJson) as typeof payload; }
     catch { throw new Error('محتوای رمزگشایی‌شده یکی از پیوست‌ها خراب است.'); }
     if (typeof payload.dataUrl !== 'string' || getBase64DataUrlByteLength(payload.dataUrl, candidate.mimeType) === null ||
