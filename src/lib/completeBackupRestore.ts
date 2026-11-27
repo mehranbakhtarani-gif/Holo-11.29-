@@ -207,7 +207,7 @@ export async function resumePendingCompleteBackupRestore(): Promise<CompleteBack
   }
 
   const workspace = await applyOperationalRestoreJournalWorkspace(journal.restoreId);
-  const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest);
+  const attachments = await applyStagedDocumentAttachmentBundle(journal.restoreId, journal.packageDigest, journal.attachmentManifestDigest, journal.attachmentCount);
   const latest = await getActiveOperationalRestoreJournal();
   if (!latest || latest.restoreId !== journal.restoreId || latest.state !== 'workspace_applied') {
     throw new Error('بازیابی پس از اجرای مجدد به وضعیت پایدار نرسید.');
