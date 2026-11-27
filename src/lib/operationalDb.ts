@@ -688,23 +688,29 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
  * Legacy entity stores are intentionally retained until every writer/reader has
  * been switched and an explicit cutover procedure is validated.
  */
-export async function prepareEncryptedOperationalWorkspaceMigration(
-  workspaceId: string
+/**
+ * Writes a verified encrypted workspace snapshot without touching legacy entity stores.
+ * The revision comparison and secureWorkspace put share one IndexedDB transaction,
+ * preventing a stale asynchronous encryption result from replacing a newer snapshot.
+ */
+export async function writeEncryptedOperationalWorkspaceSnapshot(
+  workspaceId: string,
+  workspace: OperationalWorkspaceData,
+  expectedSourceRevision: number
 ): Promise<EncryptedOperationalWorkspaceMeta> {
   const cleanWorkspaceId = workspaceId.trim();
   if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) {
-    throw new Error('شناسه فضای کاری برای مهاجرت رمزگذاری‌شده معتبر نیست.');
+    throw new Error('شناسه فضای کاری برای ذخیره رمزگذاری‌شده معتبر نیست.');
   }
-  const passphrase = requireBackupSessionPassphrase();
-  const workspace = await loadOperationalWorkspace();
-  if (!workspace) {
-    throw new Error('داده عملیاتی محلی برای آماده‌سازی مهاجرت یافت نشد.');
+  if (!Number.isSafeInteger(expectedSourceRevision) || expectedSourceRevision < 1) {
+    throw new Error('شماره بازبینی مبنا برای ذخیره رمزگذاری‌شده معتبر نیست.');
   }
-
   const snapshotJson = JSON.stringify(workspace);
+  parseOperationalWorkspaceSnapshot(snapshotJson);
+  const passphrase = requireBackupSessionPassphrase();
   const envelope = await encryptBackupEnvelope(snapshotJson, passphrase);
   const verification = await decryptAndVerifyBackupEnvelope(JSON.stringify(envelope), passphrase);
-  if (!verification.ok || verification.snapshotJson !== snapshotJson) {
+  if (!verification.ok || verification.snapshotJson !== snapshotJson || verification.sha256 !== envelope.plaintextSha256) {
     throw new Error(verification.error || 'اعتبارسنجی نسخه رمزگذاری‌شده فضای کاری ناموفق بود.');
   }
 
@@ -715,18 +721,19 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
     workspace.importDossiers, workspace.salesOrders, workspace.subcontractJobs,
     workspace.rbacOperators, workspace.auditLogs,
   ].reduce((sum, rows) => sum + rows.length, 0);
-  const preparedAt = new Date().toISOString();
   const record: EncryptedOperationalWorkspaceRecord = {
     workspaceId: cleanWorkspaceId,
     envelopeJson: JSON.stringify(envelope),
     schemaVersion: 1,
     recordCount,
-    sourceRevision: Math.max(1, Number(workspace.localRevision) || 1),
+    sourceRevision: expectedSourceRevision,
     plaintextSha256: envelope.plaintextSha256,
-    preparedAt,
+    preparedAt: new Date().toISOString(),
     migrationState: 'prepared',
   };
-
+  if (!validateEncryptedOperationalWorkspaceRecordMetadata(record, cleanWorkspaceId)) {
+    throw new Error('فراداده نسخه رمزگذاری‌شده تولیدشده معتبر نیست.');
+  }
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB در این محیط در دسترس نیست.');
   const db = await openOperationalDb();
   try {
@@ -737,20 +744,27 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
       metaReq.onsuccess = () => {
         const current = metaReq.result as { localRevision?: number } | undefined;
         const currentRevision = Math.max(1, Number(current?.localRevision) || 1);
-        if (currentRevision !== record.sourceRevision) {
+        if (currentRevision !== expectedSourceRevision) {
           try { tx.abort(); } catch { /* transaction may already be inactive */ }
           if (!settled) {
             settled = true;
-            reject(new Error('داده‌های عملیاتی هنگام آماده‌سازی تغییر کرده‌اند؛ دوباره عملیات مهاجرت را اجرا کنید.'));
+            reject(new Error('داده‌های عملیاتی هنگام رمزگذاری تغییر کرده‌اند؛ ذخیره نسخه رمزگذاری‌شده متوقف شد.'));
           }
           return;
         }
-        tx.objectStore('secureWorkspace').put(record);
+        const putReq = tx.objectStore('secureWorkspace').put(record);
+        putReq.onerror = () => {
+          if (!settled) {
+            settled = true;
+            reject(putReq.error ?? new Error('نوشتن نسخه رمزگذاری‌شده فضای کاری ناموفق بود.'));
+          }
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+        };
       };
       metaReq.onerror = () => {
         if (!settled) {
           settled = true;
-          reject(metaReq.error ?? new Error('خواندن نسخه عملیاتی برای مهاجرت ناموفق بود.'));
+          reject(metaReq.error ?? new Error('خواندن نسخه عملیاتی برای ذخیره رمزگذاری‌شده ناموفق بود.'));
         }
         try { tx.abort(); } catch { /* transaction may already be inactive */ }
       };
@@ -758,16 +772,15 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
         if (!settled) { settled = true; resolve(); }
       };
       tx.onerror = () => {
-        if (!settled) { settled = true; reject(tx.error ?? new Error('Encrypted workspace migration write failed.')); }
+        if (!settled) { settled = true; reject(tx.error ?? new Error('Encrypted workspace write failed.')); }
       };
       tx.onabort = () => {
-        if (!settled) { settled = true; reject(tx.error ?? new Error('Encrypted workspace migration write aborted.')); }
+        if (!settled) { settled = true; reject(tx.error ?? new Error('Encrypted workspace write aborted.')); }
       };
     });
   } finally {
     db.close();
   }
-
   return {
     workspaceId: record.workspaceId,
     schemaVersion: record.schemaVersion,
@@ -777,6 +790,20 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
     preparedAt: record.preparedAt,
     migrationState: record.migrationState,
   };
+}
+
+export async function prepareEncryptedOperationalWorkspaceMigration(
+  workspaceId: string
+): Promise<EncryptedOperationalWorkspaceMeta> {
+  const workspace = await loadOperationalWorkspace();
+  if (!workspace) {
+    throw new Error('داده عملیاتی محلی برای آماده‌سازی مهاجرت یافت نشد.');
+  }
+  return writeEncryptedOperationalWorkspaceSnapshot(
+    workspaceId,
+    workspace,
+    Math.max(1, Number(workspace.localRevision) || 1)
+  );
 }
 
 export async function loadPreparedEncryptedOperationalWorkspace(
