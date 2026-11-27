@@ -96,4 +96,22 @@ async function authRoutes(req,u,env,allow){
 }
 
 const authResponse=await authRoutes(req,u,env,allow);if(authResponse)return authResponse;
+
+if(u.pathname==="/api/supabase/pull"&&req.method==="GET"){
+ const actor=actorFor(req,env);
+ if(!actor||!validWid(actor.workspaceId))return out({error:"برای خواندن از Supabase ابتدا اتصال مستقل را فعال کنید.",code:"AUTH_REQUIRED"},401,allow);
+ const requested=u.searchParams.get("backupId")||"";
+ const prefix=actor.uid+"__bak__";
+ let target=actor.uid;
+ if(requested){if(requested.length>180||!requested.startsWith(prefix)||!/^[a-zA-Z0-9_-]{8,200}$/.test(requested))return out({error:"دسترسی به این نسخه پشتیبان مجاز نیست."},403,allow);target=requested}
+ const cfg=sbBase(env);if(!cfg)return out({error:"Supabase در تنظیمات Worker پیکربندی نشده است.",code:"NOT_CONFIGURED"},503,allow);
+ try{
+  const url=cfg.base+"/rest/v1/"+cfg.table+"?owner_id=eq."+encodeURIComponent(target)+"&select=revision,conflict_policy,last_device_id,last_device_label,updated_at,snapshot_json&limit=1";
+  const r=await fetch(url,{headers:sbHeaders(cfg),signal:AbortSignal.timeout(8000)});
+  if(!r.ok)return out({error:"خطا در بازیابی اطلاعات از Supabase.",code:"PULL_READ_FAILED"},r.status,allow);
+  const rows=await r.json(),row=rows?.[0];
+  if(!row||!row.snapshot_json)return out({found:false,revision:0},200,allow);
+  return out({found:true,backupId:requested||undefined,revision:Number(row.revision)||1,conflictPolicy:row.conflict_policy||"last_write_wins",lastDeviceId:row.last_device_id||"",lastDeviceLabel:row.last_device_label||"",updatedAt:row.updated_at||new Date().toISOString(),snapshotJson:typeof row.snapshot_json==="string"?row.snapshot_json:JSON.stringify(row.snapshot_json)},200,allow);
+ }catch{return out({error:"ارتباط با سرور Supabase برقرار نشد.",code:"PULL_NETWORK_ERROR"},502,allow)}
+}
 if(u.pathname.startsWith("/api/ai/")||u.pathname.startsWith("/api/supabase/"))return out({error:"این API هنوز به Worker منتقل نشده است.",code:"API_NOT_MIGRATED"},501,allow);return out({error:"Not found"},404,allow)}};
