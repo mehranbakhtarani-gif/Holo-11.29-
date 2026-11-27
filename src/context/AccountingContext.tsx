@@ -378,6 +378,9 @@ const AccountingContext = createContext<AccountingContextValue | null>(null);
 
 const DEMO_OWNER = 'demo_holoo_apex';
 
+// Prevent duplicate concurrent payroll submissions within one workspace and period.
+const inFlightPayrollPosts = new Set<string>();
+
 const DEFAULT_PROFILE: CompanyProfile = {
   uid: DEMO_OWNER,
   displayName: 'مهندس مهران باختری',
@@ -1460,9 +1463,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       // This avoids consuming numbers on failed writes and prevents concurrent collisions.
       let nextNumber = sameYearMax + 1;
       const id =
-        (payload.voucherType === 'closing' || payload.voucherType === 'opening') && payload.referenceId
-          ? `vch_${sha256HexSync(`${ownerId}:${payload.referenceId}`).slice(0, 32)}`
-          : generateSafeId('vch');
+        payload.voucherType === 'payroll' && payload.referenceId?.startsWith('payroll:')
+          ? `payv_${sha256HexSync(`${ownerId}:${payload.referenceId}`).slice(0, 32)}`
+          : (payload.voucherType === 'closing' || payload.voucherType === 'opening') && payload.referenceId
+            ? `vch_${sha256HexSync(`${ownerId}:${payload.referenceId}`).slice(0, 32)}`
+            : generateSafeId('vch');
 
       const normCode = normalizeCurrencyCode(payload.currencyCode);
       const isFx = isForeignCurrency(normCode) && Number(payload.exchangeRate) > 0;
@@ -4415,6 +4420,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
 
       const payrollReferenceId = `payroll:${fiscalYear}:${monthName.trim()}`;
+      const payrollLockKey = `${ownerId}:${payrollReferenceId}`;
+      if (inFlightPayrollPosts.has(payrollLockKey)) {
+        throw new Error('ثبت سند حقوق برای این دوره در حال انجام است؛ از ارسال هم‌زمان جلوگیری شد.');
+      }
+      inFlightPayrollPosts.add(payrollLockKey);
+      try {
       if (vouchers.some((v) => v.referenceId === payrollReferenceId)) {
         const message = `سند حقوق ${monthName} سال ${fiscalYear} قبلاً ثبت شده است.`;
         showToast(message, 'error');
@@ -4510,7 +4521,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
           throw new Error('برای ثبت اتمیک سند حقوق در فضای ابری، اتصال اینترنت لازم است. هیچ تغییری اعمال نشد.');
         }
-        const voucherId = `payv_${sha256HexSync(payrollReferenceId).slice(0, 32)}`;
+        const voucherId = `payv_${sha256HexSync(`${ownerId}:${payrollReferenceId}`).slice(0, 32)}`;
         const voucherRef = doc(db, 'vouchers', voucherId);
         const counterRef = doc(db, 'counters', user.uid);
         const sameYearMax = vouchers
@@ -4599,6 +4610,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           referenceId: payrollReferenceId,
           lines,
         });
+      }
+      } finally {
+        inFlightPayrollPosts.delete(payrollLockKey);
       }
     },
     [employees, vouchers, accounts, parties, ownerId, user, deviceId, profile.fiscalYear, profile.statutoryParamsByYear, profile.closedFiscalYears, profile.currencyUnit, createVoucher, showToast, assertPermission]
