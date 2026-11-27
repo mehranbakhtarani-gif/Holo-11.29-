@@ -338,10 +338,10 @@ export async function listLocalSnapshots(): Promise<LocalBackupSnapshotMeta[]> {
       rows.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
     }
     db.close();
-    return rows.slice(0, MAX_SNAPSHOTS).map(({ payloadJson: _p, ...meta }) => meta);
+    return rows.slice(0, MAX_SNAPSHOTS).map(({ payloadJson: _p, encryptedEnvelope: _e, ...meta }) => meta);
   } catch {
     if (syncSnap) {
-      const { payloadJson: _p, ...meta } = syncSnap;
+      const { payloadJson: _p, encryptedEnvelope: _e, ...meta } = syncSnap;
       return [meta];
     }
     return [];
