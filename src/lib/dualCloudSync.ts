@@ -1,10 +1,34 @@
 import type { CloudBackupMeta } from './firebaseCloudBackup';
+import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope, type EncryptedBackupEnvelope } from './offlineFirstCore';
+import { requireBackupSessionPassphrase } from './backupSession';
 import {
   buildStandaloneLocalDiagnostics,
   detectCloudflareWorkerBackend,
   detectOptionalBackendServer,
   isJsonHttpResponse,
 } from './staticRuntimeGuard';
+
+const SUPABASE_ENCRYPTED_SNAPSHOT_KIND = 'holoo-apex-encrypted-sync-v1';
+
+async function encodeSupabaseSnapshot(snapshotJson: string): Promise<string> {
+  const envelope = await encryptBackupEnvelope(snapshotJson, requireBackupSessionPassphrase());
+  return JSON.stringify({ kind: SUPABASE_ENCRYPTED_SNAPSHOT_KIND, envelope });
+}
+
+async function decodeSupabaseSnapshot(rawJson: string): Promise<string> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(rawJson); } catch { throw new Error('ساختار نسخه ابری Supabase معتبر نیست.'); }
+  if (parsed && typeof parsed === 'object' &&
+      (parsed as { kind?: unknown }).kind === SUPABASE_ENCRYPTED_SNAPSHOT_KIND) {
+    const envelope = (parsed as { envelope?: unknown }).envelope;
+    if (!envelope || typeof envelope !== 'object') throw new Error('پاکت رمزگذاری‌شده Supabase ناقص است.');
+    const result = await decryptAndVerifyBackupEnvelope(JSON.stringify(envelope), requireBackupSessionPassphrase());
+    if (!result.ok || !result.snapshotJson) throw new Error(result.error || 'رمزگشایی Supabase ناموفق بود.');
+    return result.snapshotJson;
+  }
+  // Legacy plaintext rows are readable for an explicit migration/restore path only.
+  return rawJson;
+}
 
 export type ConflictResolutionPolicy = 'last_write_wins' | 'first_write_wins';
 
@@ -886,7 +910,7 @@ export async function pushSnapshotToSupabase(params: {
         voucherCount: params.voucherCount,
         invoiceCount: params.invoiceCount,
         productCount: params.productCount,
-        snapshotJson: params.snapshotJson,
+        snapshotJson: await encodeSupabaseSnapshot(params.snapshotJson),
       }),
     });
 
@@ -903,9 +927,13 @@ export async function pushSnapshotToSupabase(params: {
       };
     }
 
+    const data = json as SupabaseSyncResponse;
+    if (data.remoteSnapshotJson) {
+      data.remoteSnapshotJson = await decodeSupabaseSnapshot(data.remoteSnapshotJson);
+    }
     return {
       ok: true,
-      data: json as SupabaseSyncResponse,
+      data,
     };
   } catch {
     return {
@@ -959,7 +987,8 @@ export async function pullSnapshotFromSupabase(
     if (!resp.ok) {
       return { ok: false, error: json.error || 'خطا در بازیابی از Supabase' };
     }
-    return { ok: true, ...json };
+    const decoded = json.snapshotJson ? await decodeSupabaseSnapshot(json.snapshotJson) : undefined;
+    return { ok: true, ...json, ...(decoded ? { snapshotJson: decoded } : {}) };
   } catch {
     return { ok: false, error: 'ارتباط با Supabase برقرار نشد.' };
   }
