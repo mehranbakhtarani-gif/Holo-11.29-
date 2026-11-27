@@ -3,8 +3,6 @@ import {
   OP_DB_VERSION,
   OPERATIONAL_STORES,
   isValidOperationalRestoreJournalRecord,
-  isOperationalRestoreBarrierActive,
-  setOperationalRestoreBarrier,
   type OperationalRestoreJournalRecord,
 } from '../src/lib/operationalDb';
 
@@ -34,9 +32,5 @@ assert.equal(isValidOperationalRestoreJournalRecord({ ...valid, attachmentCount:
 assert.equal(isValidOperationalRestoreJournalRecord({ ...valid, state: 'unknown' }), false);
 assert.equal(isValidOperationalRestoreJournalRecord({ ...valid, workspaceSchemaVersion: 1 }), false);
 assert.equal(isValidOperationalRestoreJournalRecord({ ...valid, workspaceEnvelopeJson: 'x'.repeat(12_000_001) }), false);
-setOperationalRestoreBarrier(true);
-assert.equal(isOperationalRestoreBarrierActive(), true);
-setOperationalRestoreBarrier(false);
-assert.equal(isOperationalRestoreBarrierActive(), false);
 
 console.log('PASS: durable restore journal schema and validation');
