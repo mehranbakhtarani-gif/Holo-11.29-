@@ -1352,10 +1352,33 @@ export function calculateEmployeePayroll(
 }
 
 export function calculateMonthlyDepreciation(asset: FixedAsset): number {
-  const depreciable = Math.max(0, asset.purchaseCost - asset.salvageValue);
-  const remaining = Math.max(0, depreciable - asset.accumulatedDepreciation);
+  const purchaseCost = Number(asset.purchaseCost);
+  const salvageValue = Number(asset.salvageValue);
+  const usefulLifeYears = Number(asset.usefulLifeYears);
+  const accumulatedDepreciation = Number(asset.accumulatedDepreciation);
+  if (
+    !Number.isSafeInteger(purchaseCost) ||
+    purchaseCost <= 0 ||
+    !Number.isSafeInteger(salvageValue) ||
+    salvageValue < 0 ||
+    salvageValue > purchaseCost ||
+    !Number.isFinite(usefulLifeYears) ||
+    usefulLifeYears <= 0 ||
+    !Number.isSafeInteger(accumulatedDepreciation) ||
+    accumulatedDepreciation < 0
+  ) {
+    throw new Error(`اطلاعات مالی دارایی «${asset.assetCode}» معتبر نیست.`);
+  }
+  const depreciable = purchaseCost - salvageValue;
+  if (accumulatedDepreciation > depreciable) {
+    throw new Error(`استهلاک انباشته دارایی «${asset.assetCode}» از مبلغ استهلاک‌پذیر بیشتر است.`);
+  }
+  const remaining = depreciable - accumulatedDepreciation;
   if (remaining <= 0) return 0;
-  const monthly = Math.round(depreciable / (asset.usefulLifeYears * 12));
+  const monthly = Math.round(depreciable / (usefulLifeYears * 12));
+  if (!Number.isSafeInteger(monthly) || monthly < 0) {
+    throw new Error(`محاسبه ماهانه استهلاک دارایی «${asset.assetCode}» نامعتبر است.`);
+  }
   return Math.min(monthly, remaining);
 }
 
