@@ -51,7 +51,7 @@ import { SystemResetCenter } from './SystemResetCenter';
 import { useInvoiceSettings } from '../lib/invoiceSettings';
 import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
-import { cleanupOrphanedStagedDocumentAttachmentBundles, exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
+import { exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
 import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
 import { requireBackupSessionPassphrase } from '../lib/backupSession';
 import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
