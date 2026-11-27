@@ -57,8 +57,13 @@ const VAULT_DB_NAME = 'holoo_apex_document_vault_v1';
 const VAULT_DB_VERSION = 1;
 const VAULT_STORE = 'attachments';
 
-// In-memory store used automatically in Node test environments or when IndexedDB is unavailable
+// In-memory storage is permitted only in non-browser test runtimes. A browser must never
+// report a durable attachment write when IndexedDB is unavailable or has failed.
 const memoryVault = new Map<string, DocumentAttachmentRecord>();
+
+function isNonBrowserTestRuntime(): boolean {
+  return typeof window === 'undefined';
+}
 
 export function canRoleAccessSensitivity(
   role: RbacRoleKey,
@@ -155,20 +160,25 @@ export async function saveDocumentAttachment(params: {
   };
 
   if (isIdbAvailable()) {
+    let db: IDBDatabase | null = null;
     try {
-      const db = await openVaultDb();
+      db = await openVaultDb();
       await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(VAULT_STORE, 'readwrite');
+        const tx = db!.transaction(VAULT_STORE, 'readwrite');
         tx.objectStore(VAULT_STORE).put(record);
         tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
+        tx.onerror = () => reject(tx.error ?? new Error('Document Vault transaction failed'));
+        tx.onabort = () => reject(tx.error ?? new Error('Document Vault transaction aborted'));
       });
-      db.close();
-    } catch {
-      memoryVault.set(record.id, record);
+    } catch (err) {
+      return { ok: false, error: `ذخیره پایدار مدرک در IndexedDB ناموفق بود؛ فایل ذخیره نشد. ${err instanceof Error ? err.message : ''}`.trim() };
+    } finally {
+      db?.close();
     }
-  } else {
+  } else if (isNonBrowserTestRuntime()) {
     memoryVault.set(record.id, record);
+  } else {
+    return { ok: false, error: 'ذخیره پایدار اسناد در این مرورگر در دسترس نیست؛ برای جلوگیری از ازدست‌رفتن فایل، عملیات لغو شد.' };
   }
 
   const { dataUrl: _omit, ...meta } = record;
@@ -223,20 +233,24 @@ export async function retrieveVerifiedAttachment(
 > {
   let record: DocumentAttachmentRecord | undefined;
   if (isIdbAvailable()) {
+    let db: IDBDatabase | null = null;
     try {
-      const db = await openVaultDb();
+      db = await openVaultDb();
       record = await new Promise<DocumentAttachmentRecord | undefined>((resolve, reject) => {
-        const tx = db.transaction(VAULT_STORE, 'readonly');
+        const tx = db!.transaction(VAULT_STORE, 'readonly');
         const req = tx.objectStore(VAULT_STORE).get(attachmentId);
         req.onsuccess = () => resolve(req.result as DocumentAttachmentRecord | undefined);
-        req.onerror = () => reject(req.error);
+        req.onerror = () => reject(req.error ?? new Error('Document Vault read failed'));
       });
-      db.close();
-    } catch {
-      record = memoryVault.get(attachmentId);
+    } catch (err) {
+      return { ok: false, error: `خواندن پایدار مدرک ناموفق بود: ${err instanceof Error ? err.message : 'خطای IndexedDB'}` };
+    } finally {
+      db?.close();
     }
-  } else {
+  } else if (isNonBrowserTestRuntime()) {
     record = memoryVault.get(attachmentId);
+  } else {
+    return { ok: false, error: 'بایگانی پایدار اسناد در این مرورگر در دسترس نیست.' };
   }
 
   if (!record) {
@@ -262,20 +276,25 @@ export async function deleteDocumentAttachment(
     return { ok: false, error: 'فقط مدیر مالی یا حسابدار ارشد مجاز به حذف مدرک پیوست هستند.' };
   }
   if (isIdbAvailable()) {
+    let db: IDBDatabase | null = null;
     try {
-      const db = await openVaultDb();
+      db = await openVaultDb();
       await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(VAULT_STORE, 'readwrite');
+        const tx = db!.transaction(VAULT_STORE, 'readwrite');
         tx.objectStore(VAULT_STORE).delete(attachmentId);
         tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
+        tx.onerror = () => reject(tx.error ?? new Error('Document Vault delete failed'));
+        tx.onabort = () => reject(tx.error ?? new Error('Document Vault delete aborted'));
       });
-      db.close();
-    } catch {
-      memoryVault.delete(attachmentId);
+    } catch (err) {
+      return { ok: false, error: `حذف پایدار مدرک ناموفق بود: ${err instanceof Error ? err.message : 'خطای IndexedDB'}` };
+    } finally {
+      db?.close();
     }
-  } else {
+  } else if (isNonBrowserTestRuntime()) {
     memoryVault.delete(attachmentId);
+  } else {
+    return { ok: false, error: 'حذف مدرک انجام نشد؛ بایگانی پایدار در دسترس نیست.' };
   }
   return { ok: true };
 }
