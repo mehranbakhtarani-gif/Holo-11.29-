@@ -754,11 +754,23 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
     transferNumber: 'TRF-101',
     mode: 'immediate',
     defaultCostingMethod: 'fifo',
+    existingTransfers: [],
   });
   assert.equal(trf1.pnlImpactIrr, 0, 'Inter-warehouse transfer MUST have strictly 0 P&L impact');
   assert.equal(trf1.transferRecord.transferredCostIrr, 120_000_000);
   assert.equal(trf1.updatedProduct.stock, 100, 'Total physical stock across warehouses stays 100 kg');
   assert.equal(trf1.updatedProduct.inventoryValueIrr, 400_000_000, 'Total inventory value stays 400M IRR');
+  assert.throws(() => executeTrackedWarehouseTransfer({
+    product: prod,
+    fromWarehouse: 'انبار مرکزی',
+    toWarehouse: 'انبار شادآباد',
+    qty: 30,
+    date: '1405/02/05',
+    transferNumber: 'TRF-101',
+    mode: 'immediate',
+    defaultCostingMethod: 'fifo',
+    existingTransfers: [trf1.transferRecord],
+  }), /شماره انتقال برای این کالا قبلاً ثبت شده است/);
 
   const fractionalProduct: Product = {
     ...prod,
@@ -785,6 +797,7 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
     transferNumber: 'TRF-FRACTIONAL',
     mode: 'immediate',
     defaultCostingMethod: 'fifo',
+    existingTransfers: [],
   });
   assert.equal(fractionalTransfer.updatedProduct.stock, 0.0145,
     'warehouse transfers must preserve four-decimal stock precision');
@@ -804,6 +817,7 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
     transferNumber: 'TRF-102',
     mode: 'in_transit',
     defaultCostingMethod: 'fifo',
+    existingTransfers: [trf1.transferRecord],
   });
   assert.equal(trf2.transferRecord.status, 'in_transit');
 
