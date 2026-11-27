@@ -578,7 +578,14 @@ export const SettingsView: React.FC<{
             'بازیابی مقاوم در برابر قطع برنامه آغاز می‌شود. اطلاعات حسابداری و پیوست‌ها در دو پایگاه مستقل، با ژورنال پایدار و امکان ادامه پس از راه‌اندازی مجدد اعمال می‌شوند. آیا ادامه می‌دهید؟'
           );
           if (!proceed) return;
-          const result = await restoreCompleteBackupPackage(reader.result);
+          const attachmentBundle = parsed.documentAttachments as Record<string, unknown>;
+          const allowLegacyUnboundAttachmentMetadata = attachmentBundle.schemaVersion === 1
+            ? window.confirm('این بسته پیوست نسخه قدیمی دارد و فرادادهٔ هر فایل به‌صورت رمزنگاری‌شده به محتوای آن متصل نشده است. محتوا و SHA-256 بررسی می‌شوند، اما انتساب فایل به سند/فاکتور قابل احراز رمزنگاری نیست. فقط در صورت اعتماد کامل به فایل ادامه دهید.')
+            : false;
+          if (attachmentBundle.schemaVersion === 1 && !allowLegacyUnboundAttachmentMetadata) return;
+          const result = await restoreCompleteBackupPackage(reader.result, {
+            allowLegacyUnboundAttachmentMetadata,
+          });
           showToast(`بسته با موفقیت بازیابی شد: ${result.restoredWorkspaceRecords} رکورد و ${result.restoredAttachments} پیوست.`);
           window.location.reload();
           return;
