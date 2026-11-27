@@ -10,12 +10,12 @@ import {
 
 const SUPABASE_ENCRYPTED_SNAPSHOT_KIND = 'holoo-apex-encrypted-sync-v1';
 
-async function encodeSupabaseSnapshot(snapshotJson: string): Promise<string> {
+export async function encodeSupabaseSnapshot(snapshotJson: string): Promise<string> {
   const envelope = await encryptBackupEnvelope(snapshotJson, requireBackupSessionPassphrase());
   return JSON.stringify({ kind: SUPABASE_ENCRYPTED_SNAPSHOT_KIND, envelope });
 }
 
-async function decodeSupabaseSnapshot(rawJson: string): Promise<string> {
+export async function decodeSupabaseSnapshot(rawJson: string): Promise<string> {
   let parsed: unknown;
   try { parsed = JSON.parse(rawJson); } catch { throw new Error('ساختار نسخه ابری Supabase معتبر نیست.'); }
   if (parsed && typeof parsed === 'object' &&
