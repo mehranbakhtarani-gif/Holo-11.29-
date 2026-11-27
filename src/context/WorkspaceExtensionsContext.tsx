@@ -183,7 +183,7 @@ const WorkspaceExtensionsContext = createContext<WorkspaceExtensionsContextValue
 export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products, updateProduct } = useAccounting();
+  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products, updateProduct, isPrivilegedOperator } = useAccounting();
 
   const [state, setState] = useState<WorkspaceExtensionsState>(() => loadInitialExtensions());
   const [onlineDevices, setOnlineDevices] = useState<DevicePresenceRecord[]>([]);
@@ -662,6 +662,9 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     transferNumber: string; mode: 'immediate' | 'in_transit'; date: string;
   }): Promise<TrackedWarehouseTransfer> => {
     if (isOperationalRestoreBarrierActive()) throw new Error('عملیات انتقال تا پایان بازیابی متوقف است.');
+    if (!isPrivilegedOperator(activeOperator) && !activeOperator.permissions.canEditInventory) {
+      throw new Error('مجوز ویرایش موجودی برای ثبت انتقال انبار کافی نیست.');
+    }
     const localProduct = products.find((item) => item.id === params.productId);
     if (!localProduct) throw new Error('کالای انتخاب‌شده یافت نشد.');
     const cloudUid = isCloudMode ? user?.uid : null;
@@ -730,12 +733,15 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     } finally {
       pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
     }
-  }, [products, isCloudMode, user?.uid, activeOperator?.fullName, deviceLabel, updateProduct, persistTransferState]);
+  }, [products, isCloudMode, user?.uid, activeOperator, isPrivilegedOperator, deviceLabel, updateProduct, persistTransferState]);
 
   const receiveTrackedWarehouseTransfer = useCallback(async (
     transferId: string, receivedDate: string
   ): Promise<TrackedWarehouseTransfer> => {
     if (isOperationalRestoreBarrierActive()) throw new Error('عملیات دریافت تا پایان بازیابی متوقف است.');
+    if (!isPrivilegedOperator(activeOperator) && !activeOperator.permissions.canEditInventory) {
+      throw new Error('مجوز ویرایش موجودی برای دریافت انتقال انبار کافی نیست.');
+    }
     const transfer = stateRef.current.warehouseTransfers.find((item) => item.id === transferId);
     if (!transfer) throw new Error('سند انتقال یافت نشد.');
     const localProduct = products.find((item) => item.id === transfer.productId);
@@ -803,7 +809,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     } finally {
       pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
     }
-  }, [products, isCloudMode, user?.uid, deviceLabel, updateProduct, persistTransferState]);
+  }, [products, isCloudMode, user?.uid, activeOperator, isPrivilegedOperator, deviceLabel, updateProduct, persistTransferState]);
 
   const setPresenceModule = useCallback((mod: ActiveModule) => {
     setActivePresenceModule(mod);
