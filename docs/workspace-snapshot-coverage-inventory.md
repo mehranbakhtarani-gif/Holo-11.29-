@@ -101,3 +101,27 @@ These are not transient UI caches. In particular, bank reconciliation decisions 
 ### Explicit exclusion class
 
 Pure presentation preferences (theme, audio feedback, dashboard layout, recent action search, and notification display preferences) are not part of the financial data integrity snapshot. They may be restored separately as user/device preferences and must never be treated as authoritative business records. Credentials, PIN material, device identity, and live device-presence heartbeats must not be copied into workspace backups; they require separate security lifecycle handling.
+
+## Additional sync and attachment stores found in follow-up audit
+
+### Supabase offline queue and sync metadata
+
+`src/lib/dualCloudSync.ts` defines the following localStorage keys:
+
+- `holoo_apex_offline_outbox_v1`: bounded queue of sync summary records (id, queuedAt, summary, and entity counts). It is not the durable operation payload outbox; that lives in the operational IndexedDB syncOutbox store. Preserve this queue only as retry/diagnostic metadata or replace it with a derived view during migration.
+- `holoo_apex_conflict_policy_v1`: user-selected conflict policy. Preserve as configuration, but do not treat it as a data-authority rule.
+- `holoo_apex_supabase_revision_v1`, `holoo_apex_supabase_last_sync_v1`: sync cursors/diagnostics. Migrate as non-authoritative metadata and revalidate against the server.
+- `holoo_apex_supabase_workspace_id_v1`: workspace locator, not authentication proof.
+- `holoo_apex_supabase_auto_backup_v1`: preference only.
+
+### Separate document and attachment vault
+
+`src/lib/documentVault.ts` opens an independent IndexedDB database `holoo_apex_document_vault_v1`, store `attachments`. Each record includes business metadata and a Base64 `dataUrl` for PDFs/images attached to invoices, vouchers, cheques, contracts, and operations.
+
+This is a separate durable business dataset and is currently outside the operational encrypted shadow. The content is stored as plaintext Base64 in IndexedDB; SHA-256 verifies integrity but does not provide confidentiality. The future snapshot contract must include attachment metadata and binary content (or separately encrypted attachment envelopes) and preserve entity references and sensitivity labels.
+
+Critical reliability finding: save/delete operations in this vault catch IndexedDB failures and fall back to an in-memory Map, while save may still return success. This can acknowledge a document write that is not durable and can lose it on reload. Before release, persistent-storage failure must be surfaced; in-memory fallback must be explicitly test-only or return a non-durable status that cannot be mistaken for success.
+
+### Credential and device secrets — explicitly excluded
+
+Do not include authentication secrets in workspace snapshots. The repository also has device/PIN-related local state, including mesh passphrase and RBAC PIN hash keys. These require a separate security audit and migration to an appropriate secret lifecycle; they must not be copied into backups or cloud snapshots as ordinary business data.
