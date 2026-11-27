@@ -574,6 +574,49 @@ test('Stage 10 [Scenario 5]: Moving & Periodic Weighted Average — Buy 100@100k
   assert.equal(pwa.conservationDeltaIrr, 0);
 });
 
+test('Periodic weighted average: warehouse transfers remain visible and value-neutral in Kardex', () => {
+  const result = recalculateInventoryLedger({
+    productId: 'prd_periodic_transfer',
+    costingMethod: 'periodic_average',
+    openingQty: 10,
+    openingValueIrr: 1_000,
+    movements: [
+      {
+        id: 'transfer_out_1',
+        date: '1405/01/02',
+        sequence: 1,
+        kind: 'transfer_out',
+        productId: 'prd_periodic_transfer',
+        warehouse: 'انبار مبدا',
+        targetWarehouse: 'انبار مقصد',
+        qty: 3,
+      },
+      {
+        id: 'transfer_in_1',
+        date: '1405/01/02',
+        sequence: 2,
+        kind: 'transfer_in',
+        productId: 'prd_periodic_transfer',
+        warehouse: 'انبار مقصد',
+        qty: 3,
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    result.kardex.map((entry) => entry.kind),
+    ['transfer_out', 'transfer_in'],
+    'Both transfer legs must remain visible in the periodic-average Kardex'
+  );
+  assert.equal(result.kardex[0].outQty, 3);
+  assert.equal(result.kardex[1].inQty, 3);
+  assert.equal(result.kardex[0].outValueIrr, 0);
+  assert.equal(result.kardex[1].inValueIrr, 0);
+  assert.equal(result.finalState.stockQty, 10);
+  assert.equal(result.finalState.totalValueIrr, 1_000);
+  assert.equal(result.conservationDeltaIrr, 0);
+});
+
 test('Stage 10 [Scenarios 6 & 7]: Sales Return (10 units historical cost recovery) & Purchase Return (20 units + variance)', () => {
   const res = recalculateInventoryLedger({
     productId: 'prd_ret_test',
