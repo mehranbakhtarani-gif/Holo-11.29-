@@ -2742,7 +2742,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             voucherType: 'treasury',
             lines: plan.lines,
             referenceId: transitionReferenceId,
-            allowDuplicate: true,
           },
           accounts,
           parties,
