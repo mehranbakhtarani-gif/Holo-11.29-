@@ -2470,7 +2470,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         try {
             await runTransaction(db, async (tx) => {
               const counterRef = doc(db, 'counters', user.uid);
-              const counterSnap = await tx.get(counterRef);
+              const invoiceRef = doc(db, 'invoices', id);
+              const [counterSnap, invoiceSnap] = await Promise.all([
+                tx.get(counterRef),
+                tx.get(invoiceRef),
+              ]);
+              if (invoiceSnap.exists()) {
+                throw new Error(`شماره فاکتور «${payload.invoiceNumber}» قبلاً در فضای ابری ثبت شده است؛ ثبت تکراری متوقف شد.`);
+              }
               const currentMax = counterSnap.exists()
                 ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, localMaxVoucherNum)
                 : localMaxVoucherNum;
@@ -3198,7 +3205,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (!assertPermission('canIssueInvoice')) {
         throw new Error('عدم دسترسی (RBAC) برای صدور فاکتور.');
       }
-      const id = generateSafeId('inv');
+      const id = `inv_${sha256HexSync(`${ownerId}:invoice:${payload.invoiceType}:${payload.invoiceNumber.trim()}`).slice(0, 32)}`;
+      if (invoices.some((existing) => existing.id === id)) {
+        throw new Error(`شماره فاکتور «${payload.invoiceNumber}» قبلاً ثبت شده است؛ از ثبت تکراری جلوگیری شد.`);
+      }
       const plannedVoucherId = generateSafeId('vch');
       const plannedChequeId = generateSafeId('chq');
       const invoiceFy = extractFiscalYearFromDate(payload.date) || profile.fiscalYear;
