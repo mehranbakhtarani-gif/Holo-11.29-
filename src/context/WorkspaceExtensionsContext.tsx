@@ -7,17 +7,18 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { mergeRemoteArray } from '../lib/workspaceExtensionsMerge';
+import {
+  getChangedWorkspaceExtensionKeys,
+  mergeRemoteArray,
+} from '../lib/workspaceExtensionsMerge';
 import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   onSnapshot,
+  runTransaction,
   query,
   serverTimestamp,
-  setDoc,
-  updateDoc,
   where,
 } from 'firebase/firestore';
 import {
@@ -171,8 +172,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     label: '',
   });
 
-  const hasCloudExtDocRef = useRef(false);
   const versionRef = useRef(1);
+  const cloudWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const hasPresenceDocRef = useRef(false);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -244,11 +245,17 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     }
   }, []);
 
-  // Push cloud patch safely matching firestore.rules bounds
+  // Serialize local writes and transactionally patch only fields changed by this device.
+  // Firestore retries the transaction if another device commits between read and write.
   const pushToCloud = useCallback(
-    async (next: WorkspaceExtensionsState) => {
+    async (
+      next: WorkspaceExtensionsState,
+      previous: WorkspaceExtensionsState = next
+    ) => {
       if (isOperationalRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
+
       const docRef = doc(db, 'workspaceExtensions', user.uid);
+      const changedKeys = getChangedWorkspaceExtensionKeys(previous, next);
       const bounded = stripUndefinedDeep({
         reservedInvoices: next.reservedInvoices.slice(0, 50),
         productMetaMap: Object.fromEntries(Object.entries(next.productMetaMap).slice(0, 500)),
@@ -264,39 +271,65 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         volumeDiscountRules: next.volumeDiscountRules.slice(0, 50),
         moadianLinks: Object.fromEntries(Object.entries(next.moadianLinks).slice(0, 500)),
         fiscalArchives: next.fiscalArchives.slice(0, 25),
-        _version: versionRef.current + 1,
-        updatedByDevice: deviceLabel.slice(0, 120),
       });
 
-      try {
-        if (!hasCloudExtDocRef.current) {
-          const snap = await getDoc(docRef);
-          hasCloudExtDocRef.current = snap.exists();
-        }
-        if (hasCloudExtDocRef.current) {
-          await updateDoc(docRef, {
-            ...bounded,
-            updatedAt: serverTimestamp(),
+      const write = async () => {
+        if (isOperationalRestoreBarrierActive()) return;
+        try {
+          const committedVersion = await runTransaction(db, async (transaction) => {
+            const snap = await transaction.get(docRef);
+            if (!snap.exists()) {
+              transaction.set(docRef, {
+                ownerId: user.uid,
+                ...bounded,
+                _version: 1,
+                updatedByDevice: deviceLabel.slice(0, 120),
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              return 1;
+            }
+
+            const remote = snap.data();
+            const remoteVersion =
+              Number.isSafeInteger(remote._version) && remote._version >= 0
+                ? remote._version
+                : 0;
+            if (remoteVersion >= Number.MAX_SAFE_INTEGER) {
+              throw new Error('Workspace extension cloud version limit reached');
+            }
+
+            const patch: Record<string, unknown> = {};
+            for (const key of changedKeys) {
+              patch[key as string] = bounded[key];
+            }
+            if (Object.keys(patch).length === 0) return remoteVersion;
+
+            const nextVersion = remoteVersion + 1;
+            transaction.update(docRef, {
+              ...patch,
+              _version: nextVersion,
+              updatedByDevice: deviceLabel.slice(0, 120),
+              updatedAt: serverTimestamp(),
+            });
+            return nextVersion;
           });
-        } else {
-          await setDoc(docRef, {
-            ownerId: user.uid,
-            ...bounded,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          hasCloudExtDocRef.current = true;
-        }
-        versionRef.current = bounded._version;
-      } catch (err) {
-        if (!isFirestoreOfflineError(err)) {
-          try {
-            handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${user.uid}`);
-          } catch {
-            // logged cleanly
+
+          versionRef.current = Math.max(versionRef.current, committedVersion);
+        } catch (err) {
+          if (!isFirestoreOfflineError(err)) {
+            try {
+              handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${user.uid}`);
+            } catch {
+              // logged cleanly
+            }
           }
         }
-      }
+      };
+
+      const queuedWrite = cloudWriteQueueRef.current.then(write, write);
+      cloudWriteQueueRef.current = queuedWrite;
+      await queuedWrite;
     },
     [isCloudMode, user?.uid, deviceLabel]
   );
@@ -304,7 +337,6 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   // Live Firestore listener for /workspaceExtensions/{uid}
   useEffect(() => {
     if (!isCloudMode || !user?.uid) {
-      hasCloudExtDocRef.current = false;
       return;
     }
 
@@ -314,12 +346,10 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       (snap) => {
         if (isOperationalRestoreBarrierActive()) return;
         if (!snap.exists()) {
-          hasCloudExtDocRef.current = false;
           // Bootstrap cloud extensions from current local workspace
-          void pushToCloud(stateRef.current);
+          void pushToCloud(stateRef.current, stateRef.current);
           return;
         }
-        hasCloudExtDocRef.current = true;
         const data = snap.data() as Partial<WorkspaceExtensionsState> & { _version?: number };
         if (typeof data._version === 'number') {
           versionRef.current = Math.max(versionRef.current, data._version);
@@ -482,11 +512,12 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       if (isOperationalRestoreBarrierActive()) return;
       // Avoid side effects inside a React state updater: React may replay updater
       // functions. Keep the ref in sync so rapid consecutive actions compose safely.
-      const next = updater(stateRef.current);
+      const previous = stateRef.current;
+      const next = updater(previous);
       persistLocalMirror(next);
       stateRef.current = next;
       setState(next);
-      void pushToCloud(next);
+      void pushToCloud(next, previous);
     },
     [persistLocalMirror, pushToCloud]
   );
