@@ -211,7 +211,7 @@ export function isValidOperationalRestoreJournalRecord(value: unknown): value is
 /** Read the durable restore journal before normal workspace hydration. */
 export async function getActiveOperationalRestoreJournal(): Promise<OperationalRestoreJournalRecord | null> {
   if (!isIndexedDbAvailable()) throw new Error('برای بررسی وضعیت بازیابی، IndexedDB در دسترس نیست.');
-  const db = await openOperationalDb();
+  const db = await openOperationalDb(true);
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
@@ -246,7 +246,7 @@ export async function createOperationalRestoreJournal(
     throw new Error('ساختار اولیه ژورنال بازیابی معتبر نیست.');
   }
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای ثبت ژورنال بازیابی در دسترس نیست.');
-  const db = await openOperationalDb();
+  const db = await openOperationalDb(true);
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
@@ -279,7 +279,7 @@ export async function applyOperationalRestoreJournalWorkspace(
 ): Promise<{ localRevision: number; recordCount: number }> {
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای اعمال بازیابی فضای کاری در دسترس نیست.');
   const passphrase = requireBackupSessionPassphrase();
-  const db = await openOperationalDb();
+  const db = await openOperationalDb(true);
   try {
     const journal = await new Promise<OperationalRestoreJournalRecord>((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
@@ -394,7 +394,7 @@ export async function applyOperationalRestoreJournalWorkspace(
 /** Remove only an uncommitted staging journal; committed or commit-intent journals are immutable. */
 export async function discardStagingOperationalRestoreJournal(restoreId: string): Promise<void> {
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای پاک‌سازی ژورنال در دسترس نیست.');
-  const db = await openOperationalDb();
+  const db = await openOperationalDb(true);
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
@@ -424,7 +424,7 @@ export async function transitionOperationalRestoreJournal(
 ): Promise<OperationalRestoreJournalRecord> {
   if (!restoreId || !expectedStates.length) throw new Error('پارامتر تغییر وضعیت ژورنال معتبر نیست.');
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای تغییر ژورنال بازیابی در دسترس نیست.');
-  const db = await openOperationalDb();
+  const db = await openOperationalDb(true);
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readwrite');
@@ -478,7 +478,7 @@ function isIndexedDbAvailable(): boolean {
   return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined';
 }
 
-function openOperationalDb(): Promise<IDBDatabase> {
+function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (!isIndexedDbAvailable()) {
       reject(new Error('IndexedDB unavailable'));
@@ -542,7 +542,42 @@ function openOperationalDb(): Promise<IDBDatabase> {
         }
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      if (allowRestoreRecovery || !db.objectStoreNames.contains(RESTORE_JOURNAL_STORE)) {
+        resolve(db);
+        return;
+      }
+      const journalTx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
+      const journalRequest = journalTx.objectStore(RESTORE_JOURNAL_STORE).getAll();
+      journalRequest.onsuccess = () => {
+        const rows = (journalRequest.result as unknown[]) ?? [];
+        const barrierActive = rows.some((row) =>
+          !isValidOperationalRestoreJournalRecord(row) ||
+          !RESTORE_JOURNAL_TERMINAL_STATES.includes((row as OperationalRestoreJournalRecord).state)
+        );
+        if (!barrierActive) {
+          resolve(db);
+          return;
+        }
+        const guarded = new Proxy(db, {
+          get(target, property) {
+            if (property === 'transaction') {
+              return (..._args: Parameters<IDBDatabase['transaction']>) => {
+                throw new Error('بازیابی پشتیبان در حال انجام یا نیازمند ادامه است؛ عملیات عادی فضای کاری تا تکمیل بازیابی مسدود است.');
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+        resolve(guarded);
+      };
+      journalRequest.onerror = () => {
+        db.close();
+        reject(journalRequest.error ?? new Error('بررسی مانع بازیابی عملیاتی ناموفق بود.'));
+      };
+    };
     req.onerror = () => reject(req.error ?? new Error('Failed to open operational IndexedDB'));
     req.onblocked = () =>
       reject(new Error('Operational IndexedDB is blocked by another open tab/connection'));
