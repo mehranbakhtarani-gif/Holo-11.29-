@@ -1066,7 +1066,7 @@ export async function isInboxOperationProcessed(operationId: string): Promise<bo
 /** Atomic Stocktaking Adjustment commit in Operational IndexedDB (products + permanent voucher) */
 /** Atomically commits a local cheque status transition and its optional ledger voucher. */
 export async function commitChequeStatusOperationalTx(
-  payload: { cheque: Cheque; voucher?: Voucher | null },
+  payload: { cheque: Cheque; expectedStatus: Cheque['status']; voucher?: Voucher | null },
   options?: { dbOverride?: IDBDatabase }
 ): Promise<boolean> {
   const usingOverride = Boolean(options?.dbOverride);
@@ -1134,8 +1134,24 @@ export async function commitChequeStatusOperationalTx(
 
     try {
       tx = db.transaction(['meta', 'cheques', 'vouchers'], 'readwrite');
-      const chequeReq = tx.objectStore('cheques').put(cheque);
-      chequeReq.onerror = () => abortAndReject(chequeReq.error ?? new Error('Cheque status write failed'));
+      const chequeStore = tx.objectStore('cheques');
+      const currentChequeReq = chequeStore.get(cheque.id);
+      currentChequeReq.onsuccess = () => {
+        try {
+          const currentCheque = currentChequeReq.result as Cheque | undefined;
+          if (!currentCheque) {
+            throw new Error('ATOMIC_CHEQUE_NOT_FOUND: چک محلی برای تغییر وضعیت پیدا نشد.');
+          }
+          if (currentCheque.status !== payload.expectedStatus && currentCheque.status !== cheque.status) {
+            throw new Error('ATOMIC_CHEQUE_STALE_STATUS: وضعیت چک هم‌زمان تغییر کرده است؛ داده‌ها را تازه‌سازی کنید.');
+          }
+          const chequeReq = chequeStore.put(cheque);
+          chequeReq.onerror = () => abortAndReject(chequeReq.error ?? new Error('Cheque status write failed'));
+        } catch (error) {
+          abortAndReject(error);
+        }
+      };
+      currentChequeReq.onerror = () => abortAndReject(currentChequeReq.error ?? new Error('Cheque status read failed'));
       if (voucher) {
         const voucherReq = tx.objectStore('vouchers').put(voucher);
         voucherReq.onerror = () => abortAndReject(voucherReq.error ?? new Error('Cheque transition voucher write failed'));
