@@ -1553,6 +1553,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               : {}),
             ...(full.referenceId ? { referenceId: full.referenceId.slice(0, 128) } : {}),
             lines: full.lines,
+            ...(full.integrityHash ? { integrityHash: full.integrityHash } : {}),
+            ...(full.fiscalYear ? { fiscalYear: full.fiscalYear.slice(0, 16) } : {}),
             _version: 1,
             updatedByDevice: deviceId.slice(0, 64),
             createdAt: serverTimestamp(),
@@ -1560,6 +1562,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `vouchers/${id}`);
+          throw err;
         }
       } else {
         setVouchers((prev) => [...prev, full]);
@@ -1803,28 +1806,35 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           return;
         }
       }
+      if (!target) {
+        showToast('سند موردنظر در اطلاعات بارگذاری‌شده پیدا نشد؛ ابتدا اطلاعات را تازه‌سازی کنید.', 'error');
+        throw new Error('Voucher not found; finalization aborted.');
+      }
+      const permanentVoucher = {
+        ...target,
+        status: 'permanent' as const,
+        integrityHash: computeVoucherIntegrityHash({ ...target, status: 'permanent' as const }),
+      };
       if (user) {
         try {
           await updateDoc(doc(db, 'vouchers', voucherId), {
             status: 'permanent',
+            integrityHash: permanentVoucher.integrityHash,
             updatedAt: serverTimestamp(),
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.UPDATE, `vouchers/${voucherId}`);
+          throw err;
         }
       } else {
         setVouchers((prev) =>
-          prev.map((v) =>
-            v.id === voucherId
-              ? { ...v, status: 'permanent', integrityHash: computeVoucherIntegrityHash(v) }
-              : v
-          )
+          prev.map((v) => (v.id === voucherId ? permanentVoucher : v))
         );
       }
       if (target && !suppressNativeNotification) {
         emitVoucherNotificationEvent({
           type: 'finalized',
-          voucher: { ...target, status: 'permanent' },
+          voucher: permanentVoucher,
           unit: profile.currencyUnit,
         });
       }
