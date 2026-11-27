@@ -7,7 +7,8 @@ test('Web Lock prevents a second tab from entering backup restore while the firs
   await second.goto('tests/browser/restore-lock-harness.html');
 
   await first.evaluate(async () => {
-    const { withCompleteRestoreLock } = await import('/Holo-11.29-/src/lib/completeBackupRestore.ts');
+    const moduleUrl = new URL('/Holo-11.29-/src/lib/completeBackupRestore.ts', location.origin).href;
+    const { withCompleteRestoreLock } = await import(/* @vite-ignore */ moduleUrl);
     const state = window as unknown as Record<string, unknown>;
     state.firstAcquired = false;
     state.firstDone = false;
