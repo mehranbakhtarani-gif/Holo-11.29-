@@ -84,8 +84,13 @@ function stripUndefinedDeep<T>(value: T): T {
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v !== undefined) {
-        out[k] = stripUndefinedDeep(v);
+      if (v !== undefined && k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+        Object.defineProperty(out, k, {
+          value: stripUndefinedDeep(v),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
       }
     }
     return out as T;
