@@ -2573,13 +2573,18 @@ export function validateVoucherPayload(input: {
       }
     }
 
-    const rawD = Number(line.debit) || 0;
-    const rawC = Number(line.credit) || 0;
-    if (!Number.isFinite(rawD) || !Number.isFinite(rawC) || rawD < 0 || rawC < 0) {
+    const debitInput = Number(line.debit);
+    const creditInput = Number(line.credit);
+    const rawD = Number.isFinite(debitInput) ? debitInput : 0;
+    const rawC = Number.isFinite(creditInput) ? creditInput : 0;
+    if (!Number.isFinite(debitInput) || !Number.isFinite(creditInput) || rawD < 0 || rawC < 0) {
       errors.push(`ردیف ${rowNum}: مبالغ بدهکار و بستانکار نمی‌توانند منفی یا نامعتبر باشند.`);
     }
     const d = Math.max(0, Math.round(rawD));
     const c = Math.max(0, Math.round(rawC));
+    if (!Number.isSafeInteger(d) || !Number.isSafeInteger(c)) {
+      errors.push(`ردیف ${rowNum}: مبلغ آرتیکل از محدوده دقت امن عددی جاوااسکریپت بیشتر است؛ مبلغ باید با واحد صحیح ریال و در محدوده امن ثبت شود.`);
+    }
     if (d === 0 && c === 0) {
       errors.push(`ردیف ${rowNum}: آرتیکل بدون مبلغ (بدهکار = ۰ و بستانکار = ۰) مجاز نیست.`);
     }
@@ -2597,6 +2602,9 @@ export function validateVoucherPayload(input: {
 
     totalDebit += d;
     totalCredit += c;
+    if (!Number.isSafeInteger(totalDebit) || !Number.isSafeInteger(totalCredit)) {
+      errors.push('جمع بدهکار یا بستانکار از محدوده دقت امن عددی جاوااسکریپت بیشتر است.');
+    }
     sanitizedLines.push({
       ...line,
       accountCode: code,
