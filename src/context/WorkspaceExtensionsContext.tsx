@@ -59,7 +59,7 @@ import {
 import { ActiveModule, Product } from '../types/accounting';
 import {
   executeTrackedWarehouseTransfer,
-  receiveTrackedWarehouseTransfer,
+  receiveTrackedWarehouseTransfer as planTrackedWarehouseReceipt,
   TrackedWarehouseTransfer,
 } from '../lib/multiWarehouseEngine';
 
@@ -686,7 +686,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
           result = executeTrackedWarehouseTransfer({
             product: remoteProduct, ...params, existingTransfers: existing,
             defaultCostingMethod: remoteProduct.costingMethod || 'moving_average',
-            operatorName: activeOperator?.name,
+            operatorName: activeOperator?.fullName,
           });
           transaction.update(productRef, {
             stock: Number(result.updatedProduct.stock.toFixed(4)),
@@ -709,7 +709,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
           product: localProduct, ...params,
           existingTransfers: stateRef.current.warehouseTransfers,
           defaultCostingMethod: localProduct.costingMethod || 'moving_average',
-          operatorName: activeOperator?.name,
+          operatorName: activeOperator?.fullName,
         });
         await updateProduct(params.productId, {
           stock: result.updatedProduct.stock,
@@ -726,7 +726,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     } finally {
       pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
     }
-  }, [products, isCloudMode, user?.uid, activeOperator?.name, deviceLabel, updateProduct, persistTransferState]);
+  }, [products, isCloudMode, user?.uid, activeOperator?.fullName, deviceLabel, updateProduct, persistTransferState]);
 
   const receiveTrackedWarehouseTransfer = useCallback(async (
     transferId: string, receivedDate: string
@@ -759,7 +759,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             throw new Error('انتقال در راه وجود ندارد یا قبلاً دریافت شده است.');
           }
           const remoteProduct = { ...productSnap.data(), id: transfer.productId } as Product;
-          const received = receiveTrackedWarehouseTransfer({
+          const received = planTrackedWarehouseReceipt({
             product: remoteProduct, transfer: remoteTransfer, receivedDate,
           });
           updatedTransfer = received.transferRecord;
@@ -777,7 +777,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
           });
         });
       } else {
-        const received = receiveTrackedWarehouseTransfer({
+        const received = planTrackedWarehouseReceipt({
           product: localProduct, transfer, receivedDate,
         });
         updatedTransfer = received.transferRecord;
