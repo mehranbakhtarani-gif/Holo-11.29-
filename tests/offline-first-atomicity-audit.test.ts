@@ -313,6 +313,7 @@ async function runTests() {
   const viteConfigSrc = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
   const accountingCtxSrc = fs.readFileSync(path.join(root, 'src/context/AccountingContext.tsx'), 'utf8');
   const operationalDbSrc = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
 
   // Operational DB read failures must not be mistaken for an empty workspace,
   // otherwise fallback/demo hydration could mask or overwrite inaccessible data.
@@ -321,6 +322,22 @@ async function runTests() {
   const operationalHydration = operationalDbSrc.slice(operationalHydrationStart, operationalHydrationEnd);
   assert.match(operationalHydration, /catch \(error\)[\s\S]*throw error/);
   assert.match(accountingCtxSrc, /Operational workspace hydration failed; fallback hydration was blocked/);
+
+  // PWA pre-update safety backups must never persist plaintext workspace JSON.
+  const preUpdateBackupStart = operationalDbSrc.indexOf('export interface PreUpdateSafetyBackupRecord');
+  const preUpdateBackupEnd = operationalDbSrc.indexOf('export async function listPreUpdateSafetyBackups', preUpdateBackupStart);
+  const preUpdateBackupContract = operationalDbSrc.slice(preUpdateBackupStart, preUpdateBackupEnd);
+  assert.match(preUpdateBackupContract, /envelopeJson: string/);
+  assert.doesNotMatch(preUpdateBackupContract, /snapshotJson/);
+  assert.match(preUpdateBackupContract, /holoo-apex-encrypted-backup/);
+  assert.match(preUpdateBackupContract, /AES-256-GCM/);
+  const pwaUpdateBackupStart = appSrc.indexOf('onCreatePreUpdateBackup={async () =>');
+  const pwaUpdateBackupEnd = appSrc.indexOf('        }}', pwaUpdateBackupStart);
+  const pwaUpdateBackup = appSrc.slice(pwaUpdateBackupStart, pwaUpdateBackupEnd);
+  assert.match(pwaUpdateBackup, /encryptBackupEnvelope/);
+  assert.match(pwaUpdateBackup, /requireBackupSessionPassphrase/);
+  assert.match(pwaUpdateBackup, /envelopeJson:/);
+  assert.doesNotMatch(pwaUpdateBackup, /snapshotJson:/);
 
   // Subcontract completion must remain blocked until raw stock, finished product,
   // permanent voucher and job status share one atomic transaction.
