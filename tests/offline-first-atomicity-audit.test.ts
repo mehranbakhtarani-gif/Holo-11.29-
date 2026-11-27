@@ -417,6 +417,21 @@ async function runTests() {
   assert.match(proformaCancellationBody, /liveVersion !== \(inv\._version \?\? 1\)/);
   console.log('✓ 1c. Cloud invoice and proforma cancellation reject offline stale writes and enforce version checks');
 
+  const stockAdjustIdx = accountingCtxSrc.indexOf('const adjustProductStockWithVoucher = useCallback');
+  const bulkStocktakingIdx = accountingCtxSrc.indexOf('const bulkStocktakingWithVoucher = useCallback');
+  const bulkPriceIdx = accountingCtxSrc.indexOf('const bulkUpdateProductPrices = useCallback');
+  assert.ok(stockAdjustIdx !== -1 && bulkStocktakingIdx > stockAdjustIdx && bulkPriceIdx > bulkStocktakingIdx);
+  const stockAdjustBody = accountingCtxSrc.slice(stockAdjustIdx, bulkStocktakingIdx);
+  assert.match(stockAdjustBody, /تعدیل موجودی ابری به کنترل نسخه و بهای تمام‌شده Firestore نیاز دارد/);
+  assert.match(stockAdjustBody, /prodSnap\.data\(\)\.ownerId !== ownerId/);
+  assert.doesNotMatch(stockAdjustBody, /commitOfflineStockAdjustBatch/);
+  const bulkStocktakingBody = accountingCtxSrc.slice(bulkStocktakingIdx, bulkPriceIdx);
+  assert.match(bulkStocktakingBody, /انبارگردانی ابری به کنترل نسخه و موجودی زنده Firestore نیاز دارد/);
+  assert.match(bulkStocktakingBody, /liveVer !== \(delta\.prevVersion \?\? product\._version \?\? 1\)/);
+  assert.match(bulkStocktakingBody, /snap\.data\(\)\.ownerId !== ownerId/);
+  assert.doesNotMatch(bulkStocktakingBody, /commitOfflineBulkBatch/);
+  console.log('✓ 1d. Cloud stock adjustment and bulk stocktaking fail closed offline and reject stale product revisions');
+
   const updateChequeStatusIdx = accountingCtxSrc.indexOf('const updateChequeStatus = useCallback');
   assert.ok(updateChequeStatusIdx !== -1, 'updateChequeStatus must exist');
   assert.match(
