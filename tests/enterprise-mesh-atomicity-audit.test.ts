@@ -686,8 +686,11 @@ runTest('7. Standalone Android/PWA assets, manifest config, IDB v2 schema & Fire
 
   const viteCfg = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
   assert.ok(viteCfg.includes("display: 'standalone'"));
-  assert.ok(viteCfg.includes("start_url: '/'"));
-  assert.ok(viteCfg.includes("scope: '/'"));
+  // GitHub Pages serves this app from a repository subpath; relative PWA URLs
+  // keep the installed app and its navigation scoped to that deployment path.
+  assert.ok(viteCfg.includes("base: '/Holo-11.29-/'"));
+  assert.ok(viteCfg.includes("start_url: './'"));
+  assert.ok(viteCfg.includes("scope: './'"));
   assert.ok(viteCfg.includes('pwa-maskable-512x512.png'));
 
   const rules = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');

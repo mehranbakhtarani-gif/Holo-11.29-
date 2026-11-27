@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   fetchServerDiagnostics,
   fetchSupabaseBackups,
+  deleteSupabaseBackup,
   fetchSupabaseSessionMe,
   formatShamsiFromIso,
   loadSupabaseAutoBackupEnabled,
@@ -117,19 +118,19 @@ async function run() {
     try {
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        assert.ok(url.startsWith('https://holoo-apex-api.mehranbakhtarani.workers.dev/api/supabase/'));
         assert.equal(init?.credentials, 'include');
         const headers = (init?.headers || {}) as Record<string, string>;
         assert.equal(headers['X-Requested-With'], 'HolooApex');
         assert.equal(headers.Authorization, undefined);
 
+        if (url.includes('/api/supabase/backups') && init?.method === 'DELETE') {
+          assert.ok(url.includes('?backupId=sbw_test__bak__12345678'));
+          return new Response(JSON.stringify({ deleted: true, backupId: 'sbw_test__bak__12345678' }), { status: 200 });
+        }
         if (url.includes('/api/supabase/backups')) {
           return new Response(
-            JSON.stringify({
-              maxBackups: 3,
-              currentRevision: 5,
-              currentUpdatedAt: '2026-04-01T12:00:00.000Z',
-              backups: [],
-            }),
+            JSON.stringify({ maxBackups: 3, currentRevision: 5, currentUpdatedAt: '2026-04-01T12:00:00.000Z', backups: [] }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           );
         }
@@ -150,6 +151,9 @@ async function run() {
       const meta = await fetchSupabaseBackups(null);
       assert.equal(meta.ok, true);
       assert.equal(meta.currentRevision, 5);
+
+      const deleted = await deleteSupabaseBackup(null, 'sbw_test__bak__12345678');
+      assert.equal(deleted.ok, true);
 
       const sync = await pushSnapshotToSupabase({
         idToken: null,

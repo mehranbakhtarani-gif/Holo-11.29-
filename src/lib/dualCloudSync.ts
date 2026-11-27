@@ -190,6 +190,12 @@ const LAST_SYNC_STORAGE_KEY = 'holoo_apex_supabase_last_sync_v1';
 const SB_WORKSPACE_ID_KEY = 'holoo_apex_supabase_workspace_id_v1';
 const SB_AUTO_BACKUP_KEY = 'holoo_apex_supabase_auto_backup_v1';
 
+const SUPABASE_WORKER_BASE_URL = 'https://holoo-apex-api.mehranbakhtarani.workers.dev';
+
+function supabaseWorkerUrl(path: string): string {
+  return `${SUPABASE_WORKER_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 export function loadSupabaseAutoBackupEnabled(): boolean {
   try {
     const val = localStorage.getItem(SB_AUTO_BACKUP_KEY);
@@ -241,7 +247,7 @@ export async function checkSupabaseWorkspaceState(
 ): Promise<{ ok: boolean; initialized?: boolean; error?: string }> {
   try {
     const resp = await fetch(
-      `/api/supabase/auth/state?workspaceId=${encodeURIComponent(workspaceId)}`,
+      supabaseWorkerUrl(`/api/supabase/auth/state?workspaceId=${encodeURIComponent(workspaceId)}`),
       { method: 'GET', cache: 'no-store', credentials: 'include' }
     );
     const json = (await resp.json().catch(() => ({}))) as {
@@ -257,7 +263,7 @@ export async function checkSupabaseWorkspaceState(
 
 export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeResponse> {
   try {
-    const resp = await fetch('/api/supabase/auth/me', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/me'), {
       method: 'GET',
       cache: 'no-store',
       credentials: 'include',
@@ -282,7 +288,7 @@ export async function fetchSupabaseSessionMe(): Promise<SupabaseSessionMeRespons
 
 export async function logoutSupabaseWorkspaceAuth(): Promise<boolean> {
   try {
-    const resp = await fetch('/api/supabase/auth/logout', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/logout'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(),
@@ -298,7 +304,7 @@ export async function setupSupabaseWorkspaceAuth(
   passcode: string
 ): Promise<SupabaseWorkspaceAuthResult> {
   try {
-    const resp = await fetch('/api/supabase/auth/setup', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/setup'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(null, { 'Content-Type': 'application/json' }),
@@ -334,7 +340,7 @@ export async function loginSupabaseWorkspaceAuth(
   passcode: string
 ): Promise<SupabaseWorkspaceAuthResult> {
   try {
-    const resp = await fetch('/api/supabase/auth/login', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/auth/login'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(null, { 'Content-Type': 'application/json' }),
@@ -386,7 +392,7 @@ export async function runLiveServerAndSupabaseTest(
   token?: string | null
 ): Promise<LiveServerTestResult> {
   try {
-    const resp = await fetch('/api/supabase/test', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/test'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(token, { 'Content-Type': 'application/json' }),
@@ -545,7 +551,7 @@ export function saveLastSupabaseSyncAt(shamsiStamp: string | null): void {
 
 export async function fetchSupabaseServerStatus(): Promise<SupabaseStatusInfo> {
   try {
-    const resp = await fetch('/api/supabase/status', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/status'), {
       method: 'GET',
       cache: 'no-store',
     });
@@ -584,7 +590,7 @@ export async function fetchSupabaseBackups(
   idToken?: string | null
 ): Promise<SupabaseBackupsListResponse> {
   try {
-    const resp = await fetch('/api/supabase/backups', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/backups'), {
       method: 'GET',
       credentials: 'include',
       headers: buildApiHeaders(idToken),
@@ -623,7 +629,7 @@ export async function deleteSupabaseBackup(
   backupId: string
 ): Promise<{ ok: boolean; backups?: CloudBackupMeta[]; error?: string }> {
   try {
-    const resp = await fetch(`/api/supabase/backups/${encodeURIComponent(backupId)}`, {
+    const resp = await fetch(supabaseWorkerUrl(`/api/supabase/backups?backupId=${encodeURIComponent(backupId)}`), {
       method: 'DELETE',
       credentials: 'include',
       headers: buildApiHeaders(idToken),
@@ -654,7 +660,7 @@ export async function resetSupabaseCloudStorage(
   code?: string;
 }> {
   try {
-    const resp = await fetch('/api/supabase/reset', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/reset'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(idToken, { 'Content-Type': 'application/json' }),
@@ -709,7 +715,7 @@ export async function pushSnapshotToSupabase(params: {
   snapshotJson: string;
 }): Promise<{ ok: boolean; data?: SupabaseSyncResponse; error?: string; code?: string }> {
   try {
-    const resp = await fetch('/api/supabase/sync', {
+    const resp = await fetch(supabaseWorkerUrl('/api/supabase/sync'), {
       method: 'POST',
       credentials: 'include',
       headers: buildApiHeaders(params.idToken, { 'Content-Type': 'application/json' }),
@@ -770,8 +776,8 @@ export async function pullSnapshotFromSupabase(
 }> {
   try {
     const url = backupId
-      ? `/api/supabase/pull?backupId=${encodeURIComponent(backupId)}`
-      : '/api/supabase/pull';
+      ? supabaseWorkerUrl(`/api/supabase/pull?backupId=${encodeURIComponent(backupId)}`)
+      : supabaseWorkerUrl('/api/supabase/pull');
     const resp = await fetch(url, {
       method: 'GET',
       credentials: 'include',
