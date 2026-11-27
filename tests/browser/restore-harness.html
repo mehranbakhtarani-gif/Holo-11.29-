@@ -167,7 +167,6 @@
     }
 
     run().catch((error) => {
-      lockBackupSession();
       resultNode.dataset.status = 'failed';
       resultNode.textContent = error instanceof Error ? error.stack || error.message : String(error);
     });
