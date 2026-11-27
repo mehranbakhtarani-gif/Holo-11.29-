@@ -1242,6 +1242,7 @@ export async function commitDepreciationOperationalTx(
     throw new Error('ATOMIC_DEPRECIATION_INVALID_ASSETS: فهرست دارایی‌های استهلاک معتبر نیست.');
   }
   const seenAssetIds = new Set<string>();
+  let totalDepreciation = 0;
   for (const update of assetUpdates) {
     if (
       !update ||
@@ -1265,6 +1266,10 @@ export async function commitDepreciationOperationalTx(
       update.accumulatedDepreciation !== update.expectedAccumulatedDepreciation + update.depreciationAmount
     ) {
       throw new Error('ATOMIC_DEPRECIATION_INVALID_ASSET_UPDATE: تغییر مانده استهلاک دارایی نامعتبر یا تکراری است.');
+    }
+    totalDepreciation += update.depreciationAmount;
+    if (!Number.isSafeInteger(totalDepreciation)) {
+      throw new Error('ATOMIC_DEPRECIATION_UNSAFE_ASSET_TOTAL: جمع استهلاک دارایی‌ها خارج از محدوده امن است.');
     }
     seenAssetIds.add(update.id);
   }
@@ -1307,6 +1312,9 @@ export async function commitDepreciationOperationalTx(
   }
   if (debit !== voucher.totalDebit || credit !== voucher.totalCredit || debit !== credit) {
     throw new Error('ATOMIC_DEPRECIATION_UNBALANCED_VOUCHER: جمع ردیف‌ها با سربرگ سند استهلاک تراز نیست.');
+  }
+  if (totalDepreciation !== voucher.totalDebit) {
+    throw new Error('ATOMIC_DEPRECIATION_ASSET_VOUCHER_MISMATCH: جمع استهلاک دارایی‌ها با مبلغ سند حسابداری برابر نیست.');
   }
 
   const db = options?.dbOverride ?? (await openOperationalDb());
