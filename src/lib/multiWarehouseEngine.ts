@@ -25,7 +25,7 @@ import {
   roundQty,
   WarehouseTransferPlan,
 } from './inventoryCostingEngine';
-import { addIrr, mulQtyByIrr, roundQtyFixed, sumIrr, toExactIrr } from './moneyMath';
+import { addIrr, computeDeterministicHash256, mulQtyByIrr, roundQtyFixed, sumIrr, toExactIrr } from './moneyMath';
 
 export type WarehouseTransferStatus = 'in_transit' | 'received' | 'cancelled';
 
@@ -297,6 +297,7 @@ export function executeTrackedWarehouseTransfer(params: {
   operatorName?: string;
   notes?: string;
   defaultCostingMethod?: InventoryCostingMethod;
+  existingTransfers: readonly TrackedWarehouseTransfer[];
 }): {
   plan: WarehouseTransferPlan;
   updatedProduct: Product;
@@ -314,7 +315,22 @@ export function executeTrackedWarehouseTransfer(params: {
     operatorName,
     notes,
     defaultCostingMethod = 'moving_average',
+    existingTransfers,
   } = params;
+
+  const cleanTransferNumber = transferNumber.trim();
+  if (!cleanTransferNumber || cleanTransferNumber.length > 80) {
+    throw new Error('شماره انتقال انبار خالی یا بیش از حد طولانی است.');
+  }
+  if (!Array.isArray(existingTransfers)) {
+    throw new Error('برای جلوگیری از ثبت تکراری، فهرست انتقال‌های قبلی الزامی است.');
+  }
+  if (existingTransfers.some((item) =>
+    item.productId === product.id &&
+    item.transferNumber.trim().toLocaleLowerCase() === cleanTransferNumber.toLocaleLowerCase()
+  )) {
+    throw new Error('شماره انتقال برای این کالا قبلاً ثبت شده است؛ از اجرای دوباره انتقال جلوگیری شد.');
+  }
 
   const state = normalizeProductCostState(product, defaultCostingMethod);
   // Filter layers belonging to source warehouse
@@ -330,7 +346,10 @@ export function executeTrackedWarehouseTransfer(params: {
     layers: sourceLayers,
   };
 
-  const transferId = `trf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const transferId = `trf_${computeDeterministicHash256(`${product.id}::${cleanTransferNumber}`).slice(0, 24)}`;
+  if (state.layers.some((layer) => layer.layerId.startsWith(`trf_${transferId}_`))) {
+    throw new Error('شناسه انتقال قبلاً در لایه‌های موجودی این کالا اعمال شده است؛ انتقال تکراری متوقف شد.');
+  }
   const plan = planWarehouseTransfer({
     state: sourceState,
     fromWarehouse,
@@ -364,7 +383,7 @@ export function executeTrackedWarehouseTransfer(params: {
 
   const transferRecord: TrackedWarehouseTransfer = {
     id: transferId,
-    transferNumber,
+    transferNumber: cleanTransferNumber,
     date,
     receivedDate: mode === 'immediate' ? date : undefined,
     productId: product.id,
