@@ -169,6 +169,7 @@ export function buildLocalFxResponseFromRates(
 export function buildStandaloneLocalDiagnostics() {
   return {
     server: {
+      service: 'holoo-apex-standalone-pwa',
       status: 'ok' as const,
       mode: 'standalone-static-pwa',
       port: 0,
@@ -176,18 +177,32 @@ export function buildStandaloneLocalDiagnostics() {
       uptimeSec: 0,
       startedAt: new Date().toISOString(),
       memoryMb: { rss: 0, heapUsed: 0 },
+      localAiPolicy: '100% Local On-Device (Zero Cloud AI Egress)',
+      independentSupabaseMode: false,
     },
     supabase: {
       configured: false,
+      connected: false,
       urlHost: null,
       projectRef: null,
       keyRole: 'standalone_local',
       tableReady: false,
+      tableName: 'holoo_apex_workspaces',
+      auditTableReady: false,
+      auditTableName: 'holoo_apex_audit_logs',
       workspaceCount: 0,
       errorCode: 'STANDALONE_STATIC_PWA',
       errorMessage:
         'برنامه در حالت کاملاً مستقل و بدون سرور (Static PWA) اجرا می‌شود. کل حسابداری، IndexedDB، پشتیبان رمزنگاری‌شده، P2P Mesh و Firebase بدون نیاز به server.ts فعال هستند.',
       latencyMs: 0,
+    },
+    session: {
+      authenticated: false,
+      authSource: 'disconnected' as const,
+      workspaceId: null,
+      serverRevision: 0,
+      lastUpdatedAt: null,
+      backupCount: 0,
     },
     auth: {
       authenticated: false,

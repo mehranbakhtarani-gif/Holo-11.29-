@@ -2474,7 +2474,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialIntent, clearIn
       {/* Holoo Signature Voucher Drill-Down Modal */}
       {drillVoucher && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto no-print">
-          <div className="w-full max-w-3xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden text-xs">
+          <div className="w-full max-w-3xl max-h-[90dvh] flex flex-col rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden text-xs">
             <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -2493,7 +2493,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialIntent, clearIn
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="overflow-x-auto max-h-[65vh]">
+            <div className="overflow-auto max-h-[65dvh]">
               <table className="w-full text-right border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-slate-500">

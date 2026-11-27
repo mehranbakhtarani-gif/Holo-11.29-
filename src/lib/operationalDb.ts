@@ -298,61 +298,43 @@ export async function saveOperationalWorkspaceTx(
 
 /**
  * Atomic Invoice Commit directly in Operational IndexedDB:
- * Writes updated products, voucher, optional Sayadi cheque, and invoice in a
- * SINGLE IndexedDB readwrite transaction. Either all 4 succeed or the entire
- * transaction rolls back cleanly.
+ * Writes updated products (inventory/FIFO), double-entry voucher (ledger),
+ * optional Sayadi cheque(s) (treasury), invoice, and workspace revision metadata
+ * in a SINGLE IndexedDB readwrite transaction.
+ *
+ * If ANY entity fails integrity validation (e.g., unbalanced voucher, missing ID)
+ * or ANY IndexedDB store write errors, `tx.abort()` immediately rolls back ALL
+ * 5 object stores so zero partial writes can ever persist.
  */
-export async function commitInvoiceOperationalTx(payload: {
-  updatedProducts: Product[];
-  voucher?: Voucher;
-  cheque?: Cheque;
-  invoice: Invoice;
-}): Promise<boolean> {
-  if (!isIndexedDbAvailable()) return false;
-  const db = await openOperationalDb();
+export async function commitInvoiceOperationalTx(
+  payload: {
+    updatedProducts: Product[];
+    voucher?: Voucher;
+    cheque?: Cheque;
+    cheques?: Cheque[];
+    invoice: Invoice;
+  },
+  options?: { dbOverride?: IDBDatabase }
+): Promise<boolean> {
+  const usingOverride = Boolean(options?.dbOverride);
+  if (!usingOverride && !isIndexedDbAvailable()) return false;
+  const db = options?.dbOverride ?? (await openOperationalDb());
   const committedAt = new Date().toISOString();
+
+  const closeIfOwned = () => {
+    if (!usingOverride) {
+      try {
+        db.close();
+      } catch {
+        // ignore close errors
+      }
+    }
+  };
 
   return new Promise((resolve, reject) => {
     let tx: IDBTransaction | null = null;
-    try {
-      tx = db.transaction(['meta', 'products', 'vouchers', 'cheques', 'invoices'], 'readwrite');
-      const prodStore = tx.objectStore('products');
-      for (const prod of payload.updatedProducts) {
-        prodStore.put(prod);
-      }
-      if (payload.voucher) {
-        tx.objectStore('vouchers').put(payload.voucher);
-      }
-      if (payload.cheque) {
-        tx.objectStore('cheques').put(payload.cheque);
-      }
-      tx.objectStore('invoices').put(payload.invoice);
-
-      const metaStore = tx.objectStore('meta');
-      const revReq = metaStore.get('workspace_meta');
-      revReq.onsuccess = () => {
-        const existing = revReq.result as { localRevision?: number } | undefined;
-        metaStore.put({
-          key: 'workspace_meta',
-          localRevision: (existing?.localRevision ?? 0) + 1,
-          updatedAt: committedAt,
-          schemaVersion: OP_DB_VERSION,
-        });
-      };
-
-      tx.oncomplete = () => {
-        db.close();
-        resolve(true);
-      };
-      tx.onerror = () => {
-        db.close();
-        reject(tx?.error ?? new Error('Atomic invoice IndexedDB commit failed'));
-      };
-      tx.onabort = () => {
-        db.close();
-        reject(tx?.error ?? new Error('Atomic invoice IndexedDB transaction aborted'));
-      };
-    } catch (err) {
+    let settled = false;
+    const abortAndReject = (err: unknown) => {
       if (tx) {
         try {
           tx.abort();
@@ -360,8 +342,113 @@ export async function commitInvoiceOperationalTx(payload: {
           // ignore if transaction already finished/aborted
         }
       }
-      db.close();
-      reject(err);
+      if (!settled) {
+        settled = true;
+        closeIfOwned();
+        reject(err instanceof Error ? err : new Error(String(err || 'Atomic invoice IndexedDB rollback')));
+      }
+    };
+
+    try {
+      tx = db.transaction(['meta', 'products', 'vouchers', 'cheques', 'invoices'], 'readwrite');
+
+      // 1. Inventory (Products & FIFO/MWA layers)
+      const prodStore = tx.objectStore('products');
+      for (const prod of payload.updatedProducts) {
+        if (!prod || typeof prod.id !== 'string' || !prod.id.trim() || !Number.isFinite(prod.stock)) {
+          throw new Error('ATOMIC_ROLLBACK_INVALID_PRODUCT: شناسه یا موجودی کالا نامعتبر است.');
+        }
+        const req = prodStore.put(prod);
+        req.onerror = () => abortAndReject(req.error ?? new Error('Product store write failed'));
+      }
+
+      // 2. General Ledger (Double-Entry Voucher) — enforce strict Debit === Credit balance
+      if (payload.voucher) {
+        const v = payload.voucher;
+        if (!v.id || !Array.isArray(v.lines) || v.lines.length < 2) {
+          throw new Error('ATOMIC_ROLLBACK_INVALID_VOUCHER: سند حسابداری باید حداقل ۲ ردیف معتبر داشته باشد.');
+        }
+        const totalDebit = v.lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
+        const totalCredit = v.lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
+        if (
+          !Number.isFinite(totalDebit) ||
+          !Number.isFinite(totalCredit) ||
+          Math.round(totalDebit) !== Math.round(totalCredit) ||
+          Math.round(totalDebit) <= 0
+        ) {
+          throw new Error(
+            `ATOMIC_ROLLBACK_UNBALANCED_VOUCHER: سند حسابداری تراز نیست (بدهکار=${totalDebit}، بستانکار=${totalCredit}).`
+          );
+        }
+        const req = tx.objectStore('vouchers').put(v);
+        req.onerror = () => abortAndReject(req.error ?? new Error('Voucher store write failed'));
+      }
+
+      // 3. Treasury (Sayadi Cheques — single or multiple on create/cancel)
+      const allCheques: Cheque[] = [
+        ...(payload.cheque ? [payload.cheque] : []),
+        ...(Array.isArray(payload.cheques) ? payload.cheques : []),
+      ];
+      if (allCheques.length > 0) {
+        const chequeStore = tx.objectStore('cheques');
+        for (const chq of allCheques) {
+          if (!chq || typeof chq.id !== 'string' || !chq.id.trim() || !Number.isFinite(chq.amount) || chq.amount <= 0) {
+            throw new Error('ATOMIC_ROLLBACK_INVALID_CHEQUE: اطلاعات چک خزانه نامعتبر است.');
+          }
+          const req = chequeStore.put(chq);
+          req.onerror = () => abortAndReject(req.error ?? new Error('Cheque store write failed'));
+        }
+      }
+
+      // 4. Invoice Document
+      if (!payload.invoice || typeof payload.invoice.id !== 'string' || !payload.invoice.id.trim()) {
+        throw new Error('ATOMIC_ROLLBACK_INVALID_INVOICE: شناسه فاکتور نامعتبر است.');
+      }
+      const invReq = tx.objectStore('invoices').put(payload.invoice);
+      invReq.onerror = () => abortAndReject(invReq.error ?? new Error('Invoice store write failed'));
+
+      // 5. Monotonic Workspace Revision Metadata
+      const metaStore = tx.objectStore('meta');
+      const revReq = metaStore.get('workspace_meta');
+      revReq.onsuccess = () => {
+        try {
+          const existing = revReq.result as { localRevision?: number } | undefined;
+          const metaPutReq = metaStore.put({
+            key: 'workspace_meta',
+            localRevision: (existing?.localRevision ?? 0) + 1,
+            updatedAt: committedAt,
+            schemaVersion: OP_DB_VERSION,
+          });
+          metaPutReq.onerror = () => abortAndReject(metaPutReq.error ?? new Error('Workspace meta write failed'));
+        } catch (err) {
+          abortAndReject(err);
+        }
+      };
+      revReq.onerror = () => abortAndReject(revReq.error ?? new Error('Workspace meta read failed'));
+
+      tx.oncomplete = () => {
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          resolve(true);
+        }
+      };
+      tx.onerror = () => {
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic invoice IndexedDB commit failed'));
+        }
+      };
+      tx.onabort = () => {
+        if (!settled) {
+          settled = true;
+          closeIfOwned();
+          reject(tx?.error ?? new Error('Atomic invoice IndexedDB transaction aborted (ROLLBACK complete)'));
+        }
+      };
+    } catch (err) {
+      abortAndReject(err);
     }
   });
 }
@@ -637,6 +724,43 @@ export async function commitStockAdjustmentOperationalTx(payload: {
   });
 }
 
+function countStoreRecords(tx: IDBTransaction, storeName: OperationalStoreName): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = tx.objectStore(storeName).count();
+    req.onsuccess = () => resolve(typeof req.result === 'number' ? req.result : 0);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function countStoreByIndex(
+  tx: IDBTransaction,
+  storeName: OperationalStoreName,
+  indexName: string,
+  query: IDBValidKey
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = tx.objectStore(storeName).index(indexName).count(query);
+      req.onsuccess = () => resolve(typeof req.result === 'number' ? req.result : 0);
+      req.onerror = () => reject(req.error);
+    } catch {
+      resolve(0);
+    }
+  });
+}
+
+function readSingleRecord<T>(
+  tx: IDBTransaction,
+  storeName: OperationalStoreName,
+  key: IDBValidKey
+): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const req = tx.objectStore(storeName).get(key);
+    req.onsuccess = () => resolve(req.result as T | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function getOperationalDbStats(): Promise<OperationalDbStats> {
   if (!isIndexedDbAvailable()) {
     return {
@@ -659,15 +783,16 @@ export async function getOperationalDbStats(): Promise<OperationalDbStats> {
     let lastCommitAt: string | null = null;
 
     for (const storeName of OPERATIONAL_STORES) {
-      const rows = await readAllFromStore<Record<string, unknown>>(tx, storeName);
       if (storeName === 'meta') {
-        const meta = rows.find((r) => r.key === 'workspace_meta');
+        const meta = await readSingleRecord<Record<string, unknown>>(tx, 'meta', 'workspace_meta');
         localRevision = Number(meta?.localRevision || 0);
         lastCommitAt = typeof meta?.updatedAt === 'string' ? meta.updatedAt : null;
       } else if (storeName === 'syncOutbox') {
-        pendingOutboxCount = rows.filter((r) => r.status === 'pending').length;
+        pendingOutboxCount = await countStoreByIndex(tx, 'syncOutbox', 'status', 'pending');
+      } else if (storeName === 'syncInbox') {
+        // Inbox rows track processed inbound operations
       } else {
-        totalRecords += rows.length;
+        totalRecords += await countStoreRecords(tx, storeName);
       }
     }
     db.close();
@@ -865,28 +990,26 @@ export async function getOperationalDbDetailedReport(): Promise<OperationalDbDet
     const storeBreakdown: OperationalStoreCount[] = [];
 
     for (const storeName of OPERATIONAL_STORES) {
-      const rows = await readAllFromStore<Record<string, unknown>>(tx, storeName);
+      const count = await countStoreRecords(tx, storeName);
       storeBreakdown.push({
         store: storeName,
         label: OPERATIONAL_STORE_LABELS[storeName],
-        count: rows.length,
+        count,
       });
 
       if (storeName === 'meta') {
-        const meta = rows.find((r) => r.key === 'workspace_meta');
+        const meta = await readSingleRecord<Record<string, unknown>>(tx, 'meta', 'workspace_meta');
         localRevision = Number(meta?.localRevision || 0);
         lastCommitAt = typeof meta?.updatedAt === 'string' ? meta.updatedAt : null;
       } else if (storeName === 'syncOutbox') {
-        outboxBreakdown.total = rows.length;
-        for (const r of rows) {
-          if (r.status === 'pending') outboxBreakdown.pending += 1;
-          else if (r.status === 'synced') outboxBreakdown.synced += 1;
-          else if (r.status === 'conflict') outboxBreakdown.conflict += 1;
-        }
+        outboxBreakdown.total = count;
+        outboxBreakdown.pending = await countStoreByIndex(tx, 'syncOutbox', 'status', 'pending');
+        outboxBreakdown.synced = await countStoreByIndex(tx, 'syncOutbox', 'status', 'synced');
+        outboxBreakdown.conflict = await countStoreByIndex(tx, 'syncOutbox', 'status', 'conflict');
       } else if (storeName === 'syncInbox') {
         // Inbox rows track processed inbound operations and are not counted as user accounting entities
       } else {
-        totalRecords += rows.length;
+        totalRecords += count;
       }
     }
 
@@ -932,6 +1055,7 @@ export const ALL_HOLOO_INDEXED_DBS = [
   'holoo_apex_local_backups_v1',
   'holoo_apex_document_vault_v1',
   'holoo_apex_health_probe_v1',
+  'holoo_apex_mesh_dexie_v1',
 ] as const;
 
 function deleteSingleIndexedDb(dbName: string): Promise<'deleted' | 'blocked' | 'error'> {

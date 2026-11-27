@@ -219,15 +219,120 @@ export const WarehouseCrmOpsView: React.FC<{
     }
     setConfirmingSlipId(slip.id);
     try {
-      for (const item of slip.items) {
-        const prod = products.find((p) => p.id === item.productId);
-        if (prod) {
-          const nextStock = Math.max(0, Math.round((prod.stock + sign * item.weightKg) * 100) / 100);
-          await adjustProductStockWithVoucher(
-            prod.id,
-            nextStock,
-            `تایید ${SLIP_TYPE_LABELS[slip.slipType].label} شماره ${slip.slipNumber} (${slip.partyName})`
-          );
+      const isConsignment =
+        slip.slipType === 'consignment_out' || slip.slipType === 'consignment_in';
+
+      if (isConsignment) {
+        const costingMethod = profile.defaultCostingMethod ?? 'fifo';
+        const inv10501 =
+          accounts.find((a) => a.code === '10501')?.title || 'موجودی انبار نخ و کالای وارداتی';
+        const consign10503 =
+          accounts.find((a) => a.code === '10503')?.title ||
+          'کالای امانی نزد پیمانکاران رنگرزی/بافندگی';
+        const voucherLines: VoucherLine[] = [];
+        const productUpdates: Array<{
+          id: string;
+          stock: number;
+          buyPrice: number;
+          costLayers: NonNullable<(typeof products)[number]['costLayers']>;
+          inventoryValueIrr: number;
+        }> = [];
+
+        for (const item of slip.items) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (!prod || item.weightKg <= 0) continue;
+          const state = normalizeProductCostState(prod, costingMethod, slip.date);
+          const step = applyInventoryMovementStep(state, {
+            id: `cslip_${slip.id}_${prod.id}`,
+            date: slip.date,
+            kind: sign > 0 ? 'surplus' : 'shortage',
+            productId: prod.id,
+            warehouse: prod.warehouse,
+            qty: item.weightKg,
+            unitCostIrr: prod.buyPrice,
+            sourceRefId: slip.id,
+            allowNegativeStock: false,
+          });
+          const moveCostIrr = Math.max(0, Math.round(step.cogsOrCostIrr));
+          productUpdates.push({
+            id: prod.id,
+            stock: step.nextState.stockQty,
+            buyPrice: step.nextState.weightedAvgUnitCostIrr,
+            costLayers: step.nextState.layers,
+            inventoryValueIrr: step.nextState.totalValueIrr,
+          });
+          if (moveCostIrr > 0) {
+            if (slip.slipType === 'consignment_out') {
+              voucherLines.push(
+                {
+                  accountCode: '10503',
+                  accountTitle: consign10503,
+                  partyId: slip.partyId,
+                  partyName: slip.partyName,
+                  description: `ارسال امانی ${item.weightKg} کیلوگرم ${prod.name} (${slip.slipNumber})`,
+                  debit: moveCostIrr,
+                  credit: 0,
+                },
+                {
+                  accountCode: '10501',
+                  accountTitle: inv10501,
+                  description: `خروج از انبار بابت امانی ${slip.slipNumber}`,
+                  debit: 0,
+                  credit: moveCostIrr,
+                }
+              );
+            } else {
+              voucherLines.push(
+                {
+                  accountCode: '10501',
+                  accountTitle: inv10501,
+                  description: `بازگشت امانی ${item.weightKg} کیلوگرم ${prod.name} (${slip.slipNumber})`,
+                  debit: moveCostIrr,
+                  credit: 0,
+                },
+                {
+                  accountCode: '10503',
+                  accountTitle: consign10503,
+                  partyId: slip.partyId,
+                  partyName: slip.partyName,
+                  description: `تسویه حساب کالای امانی نزد غیر (${slip.slipNumber})`,
+                  debit: 0,
+                  credit: moveCostIrr,
+                }
+              );
+            }
+          }
+        }
+
+        if (voucherLines.length >= 2) {
+          await createVoucher({
+            date: slip.date,
+            description: `تایید ${SLIP_TYPE_LABELS[slip.slipType].label} شماره ${slip.slipNumber} — ${slip.partyName}`,
+            voucherType: 'general',
+            status: 'permanent',
+            lines: voucherLines,
+            referenceId: `consign_slip_${slip.id}`,
+          });
+        }
+        for (const upd of productUpdates) {
+          await updateProduct(upd.id, {
+            stock: upd.stock,
+            buyPrice: upd.buyPrice,
+            costLayers: upd.costLayers,
+            inventoryValueIrr: upd.inventoryValueIrr,
+          });
+        }
+      } else {
+        for (const item of slip.items) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (prod) {
+            const nextStock = Math.max(0, Math.round((prod.stock + sign * item.weightKg) * 100) / 100);
+            await adjustProductStockWithVoucher(
+              prod.id,
+              nextStock,
+              `تایید ${SLIP_TYPE_LABELS[slip.slipType].label} شماره ${slip.slipNumber} (${slip.partyName})`
+            );
+          }
         }
       }
       updateExtensions((prev) => ({
@@ -236,7 +341,11 @@ export const WarehouseCrmOpsView: React.FC<{
           s.id === slip.id ? { ...s, status: 'confirmed' } : s
         ),
       }));
-      showToast(`برگ انبار ${slip.slipNumber} تایید شد؛ موجودی لایه‌ای و سند حسابداری ۱۰۵۰۱ همگام گردید.`);
+      showToast(
+        isConsignment
+          ? `برگ امانی ${slip.slipNumber} تایید شد؛ انتقال حساب ۱۰۵۰۱ ↔ ۱۰۵۰۳ بدون اثر بر سود و زیان ثبت گردید.`
+          : `برگ انبار ${slip.slipNumber} تایید شد؛ موجودی لایه‌ای و سند حسابداری ۱۰۵۰۱ همگام گردید.`
+      );
     } finally {
       setConfirmingSlipId(null);
     }

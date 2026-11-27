@@ -156,8 +156,8 @@ export function normalizeProductCostState(
       }));
     const layerQty = roundQty(cleanLayers.reduce((s, l) => s + l.remainingQty, 0));
     const layerVal = cleanLayers.reduce((s, l) => s + l.totalCostIrr, 0);
-    // Only trust stored layers if they reconcile with current stock quantity
-    if (Math.abs(layerQty - stockQty) < 0.005) {
+    // Only trust stored layers if they reconcile with current stock quantity (tolerant of 2-decimal display rounding on 3-decimal textile weights)
+    if (Math.abs(layerQty - stockQty) < 0.011) {
       return {
         productId: product.id,
         costingMethod: method,

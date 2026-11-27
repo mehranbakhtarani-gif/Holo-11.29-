@@ -2509,8 +2509,9 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     // Prevent Vite 8's @vite/client from opening a failing WebSocket to port 24678
-    // behind Cloud Run's single-port proxy while keeping CSS injection & HMR stubs working.
-    app.get('/@vite/client', (_req: Request, res: Response) => {
+    // behind Cloud Run's single-port proxy (including subpath bases like /Holo-11.29-/)
+    // while keeping CSS injection & HMR stubs working.
+    app.get(/^(\/.*)?\/@vite\/client$/, (_req: Request, res: Response) => {
       res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
       res.send(`
 const sheetsMap = new Map();
@@ -2566,22 +2567,22 @@ export class ErrorOverlay extends HTMLElement {}
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
-    app.use(
-      express.static(distPath, {
-        setHeaders: (res, filePath) => {
-          if (
-            filePath.endsWith('sw.js') ||
-            filePath.endsWith('registerSW.js') ||
-            filePath.endsWith('manifest.webmanifest')
-          ) {
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-          }
-          if (filePath.endsWith('manifest.webmanifest')) {
-            res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
-          }
-        },
-      })
-    );
+    const staticMiddleware = express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (
+          filePath.endsWith('sw.js') ||
+          filePath.endsWith('registerSW.js') ||
+          filePath.endsWith('manifest.webmanifest')
+        ) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+        if (filePath.endsWith('manifest.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+        }
+      },
+    });
+    app.use('/Holo-11.29-', staticMiddleware);
+    app.use(staticMiddleware);
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

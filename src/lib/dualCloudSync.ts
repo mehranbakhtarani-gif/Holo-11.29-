@@ -863,6 +863,13 @@ export async function pullSnapshotFromSupabase(
   snapshotJson?: string;
   error?: string;
 }> {
+  if (!(await detectOptionalBackendServer())) {
+    return {
+      ok: false,
+      found: false,
+      error: 'برنامه در حالت PWA مستقل بدون سرور اجرا می‌شود؛ دریافت از Supabase نیازمند سرور اختیاری است.',
+    };
+  }
   try {
     const url = backupId
       ? supabaseWorkerUrl(`/api/supabase/pull?backupId=${encodeURIComponent(backupId)}`)

@@ -40,7 +40,7 @@ export const MeshInitialSetupModal: React.FC<{
       aria-modal="true"
       aria-label="راه‌اندازی اولیه ذخیره‌سازی محلی و همگام‌سازی ۳ دستگاه"
     >
-      <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-right">
+      <div className="w-full max-w-xl max-h-[90dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl text-right">
         {/* Header */}
         <div className="px-6 py-4 bg-gradient-to-l from-teal-700 to-emerald-700 text-white flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">

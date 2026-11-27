@@ -150,12 +150,17 @@ export function mixHex(hexA: string, hexB: string, ratio: number): string {
  */
 export function generateColorScale(baseHex: string): Record<ShadeStep, string> {
   const base = normalizeHexColor(baseHex) ?? DEFAULT_UI_THEME.primaryColor;
+  const lum = getRelativeLuminance(base);
+  // Dark bases (e.g. graphite-steel #334155 or emerald-treasury #0F766E) need a lighter 400/300 tint
+  // so dark:text-*-400 maintains WCAG AA (>= 4.5:1) legibility on #0B0F17 surfaces.
+  const tint400 = lum < 0.12 ? 0.44 : lum < 0.2 ? 0.34 : 0.24;
+  const tint300 = lum < 0.12 ? 0.60 : lum < 0.2 ? 0.54 : 0.48;
   return {
     50: mixHex(base, '#FFFFFF', 0.92),
     100: mixHex(base, '#FFFFFF', 0.84),
-    200: mixHex(base, '#FFFFFF', 0.68),
-    300: mixHex(base, '#FFFFFF', 0.48),
-    400: mixHex(base, '#FFFFFF', 0.24),
+    200: mixHex(base, '#FFFFFF', 0.72),
+    300: mixHex(base, '#FFFFFF', tint300),
+    400: mixHex(base, '#FFFFFF', tint400),
     500: base,
     600: mixHex(base, '#0B0F17', 0.14),
     700: mixHex(base, '#0B0F17', 0.30),

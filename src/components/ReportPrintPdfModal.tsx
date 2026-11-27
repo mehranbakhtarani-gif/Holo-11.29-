@@ -224,7 +224,7 @@ export const ReportPrintPdfModal: React.FC<ReportPrintPdfModalProps> = ({
         {/* Body: Settings Sidebar + Live Accounting Sheet Preview */}
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
           {/* Right Settings Column */}
-          <aside className="w-full lg:w-[360px] xl:w-[390px] border-b lg:border-b-0 lg:border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col max-h-[46vh] lg:max-h-none overflow-y-auto shrink-0">
+          <aside className="w-full lg:w-[360px] xl:w-[390px] border-b lg:border-b-0 lg:border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col max-h-[46dvh] lg:max-h-none overflow-y-auto shrink-0">
             <div className="p-4 space-y-5">
               {/* Section 1: Column Picker & Reorder */}
               <div className="space-y-2.5">

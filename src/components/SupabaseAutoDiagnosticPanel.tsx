@@ -200,7 +200,7 @@ export const SupabaseAutoDiagnosticPanel: React.FC<SupabaseAutoDiagnosticPanelPr
           'اطلاعات شما تا زمان اتصال مجدد با امنیت کامل در IndexedDB محلی نگهداری می‌شود.',
         ],
       });
-    } else if (browserProbe && !browserProbe.expressReachable) {
+    } else if (browserProbe && !browserProbe.expressReachable && !isStandaloneStaticPwa) {
       list.push({
         id: 'express_backend_down',
         severity: 'critical',

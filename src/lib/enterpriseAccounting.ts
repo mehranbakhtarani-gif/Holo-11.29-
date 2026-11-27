@@ -291,6 +291,7 @@ export function computeFxRevaluationReport(
   >();
 
   for (const v of vouchers) {
+    if (v.status === 'draft') continue;
     if (asOfDate && v.date > asOfDate) continue;
     const voucherIsFx = isForeignCurrency(v.currencyCode);
     const voucherCode = voucherIsFx ? normalizeCurrencyCode(v.currencyCode) : '';
@@ -348,11 +349,11 @@ export function computeFxRevaluationReport(
   for (const [key, b] of buckets.entries()) {
     if (Math.abs(b.netForeign) < 0.01 && Math.abs(b.netIrr) < 1) continue;
     const eff = getEffectiveExchangeRate(b.currencyCode, asOfDate, exchangeRates, currencies);
-    const revaluedIrr = Math.round(b.netForeign * eff.rateToIrr);
+    const revaluedIrr = convertForeignToIrr(b.netForeign, eff.rateToIrr);
     // For net debit (asset > 0): higher revalued IRR = FX Gain (+).
     // For net credit (liability < 0): less negative revalued IRR = FX Gain (+), more negative = FX Loss (-).
     // In both signed cases: diff = revaluedIrr - b.netIrr!
-    const revaluationDiffIrr = revaluedIrr - b.netIrr;
+    const revaluationDiffIrr = Math.round(revaluedIrr - b.netIrr);
     rows.push({
       key,
       accountCode: b.accountCode,
@@ -534,26 +535,39 @@ export function numberToPersianWords(amount: number, suffix = 'ریال تمام
 }
 
 // ---------------- OFFICIAL STATUTORY EXPORTS (TAMIN DSK / TTMS / MOADIAN JSON) ----------------
+
+/** Escapes CSV cell values and neutralizes spreadsheet formula injection (=, +, -, @, tab, CR). */
+export function sanitizeCsvCell(value: string | number | null | undefined, alwaysQuote = false): string {
+  const raw = String(value ?? '').replace(/\r?\n/g, ' ').trim();
+  const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  const escaped = safe.replace(/"/g, '""');
+  if (alwaysQuote || /[",]/.test(escaped)) {
+    return `"${escaped}"`;
+  }
+  return escaped;
+}
+
 export function buildTaminDskFiles(
   employees: Employee[],
   profile: CompanyProfile,
   monthLabel: string
 ): { karFile: string; worFile: string } {
   const active = employees.filter((e) => e.active);
+  const fy = profile.fiscalYear || '1405';
   let totalGross = 0;
   let totalEmpIns = 0;
   let totalCompIns = 0;
 
   const worLines = active.map((emp, idx) => {
-    const calc = calculateEmployeePayroll(emp);
+    const calc = calculateEmployeePayroll(emp, fy, profile.statutoryParamsByYear);
     totalGross += calc.grossPay;
     totalEmpIns += calc.employeeInsurance;
     totalCompIns += calc.employerInsurance;
     return [
       idx + 1,
-      emp.personnelCode,
-      emp.fullName,
-      emp.department,
+      sanitizeCsvCell(emp.personnelCode),
+      sanitizeCsvCell(emp.fullName, true),
+      sanitizeCsvCell(emp.department, true),
       30, // کارکرد ماهانه
       calc.grossPay,
       calc.employeeInsurance,
@@ -564,10 +578,10 @@ export function buildTaminDskFiles(
 
   const karHeader = 'WORKSHOP_NAME,NATIONAL_ID,FISCAL_YEAR,PERIOD,EMPLOYEE_COUNT,TOTAL_GROSS_IRR,EMP_INS_7PCT,COMP_INS_23PCT,TOTAL_TAMIN_30PCT';
   const karRow = [
-    `"${profile.companyName}"`,
-    profile.nationalId || '14007892134',
-    profile.fiscalYear,
-    `"${monthLabel}"`,
+    sanitizeCsvCell(profile.companyName, true),
+    sanitizeCsvCell(profile.nationalId || '14007892134'),
+    sanitizeCsvCell(fy),
+    sanitizeCsvCell(monthLabel, true),
     active.length,
     totalGross,
     totalEmpIns,
@@ -588,15 +602,16 @@ export function buildTtmsSalaryCsv(
   monthLabel: string
 ): string {
   const active = employees.filter((e) => e.active);
+  const fy = profile.fiscalYear || '1405';
   const header = 'COMPANY,ECONOMIC_CODE,PERIOD,PERSONNEL_CODE,FULL_NAME,GROSS_SALARY_IRR,INSURANCE_DEDUCTION_IRR,TAXABLE_INCOME_IRR,SALARY_TAX_IRR,NET_PAYABLE_IRR';
   const lines = active.map((emp) => {
-    const calc = calculateEmployeePayroll(emp);
+    const calc = calculateEmployeePayroll(emp, fy, profile.statutoryParamsByYear);
     return [
-      `"${profile.companyName}"`,
-      profile.economicCode || '',
-      `"${monthLabel}"`,
-      emp.personnelCode,
-      `"${emp.fullName}"`,
+      sanitizeCsvCell(profile.companyName, true),
+      sanitizeCsvCell(profile.economicCode || ''),
+      sanitizeCsvCell(monthLabel, true),
+      sanitizeCsvCell(emp.personnelCode),
+      sanitizeCsvCell(emp.fullName, true),
       calc.grossPay,
       calc.employeeInsurance,
       Math.max(0, calc.grossPay - calc.employeeInsurance),

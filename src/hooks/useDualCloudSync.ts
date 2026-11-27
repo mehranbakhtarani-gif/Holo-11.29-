@@ -47,7 +47,9 @@ import {
 import {
   clearPendingSyncOutboxOperations,
   enqueueSyncOutboxOperation,
+  isInboxOperationProcessed,
   markSyncOutboxOperationStatus,
+  recordInboxOperation,
 } from '../lib/operationalDb';
 import { getTodayShamsi, toPersianDigits } from '../lib/format';
 import { playSuccessChime, playWarningTone } from '../lib/audioFeedback';
@@ -73,6 +75,15 @@ import {
 /** Collision-resistant 256-bit snapshot digest ignoring volatile exportedAt timestamp */
 function fingerprintWorkspacePayload(rawJson: string): string {
   return computeSnapshotDigest256Sync(rawJson);
+}
+
+const REMOTE_IMPORT_SYNC_EVENT = 'holoo:remote-import-applied';
+
+function notifyRemoteImportApplied(source: 'dual_cloud' | 'p2p_mesh', fingerprint: string) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent(REMOTE_IMPORT_SYNC_EVENT, { detail: { source, fingerprint } })
+  );
 }
 
 const LAST_FB_BACKUP_KEY = 'holoo_apex_firebase_last_backup_v1';
@@ -247,6 +258,17 @@ export function useDualCloudSync() {
   const sbBootstrappedActorRef = useRef<string | null>(null);
   const fbBootstrappedUidRef = useRef<string | null>(null);
 
+  // Cross-layer anti-echo listener: when P2P Mesh applies a remote merge, suppress immediate cloud echo
+  useEffect(() => {
+    const handleRemoteImport = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ source?: string; fingerprint?: string }>).detail;
+      if (!detail || detail.source === 'dual_cloud') return;
+      suppressNextAutoSyncRef.current = true;
+    };
+    window.addEventListener(REMOTE_IMPORT_SYNC_EVENT, handleRemoteImport);
+    return () => window.removeEventListener(REMOTE_IMPORT_SYNC_EVENT, handleRemoteImport);
+  }, []);
+
   const setSupabaseWorkspaceId = useCallback((raw: string) => {
     const clean = raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
     setSupabaseWorkspaceIdState(clean);
@@ -271,6 +293,10 @@ export function useDualCloudSync() {
 
   const setupIndependentSupabase = useCallback(
     async (workspaceId: string, passcode: string): Promise<boolean> => {
+      if (!isOnline) {
+        showToast('برنامه در حالت آفلاین یا محلی (Local) است؛ فعال‌سازی ابری Supabase بدون اتصال آنلاین انجام نمی‌شود.');
+        return false;
+      }
       const wid = workspaceId.trim();
       if (wid.length < 3) {
         showToast('شناسه فضای کاری باید حداقل ۳ کاراکتر انگلیسی یا عدد باشد.');
@@ -320,11 +346,15 @@ export function useDualCloudSync() {
         setIsSupabaseAuthLoading(false);
       }
     },
-    [logActivity, showToast]
+    [isOnline, logActivity, showToast]
   );
 
   const loginIndependentSupabase = useCallback(
     async (workspaceId: string, passcode: string): Promise<boolean> => {
+      if (!isOnline) {
+        showToast('برنامه در حالت آفلاین یا محلی (Local) است؛ ورود به فضای ابری Supabase متوقف شد.');
+        return false;
+      }
       const wid = workspaceId.trim();
       if (wid.length < 3 || passcode.length < 6) {
         showToast('شناسه فضای کاری و رمز عبور حداقل ۶ کاراکتری را وارد کنید.');
@@ -379,18 +409,20 @@ export function useDualCloudSync() {
         setIsSupabaseAuthLoading(false);
       }
     },
-    [logActivity, showToast]
+    [isOnline, logActivity, showToast]
   );
 
   const logoutIndependentSupabase = useCallback(() => {
-    void logoutSupabaseWorkspaceAuth();
+    if (isOnline) {
+      void logoutSupabaseWorkspaceAuth();
+    }
     setSupabaseSessionToken(null);
     setSupabaseCookieAuthenticated(false);
     setLastSupabaseError(null);
     sbBootstrappedActorRef.current = null;
     setSupabaseBackups([]);
     showToast('اتصال مستقل Supabase قطع شد.');
-  }, [showToast]);
+  }, [isOnline, showToast]);
 
   const setConflictDefaultMode = useCallback(
     (mode: SyncConflictDefaultMode, silent = false) => {
@@ -584,7 +616,14 @@ export function useDualCloudSync() {
         if (imported) {
           const hash = fingerprintWorkspacePayload(res.snapshotJson);
           lastFbSyncedHashRef.current = hash;
+          notifyRemoteImportApplied('dual_cloud', hash);
           const rev = res.revision || 1;
+          void recordInboxOperation({
+            operationId: `fb_pull_${backupId || 'latest'}_r${rev}_${hash.slice(0, 12)}`,
+            sourceDeviceId: 'firebase_cloud',
+            payloadHash: hash,
+            receivedAt: new Date().toISOString(),
+          });
           setLastFirebaseRevision(rev);
           if (res.savedAtShamsi) {
             setLastFirebaseBackupAt(res.savedAtShamsi);
@@ -615,13 +654,17 @@ export function useDualCloudSync() {
   const removeFirebaseBackup = useCallback(
     async (backupId: string) => {
       if (!user) return;
+      if (!isOnline) {
+        showToast('برنامه در حالت آفلاین یا محلی است؛ حذف نسخه ابری Firebase نیازمند اتصال آنلاین است.');
+        return;
+      }
       const res = await deleteFirebaseBackupById(user.uid, backupId);
       if (res.ok) {
         setFirebaseBackups(res.backups);
         showToast('نسخه پشتیبان انتخاب‌شده از Firebase حذف شد.');
       }
     },
-    [user, showToast]
+    [user, isOnline, showToast]
   );
 
   // ---------------- INDEPENDENT SUPABASE AUTO-SYNC + IDEMPOTENT OUTBOX + 3-BACKUP RETENTION ----------------
@@ -674,7 +717,7 @@ export function useDualCloudSync() {
           errorCode: diag.supabase.errorCode,
           checkedAt: new Date().toISOString(),
         });
-        if (diag.session.authenticated && diag.session.serverRevision > 0) {
+        if (diag.session?.authenticated && diag.session.serverRevision > 0) {
           setLastSupabaseRevision(diag.session.serverRevision);
           saveLastSupabaseRevision(diag.session.serverRevision);
           if (diag.session.lastUpdatedAt) {
@@ -691,6 +734,24 @@ export function useDualCloudSync() {
 
   const runServerTest = useCallback(
     async (silent = false) => {
+      if (!isOnline) {
+        const offlineResult: LiveServerTestResult = {
+          ok: false,
+          testedAt: new Date().toISOString(),
+          totalLatencyMs: 0,
+          projectRef: null,
+          serverRevision: lastSupabaseRevisionRef.current,
+          backupCount: supabaseBackups.length,
+          authSource: isSupabaseAuthenticated ? 'supabase_workspace' : 'disconnected',
+          checks: [],
+          error: 'دستگاه آفلاین است یا در حالت محلی (Local) قرار دارد؛ هیچ درخواست شبکه‌ای ارسال نشد.',
+        };
+        setServerTestResult(offlineResult);
+        if (!silent) {
+          showToast('دستگاه در حالت آفلاین/محلی است؛ تست شبکه بدون ارسال درخواست متوقف شد.');
+        }
+        return offlineResult;
+      }
       setIsTestingServer(true);
       try {
         const result = await runLiveServerAndSupabaseTest(supabaseSessionToken);
@@ -714,7 +775,7 @@ export function useDualCloudSync() {
         setIsTestingServer(false);
       }
     },
-    [supabaseSessionToken, refreshServerDiagnostics, showToast]
+    [isOnline, isSupabaseAuthenticated, supabaseBackups.length, supabaseSessionToken, refreshServerDiagnostics, showToast]
   );
 
   useEffect(() => {
@@ -875,7 +936,11 @@ export function useDualCloudSync() {
         });
 
         const activeDefaultMode = conflictDefaultModeRef.current;
-        const effectivePolicy = syncConflictModeToCloudPolicy(activeDefaultMode);
+        // Always probe with first_write_wins on automatic/initial sync so conflicting financial
+        // documents (vouchers/invoices/cheques) are NEVER silently overwritten on the server.
+        // Explicit user approval in resolvePendingConflict('keep_local') sends last_write_wins.
+        const effectivePolicy: ConflictResolutionPolicy =
+          activeDefaultMode === 'ask' ? syncConflictModeToCloudPolicy(activeDefaultMode) : 'first_write_wins';
 
         const res = await pushSnapshotToSupabase({
           idToken: effectiveToken,
@@ -908,36 +973,63 @@ export function useDualCloudSync() {
 
         setLastSupabaseError(null);
 
-        // Check if server detected a revision conflict and user preference is 'ask'
+        // Check if server detected a revision conflict: ALWAYS halt for human review if financial
+        // documents (vouchers, invoices, cheques) collide OR when user preference is 'ask'.
         if (res.data.status === 'conflict_kept_remote' && res.data.remoteSnapshotJson) {
           const decision = resolveConflictDecision(activeDefaultMode);
-          if (!decision.autoResolved) {
-            const summary = analyzeAccountingSnapshotConflict(
-              snapshotJson,
-              res.data.remoteSnapshotJson
+          const summary = analyzeAccountingSnapshotConflict(
+            snapshotJson,
+            res.data.remoteSnapshotJson
+          );
+          const hasFinancialDocConflict = summary.previews.some(
+            (p) =>
+              p.collection === 'vouchers' ||
+              p.collection === 'invoices' ||
+              p.collection === 'cheques'
+          );
+          if ((!decision.autoResolved || hasFinancialDocConflict) && summary.hasConflicts) {
+            const conflictRecord: PendingSyncConflict = {
+              id: `sb_conflict_${Date.now()}`,
+              source: 'supabase',
+              sourceLabel: 'سرور ابری Supabase PostgreSQL',
+              remoteDeviceLabel: res.data.remoteDeviceLabel || 'دستگاه دیگر',
+              detectedAt: new Date().toISOString(),
+              localRevision: lastSupabaseRevisionRef.current,
+              remoteRevision: res.data.serverRevision,
+              localSnapshotJson: snapshotJson,
+              remoteSnapshotJson: res.data.remoteSnapshotJson,
+              summary,
+            };
+            const note = `تداخل در ${toPersianDigits(summary.totalConflictingDocs)} سند حسابداری با «${conflictRecord.remoteDeviceLabel}» شناسایی شد (توقف خودکار برای تایید کاربر).`;
+            setLastConflictNote(note);
+            setPendingConflict(conflictRecord);
+            void markSyncOutboxOperationStatus(operationId, 'conflict');
+            playWarningTone();
+            logActivity('همگام‌سازی Supabase', 'توقف خودکار در تداخل اسناد مالی', note);
+            showToast(
+              'تداخل در اسناد مالی شناسایی شد؛ برای جلوگیری از بازنویسی خودکار، لطفاً نسخه نهایی را انتخاب کنید.'
             );
-            if (summary.hasConflicts) {
-              const conflictRecord: PendingSyncConflict = {
-                id: `sb_conflict_${Date.now()}`,
-                source: 'supabase',
-                sourceLabel: 'سرور ابری Supabase PostgreSQL',
-                remoteDeviceLabel: res.data.remoteDeviceLabel || 'دستگاه دیگر',
-                detectedAt: new Date().toISOString(),
-                localRevision: lastSupabaseRevisionRef.current,
-                remoteRevision: res.data.serverRevision,
-                localSnapshotJson: snapshotJson,
-                remoteSnapshotJson: res.data.remoteSnapshotJson,
-                summary,
-              };
-              const note = `تداخل در ${toPersianDigits(summary.totalConflictingDocs)} سند حسابداری با «${conflictRecord.remoteDeviceLabel}» شناسایی شد (در انتظار انتخاب کاربر).`;
-              setLastConflictNote(note);
-              setPendingConflict(conflictRecord);
-              playWarningTone();
-              logActivity('همگام‌سازی Supabase', 'شناسایی تداخل اسناد', note);
-              showToast(
-                'تداخل در اسناد حسابداری شناسایی شد؛ لطفاً انتخاب کنید آخرین تغییر محلی حفظ شود یا نسخه ابری بازگردانی گردد.'
-              );
-              return false;
+            return false;
+          }
+          // Non-financial conflict with 'keep_local' saved preference: push cleanly using LWW
+          if (decision.autoResolved && !hasFinancialDocConflict && decision.choice === 'keep_local') {
+            const forceOpId = `${operationId}_lww`;
+            const forceRes = await pushSnapshotToSupabase({
+              idToken: effectiveToken,
+              operationId: forceOpId,
+              deviceId,
+              deviceLabel,
+              conflictPolicy: 'last_write_wins',
+              clientRevision: res.data.serverRevision,
+              companyName: profile.companyName,
+              fiscalYear: profile.fiscalYear,
+              voucherCount: vouchers.length,
+              invoiceCount: invoices.length,
+              productCount: products.length,
+              snapshotJson,
+            });
+            if (forceRes.ok && forceRes.data) {
+              res.data = forceRes.data;
             }
           }
         }
@@ -979,8 +1071,16 @@ export function useDualCloudSync() {
           logActivity('همگام‌سازی Supabase', 'حل خودکار تداخل (بازگردانی نسخه ابری)', note);
           if (res.data.remoteSnapshotJson) {
             suppressNextAutoSyncRef.current = true;
-            lastSbSyncedHashRef.current = fingerprintWorkspacePayload(res.data.remoteSnapshotJson);
+            const remoteHash = fingerprintWorkspacePayload(res.data.remoteSnapshotJson);
+            lastSbSyncedHashRef.current = remoteHash;
             importBackupJson(res.data.remoteSnapshotJson);
+            notifyRemoteImportApplied('dual_cloud', remoteHash);
+            void recordInboxOperation({
+              operationId: `sb_conflict_remote_r${res.data.serverRevision}_${remoteHash.slice(0, 12)}`,
+              sourceDeviceId: res.data.remoteDeviceLabel || 'supabase_cloud',
+              payloadHash: remoteHash,
+              receivedAt: new Date().toISOString(),
+            });
           }
           playSuccessChime();
           showToast(note);
@@ -1051,11 +1151,23 @@ export function useDualCloudSync() {
           if (!silent) showToast('هنوز نسخه‌ای روی Supabase برای این فضای کاری ذخیره نشده است.');
           return false;
         }
+        const pullHash = fingerprintWorkspacePayload(res.snapshotJson);
+        const rev = res.revision || 1;
+        const inboxOpId = `sb_pull_${backupId || 'latest'}_r${rev}_${pullHash.slice(0, 12)}`;
+        if (silent && (await isInboxOperationProcessed(inboxOpId))) {
+          return true;
+        }
         suppressNextAutoSyncRef.current = true;
         const imported = importBackupJson(res.snapshotJson);
         if (imported) {
-          lastSbSyncedHashRef.current = fingerprintWorkspacePayload(res.snapshotJson);
-          const rev = res.revision || 1;
+          lastSbSyncedHashRef.current = pullHash;
+          notifyRemoteImportApplied('dual_cloud', pullHash);
+          void recordInboxOperation({
+            operationId: inboxOpId,
+            sourceDeviceId: res.lastDeviceLabel || 'supabase_cloud',
+            payloadHash: pullHash,
+            receivedAt: new Date().toISOString(),
+          });
           setLastSupabaseRevision(rev);
           saveLastSupabaseRevision(rev);
           const timeStr = new Date().toLocaleTimeString('fa-IR', {
@@ -1450,9 +1562,15 @@ export function useDualCloudSync() {
             showToast('بازیابی نسخه ابری ناموفق بود؛ لطفاً دوباره تلاش کنید.');
             return false;
           }
-          lastSbSyncedHashRef.current = fingerprintWorkspacePayload(
-            pendingConflict.remoteSnapshotJson
-          );
+          const resolvedHash = fingerprintWorkspacePayload(pendingConflict.remoteSnapshotJson);
+          lastSbSyncedHashRef.current = resolvedHash;
+          notifyRemoteImportApplied('dual_cloud', resolvedHash);
+          void recordInboxOperation({
+            operationId: `sb_resolve_remote_r${pendingConflict.remoteRevision}_${resolvedHash.slice(0, 12)}`,
+            sourceDeviceId: pendingConflict.remoteDeviceLabel || 'supabase_cloud',
+            payloadHash: resolvedHash,
+            receivedAt: new Date().toISOString(),
+          });
           setLastSupabaseRevision(pendingConflict.remoteRevision);
           saveLastSupabaseRevision(pendingConflict.remoteRevision);
           const timeStr = new Date().toLocaleTimeString('fa-IR', {
@@ -1477,6 +1595,10 @@ export function useDualCloudSync() {
         }
 
         // choice === 'keep_local': push latest local snapshot onto cloud cleanly
+        if (!isOnline) {
+          showToast('دستگاه در حالت آفلاین یا محلی است؛ ارسال نسخه محلی به ابر تا اتصال مجدد متوقف شد.');
+          return false;
+        }
         const localJson = exportBackupJson();
         const localHash = fingerprintWorkspacePayload(localJson);
         const opId = `op_resolve_local_${Date.now().toString(36)}_${localHash.slice(0, 12)}`;
@@ -1532,6 +1654,7 @@ export function useDualCloudSync() {
       }
     },
     [
+      isOnline,
       pendingConflict,
       setConflictDefaultMode,
       importBackupJson,

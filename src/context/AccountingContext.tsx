@@ -2512,21 +2512,8 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
-      if (user) {
-        try {
-          await updateDoc(doc(db, 'cheques', chequeId), {
-            status: newStatus,
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `cheques/${chequeId}`);
-        }
-      } else {
-        setCheques((prev) =>
-          prev.map((c) => (c.id === chequeId ? { ...c, status: newStatus } : c))
-        );
-      }
-
+      // Atomic order: post & validate GL voucher FIRST (checks closed fiscal year & balance)
+      // before mutating cheque status so a failed voucher never leaves cheque status desynchronized.
       if (plan.lines.length >= 2) {
         await createVoucher({
           date: getTodayShamsi(),
@@ -2538,7 +2525,25 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           allowDuplicate: true,
           internalSystemCall: true,
         });
+      }
+
+      if (user) {
+        try {
+          await updateDoc(doc(db, 'cheques', chequeId), {
+            status: newStatus,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `cheques/${chequeId}`);
+          throw err;
+        }
       } else {
+        setCheques((prev) =>
+          prev.map((c) => (c.id === chequeId ? { ...c, status: newStatus } : c))
+        );
+      }
+
+      if (plan.lines.length < 2) {
         showToast(plan.description || 'وضعیت چک صیادی به‌روزرسانی شد.');
       }
     },
@@ -2622,6 +2627,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       date: string;
       description: string;
     }) => {
+      if (!assertPermission('canManageTreasury')) return;
       if (payload.fromAccountCode === payload.toAccountCode) {
         showToast('حساب مبدأ و مقصد انتقال وجه نمی‌تواند یکسان باشد.');
         return;
@@ -3314,28 +3320,59 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
           }
         } else {
-          // Local atomic commit: apply all 4 entity mutations together
-          setProducts((prev) =>
-            prev.map((p) => {
-              const delta = plan.productDeltas.get(p.id);
-              if (!delta) return p;
-              return {
-                ...p,
-                stock: delta.stock,
-                buyPrice: delta.buyPrice,
-                costLayers: delta.costLayers,
-                inventoryValueIrr: delta.inventoryValueIrr,
-                _version: delta.prevVersion + 1,
-                updatedByDevice: deviceId,
-              };
-            })
-          );
+          // Local atomic commit in Operational IndexedDB:
+          // Commit restored FIFO/MWA inventory layers, cancelled invoice, reversal voucher,
+          // and cancelled Sayadi cheques inside a SINGLE readwrite transaction with ROLLBACK.
+          const updatedProducts: Product[] = [];
+          for (const p of products) {
+            const delta = plan.productDeltas.get(p.id);
+            if (!delta) continue;
+            updatedProducts.push({
+              ...p,
+              stock: delta.stock,
+              buyPrice: delta.buyPrice,
+              costLayers: delta.costLayers,
+              inventoryValueIrr: delta.inventoryValueIrr,
+              _version: delta.prevVersion + 1,
+              updatedByDevice: deviceId,
+            });
+          }
+          const cancelledInvoice: Invoice = {
+            ...inv,
+            status: 'cancelled',
+            _version: (inv._version ?? 1) + 1,
+          };
+          const cancelSet = new Set(plan.chequeIdsToCancel);
+          const cancelledCheques: Cheque[] =
+            cancelSet.size > 0
+              ? cheques
+                  .filter((c) => cancelSet.has(c.id))
+                  .map((c) => ({
+                    ...c,
+                    status: 'cancelled' as const,
+                    notes: `${c.notes || ''} (ابطال همراه فاکتور ${inv.invoiceNumber})`.slice(0, 300),
+                  }))
+              : [];
+
+          try {
+            await commitInvoiceOperationalTx({
+              updatedProducts,
+              voucher: preparedReversalVoucher ?? undefined,
+              cheques: cancelledCheques,
+              invoice: cancelledInvoice,
+            });
+          } catch (txErr) {
+            console.error('[OperationalDB] Atomic invoice cancellation rolled back:', txErr);
+            showToast('خطا در ابطال اتمیک فاکتور در پایگاه داده محلی (عملیات ROLLBACK شد و تغییری اعمال نگردید).');
+            return;
+          }
+
+          const updatedProductMap = new Map(updatedProducts.map((p) => [p.id, p]));
+          if (updatedProductMap.size > 0) {
+            setProducts((prev) => prev.map((p) => updatedProductMap.get(p.id) ?? p));
+          }
           setInvoices((prev) =>
-            prev.map((i) =>
-              i.id === invoiceId
-                ? { ...i, status: 'cancelled', _version: (i._version ?? 1) + 1 }
-                : i
-            )
+            prev.map((i) => (i.id === invoiceId ? cancelledInvoice : i))
           );
           if (preparedReversalVoucher) {
             setVouchers((prev) => [...prev, preparedReversalVoucher]);
@@ -3345,15 +3382,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               unit: profile.currencyUnit,
             });
           }
-          if (plan.chequeIdsToCancel.length > 0) {
-            const cancelSet = new Set(plan.chequeIdsToCancel);
-            setCheques((prev) =>
-              prev.map((c) =>
-                cancelSet.has(c.id)
-                  ? { ...c, status: 'cancelled', notes: `${c.notes || ''} (ابطال همراه فاکتور)` }
-                  : c
-              )
-            );
+          if (cancelledCheques.length > 0) {
+            const cancelledChequeMap = new Map(cancelledCheques.map((c) => [c.id, c]));
+            setCheques((prev) => prev.map((c) => cancelledChequeMap.get(c.id) ?? c));
           }
         }
       } else {
@@ -3370,8 +3401,23 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return;
           }
         } else {
+          const cancelledProforma: Invoice = {
+            ...inv,
+            status: 'cancelled',
+            _version: (inv._version ?? 1) + 1,
+          };
+          try {
+            await commitInvoiceOperationalTx({
+              updatedProducts: [],
+              invoice: cancelledProforma,
+            });
+          } catch (txErr) {
+            console.error('[OperationalDB] Atomic proforma cancellation rolled back:', txErr);
+            showToast('خطا در ابطال پیش‌فاکتور در پایگاه داده محلی (عملیات ROLLBACK شد).');
+            return;
+          }
           setInvoices((prev) =>
-            prev.map((i) => (i.id === invoiceId ? { ...i, status: 'cancelled' } : i))
+            prev.map((i) => (i.id === invoiceId ? cancelledProforma : i))
           );
         }
       }
@@ -5149,6 +5195,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         includeServiceVat?: boolean;
       }
     ) => {
+      if (!assertPermission('canEditInventory') || !assertPermission('canCreateVoucher')) return;
       const job = subcontractJobs.find((j) => j.id === jobId);
       if (!job || job.status === 'completed') {
         showToast('این حواله پیمانکاری قبلاً تکمیل شده است.');
@@ -5163,7 +5210,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
+      const fySub = extractFiscalYearFromDate(payload.completionDate);
+      if (fySub && (profile.closedFiscalYears ?? []).includes(fySub)) {
+        showToast(`سال مالی ${fySub} بسته شده است و ثبت تکمیل پیمانکاری مجاز نیست.`, 'error');
+        return;
+      }
+
       const rawProd = products.find((p) => p.id === job.rawProductId);
+      const rawProdSnapshot = rawProd ? { ...rawProd } : null;
       if (rawProd && rawProd.stock + 0.001 < job.sentWeightKg) {
         showToast(
           `موجودی نخ خام «${rawProd.name}» (${rawProd.stock} کیلوگرم) کمتر از وزن ارسالی (${job.sentWeightKg} کیلوگرم) است.`
@@ -5365,14 +5419,34 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       );
 
-      const v = await createVoucher({
-        date: payload.completionDate,
-        description: `تکمیل عملیات پیمانکاری ${job.jobNumber} (${job.finishedProductName} — لات ${payload.finishedLotNumber})`,
-        voucherType: 'general',
-        status: 'permanent',
-        lines: voucherLines,
-        referenceId: job.id,
-      });
+      let v: Voucher;
+      try {
+        v = await createVoucher({
+          date: payload.completionDate,
+          description: `تکمیل عملیات پیمانکاری ${job.jobNumber} (${job.finishedProductName} — لات ${payload.finishedLotNumber})`,
+          voucherType: 'general',
+          status: 'permanent',
+          lines: voucherLines,
+          referenceId: job.id,
+        });
+      } catch (voucherErr) {
+        // Atomic rollback: restore raw material stock & revert job status if voucher posting failed
+        if (rawProdSnapshot) {
+          await updateProduct(rawProdSnapshot.id, {
+            stock: rawProdSnapshot.stock,
+            buyPrice: rawProdSnapshot.buyPrice,
+            costLayers: rawProdSnapshot.costLayers,
+            inventoryValueIrr: rawProdSnapshot.inventoryValueIrr,
+          });
+        }
+        if (user) {
+          await updateDoc(doc(db, 'subcontractJobs', jobId), {
+            status: 'sent',
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
+        throw voucherErr;
+      }
 
       const completionPatch = {
         status: 'completed' as const,
@@ -5426,7 +5500,10 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // ---------------- FX REVALUATION & BROKER COMMISSION VOUCHERS ----------------
   const postFxRevaluationVoucher = useCallback(
     async (rows: FxRevaluationRow[], date: string) => {
-      const nonZero = rows.filter((r) => Math.abs(r.revaluationDiffIrr) >= 1);
+      if (!assertPermission('canManageCurrencies')) return;
+      const nonZero = rows
+        .map((r) => ({ ...r, revaluationDiffIrr: Math.round(r.revaluationDiffIrr) }))
+        .filter((r) => Math.abs(r.revaluationDiffIrr) >= 1);
       if (nonZero.length === 0) {
         showToast('هیچ اختلاف تسعیر ارزی برای صدور سند وجود ندارد.');
         return;
@@ -5512,6 +5589,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       date: string;
       periodLabel: string;
     }) => {
+      if (!assertPermission('canCreateVoucher')) return;
       const amount = Math.round(payload.amountIrr);
       if (amount <= 0) return;
       const v = await createVoucher({

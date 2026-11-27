@@ -53,9 +53,16 @@ import {
   type PendingSyncConflict,
   type SyncConflictResolutionChoice,
 } from '../lib/syncConflictResolver';
-import { computeSnapshotDigest256Sync } from '../lib/offlineFirstCore';
+import {
+  computeSnapshotDigest256Sync,
+  loadOperatingMode,
+  resolveEffectiveOperatingMode,
+  type OperatingMode,
+} from '../lib/offlineFirstCore';
+import { isInboxOperationProcessed, recordInboxOperation } from '../lib/operationalDb';
 
 const ONBOARDING_DISMISSED_KEY = 'holoo_apex_mesh_onboarding_dismissed_v1';
+const REMOTE_IMPORT_SYNC_EVENT = 'holoo:remote-import-applied';
 
 /** Collision-resistant 256-bit workspace snapshot digest (ignores volatile exportedAt timestamp) */
 function computePayloadFingerprint(rawJson: string): string {
@@ -88,7 +95,23 @@ export function useLocalFirstMeshSync() {
     showToast,
   } = useAccounting();
 
-  const isOnline = useOnlineStatus();
+  const rawIsOnline = useOnlineStatus();
+  const [operatingMode, setOperatingMode] = useState<OperatingMode>(() => loadOperatingMode());
+  useEffect(() => {
+    const onModeChanged = (evt: Event) => {
+      const next = (evt as CustomEvent<OperatingMode>).detail;
+      if (next === 'local' || next === 'hybrid' || next === 'online') {
+        setOperatingMode(next);
+      } else {
+        setOperatingMode(loadOperatingMode());
+      }
+    };
+    window.addEventListener('holoo:operating-mode-changed', onModeChanged);
+    return () => window.removeEventListener('holoo:operating-mode-changed', onModeChanged);
+  }, []);
+  // Respect 100% Local-Only operating mode: stop PeerJS signaling when user forces 'local'
+  const isOnline =
+    resolveEffectiveOperatingMode(operatingMode, rawIsOnline).effectiveMode !== 'local';
 
   // ---- Persistent Device Storage (navigator.storage.persist) ----
   const [storagePersistence, setStoragePersistence] = useState<StoragePersistenceInfo>({
@@ -158,6 +181,23 @@ export function useLocalFirstMeshSync() {
   const didBootMirrorRef = useRef(false);
   const vectorClockRef = useRef<Record<string, number>>(vectorClock);
   vectorClockRef.current = vectorClock;
+
+  // Cross-layer anti-echo listener: ignore cloud pulls (Firebase/Supabase) so they don't re-broadcast as local P2P mutations
+  useEffect(() => {
+    const handleRemoteImport = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ source?: string; fingerprint?: string }>).detail;
+      if (!detail || detail.source === 'p2p_mesh') return;
+      isRemoteUpdateRef.current = true;
+      if (detail.fingerprint) {
+        lastObservedFingerprintRef.current = detail.fingerprint;
+      }
+      window.setTimeout(() => {
+        isRemoteUpdateRef.current = false;
+      }, 1800);
+    };
+    window.addEventListener(REMOTE_IMPORT_SYNC_EVENT, handleRemoteImport);
+    return () => window.removeEventListener(REMOTE_IMPORT_SYNC_EVENT, handleRemoteImport);
+  }, []);
 
   const latestExportRef = useRef(exportBackupJson);
   latestExportRef.current = exportBackupJson;
@@ -295,7 +335,7 @@ export function useLocalFirstMeshSync() {
 
   // ---- PeerJS 3-Device Mesh Lifecycle ("On-Open" + Visibility + Online Reconnect) ----
   useEffect(() => {
-    if (!selectedPeerId) {
+    if (!selectedPeerId || !isOnline) {
       if (connectorRef.current) {
         connectorRef.current.stop();
         connectorRef.current = null;
@@ -367,7 +407,8 @@ export function useLocalFirstMeshSync() {
             if (!env?.operationId) continue;
             ackedOpIdSet.add(env.operationId);
 
-            if (env.snapshotJson && env.snapshotJson.length > 2) {
+            const alreadyProcessed = await isInboxOperationProcessed(env.operationId);
+            if (!alreadyProcessed && env.snapshotJson && env.snapshotJson.length > 2) {
               const relayMerge = mergeWorkspacesDeterministicLWW(
                 currentMergedJson,
                 env.snapshotJson,
@@ -491,7 +532,23 @@ export function useLocalFirstMeshSync() {
             try {
               const ok = latestImportRef.current(currentMergedJson);
               if (ok) {
-                lastObservedFingerprintRef.current = computePayloadFingerprint(currentMergedJson);
+                const mergedFp = computePayloadFingerprint(currentMergedJson);
+                lastObservedFingerprintRef.current = mergedFp;
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(
+                    new CustomEvent(REMOTE_IMPORT_SYNC_EVENT, {
+                      detail: { source: 'p2p_mesh', fingerprint: mergedFp },
+                    })
+                  );
+                }
+                for (const opId of ackedOpIds) {
+                  void recordInboxOperation({
+                    operationId: opId,
+                    sourceDeviceId: fromPeerId,
+                    payloadHash: mergedFp,
+                    receivedAt: new Date().toISOString(),
+                  });
+                }
                 const savedCount = await persistTaggedSnapshotToDexie(
                   currentMergedJson,
                   selectedPeerId
@@ -577,12 +634,10 @@ export function useLocalFirstMeshSync() {
     });
 
     connectorRef.current = connector;
-    if (isOnline) {
-      connector.start();
-    }
+    connector.start();
 
     const handleVisibility = () => {
-      if (!connectorRef.current) return;
+      if (!isOnline || !connectorRef.current) return;
       if (document.visibilityState === 'visible' && navigator.onLine) {
         connectorRef.current.connectToAllPeers();
       } else if (document.visibilityState === 'hidden' && navigator.onLine) {
@@ -591,15 +646,17 @@ export function useLocalFirstMeshSync() {
       }
     };
     const handlePageHide = () => {
-      if (connectorRef.current && navigator.onLine) {
+      if (isOnline && connectorRef.current && navigator.onLine) {
         void connectorRef.current.flushBatchedUpdates(false);
       }
     };
     const handleOnline = () => {
-      if (!connectorRef.current) return;
+      if (!isOnline || !connectorRef.current) return;
       connectorRef.current.start();
       window.setTimeout(() => {
-        connectorRef.current?.connectToAllPeers();
+        if (isOnline) {
+          connectorRef.current?.connectToAllPeers();
+        }
       }, 1200);
     };
 

@@ -1219,7 +1219,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div className="p-3.5 space-y-3 text-xs max-h-[75vh] overflow-y-auto">
+                    <div className="p-3.5 space-y-3 text-xs max-h-[75dvh] overflow-y-auto">
                       {/* 1. Firebase Cloud Block (Auto-Sync + Symmetrical Push/Pull + Last 3 Backups) */}
                       <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2">
                         <div className="flex items-center justify-between gap-2">

@@ -2028,7 +2028,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
               </div>
             </div>
 
-            <div className="overflow-x-auto max-h-[70vh]">
+            <div className="overflow-x-auto max-h-[70dvh]">
               <table className="w-full text-right border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 text-[11px] font-bold text-slate-600 dark:text-slate-300">
@@ -2108,7 +2108,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
       {/* Holoo Apex 9.6 Bulk Excel / CSV Product Import Modal */}
       {showImportModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <div className="w-full max-w-3xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 text-xs shadow-2xl">
+          <div className="w-full max-w-3xl max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 text-xs shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
@@ -2230,7 +2230,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
       {/* Holoo Apex 9.6 Printable Barcode Label Modal */}
       {barcodeProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 text-xs shadow-2xl print-container">
+          <div className="w-full max-w-2xl max-h-[90dvh] overflow-y-auto rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 text-xs shadow-2xl print-container">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3 no-print">
               <div className="flex items-center gap-2">
                 <Barcode className="w-4 h-4 text-teal-700 dark:text-teal-400" />
@@ -2272,7 +2272,7 @@ export const InventoryView: React.FC<{ initialIntent?: string; clearIntent?: () 
                 apexMetaMap[barcodeProduct.sku]?.barcode ||
                 generateSmartBarcode(barcodeProduct.sku);
               return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[65vh] overflow-y-auto p-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[65dvh] overflow-y-auto p-1">
                   {Array.from({ length: barcodeCopies }).map((_, i) => (
                     <div
                       key={i}

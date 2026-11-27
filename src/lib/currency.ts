@@ -33,8 +33,15 @@ export function roundCurrency(amount: number, decimalPlaces = 2): number {
 export function convertForeignToIrr(foreignAmount: number, rateToIrr: number): number {
   const f = Number(foreignAmount) || 0;
   const r = Number(rateToIrr) || 0;
-  if (f === 0 || r <= 0) return 0;
-  return Math.round(f * r);
+  if (!Number.isFinite(f) || !Number.isFinite(r) || f === 0 || r <= 0) return 0;
+  // Exact fixed-point BigInt math: scale foreign amount by 10^4 (4 decimals) and rate by 10^2 (2 decimals)
+  const sign = f < 0 ? -1n : 1n;
+  const scaledForeign = BigInt(Math.round(Math.abs(f) * 10000));
+  const scaledRate = BigInt(Math.round(r * 100));
+  const denom = 1_000_000n;
+  const product = scaledForeign * scaledRate;
+  const rounded = (product + denom / 2n) / denom;
+  return Number(sign * rounded);
 }
 
 export function convertIrrToForeign(

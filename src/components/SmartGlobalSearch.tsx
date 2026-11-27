@@ -195,7 +195,7 @@ export const SmartGlobalSearchModal: React.FC<{
           exit={{ opacity: 0 }}
           transition={{ duration: 0.14 }}
           onClick={onClose}
-          className="fixed inset-0 z-50 flex items-start justify-center pt-[6vh] sm:pt-[9vh] bg-slate-950/60 backdrop-blur-sm p-3 sm:p-4 no-print"
+          className="fixed inset-0 z-50 flex items-start justify-center pt-[6dvh] sm:pt-[9dvh] bg-slate-950/60 backdrop-blur-sm p-3 sm:p-4 no-print"
         >
           <motion.div
             key="smart-global-search-panel"
@@ -204,7 +204,7 @@ export const SmartGlobalSearchModal: React.FC<{
             exit={{ opacity: 0, scale: 0.98, y: -6 }}
             transition={springCurve}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl rounded-2xl bg-white dark:bg-[#111622] border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xl flex flex-col max-h-[82vh]"
+            className="w-full max-w-2xl rounded-2xl bg-white dark:bg-[#111622] border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xl flex flex-col max-h-[85dvh]"
           >
             {/* Search Input Bar */}
             <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-slate-200/80 dark:border-slate-800">

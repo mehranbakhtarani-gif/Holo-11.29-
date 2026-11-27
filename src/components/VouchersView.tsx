@@ -48,6 +48,8 @@ import { SmartSearchCombobox, SmartSearchOption } from './SmartSearchCombobox';
 import { FuzzyTableOption, FuzzyTableSearch } from './FuzzyTableSearch';
 import { VoiceInputButton } from './VoiceInputButton';
 import { MoneyInput } from './ui/MoneyInput';
+import { VoucherTemplateBar } from './VoucherTemplateBar';
+import type { AppliedVoucherTemplateResult } from '../lib/voucherTemplates';
 
 const VOUCHER_TYPE_LABELS: Record<VoucherType, string> = {
   opening: 'افتتاحیه',
@@ -878,6 +880,33 @@ export const VouchersView: React.FC<{ initialIntent?: string; clearIntent?: () =
                 </div>
               )}
             </div>
+
+            {/* Smart Double-Entry Accounting Voucher Templates Bar */}
+            <VoucherTemplateBar
+              accounts={accounts}
+              parties={parties}
+              costCenters={costCenters}
+              vouchers={vouchers}
+              unit={unit}
+              date={date}
+              currentVoucherType={voucherType}
+              currentDescription={description}
+              currentLines={lines}
+              onApplyTemplate={(applied: AppliedVoucherTemplateResult, templateName: string) => {
+                setCurrencyCode(BASE_CURRENCY_CODE);
+                setExchangeRate(1);
+                setVoucherType(applied.voucherType);
+                setDescription(applied.description);
+                setLines(applied.lines);
+                setAiReasoning('');
+                showToast(
+                  applied.isBalanced
+                    ? `الگوی «${templateName}» با تراز کامل (${formatMoney(applied.totalDebit, unit)}) روی سند اعمال شد.`
+                    : `سرفصل‌های الگوی «${templateName}» روی سند بارگذاری شد؛ مبلغ را وارد یا با F9 تراز کنید.`
+                );
+              }}
+              onNotify={(msg) => showToast(msg)}
+            />
 
             {/* Authentic Holoo 9.6 Voucher Header Metadata Box */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-12 gap-3 p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 text-xs">

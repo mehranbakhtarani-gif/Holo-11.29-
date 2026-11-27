@@ -784,7 +784,7 @@ export const ImportAndSubcontractView: React.FC<{
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+            <div className="p-5 space-y-4 max-h-[75dvh] overflow-y-auto text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-500 mb-1">شماره پرونده واردات</label>
@@ -1080,7 +1080,7 @@ export const ImportAndSubcontractView: React.FC<{
       {/* HOLOO MODAL: NEW SALES ORDER */}
       {showOrderModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <form onSubmit={handleCreateOrder} className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden text-xs">
+          <form onSubmit={handleCreateOrder} className="w-full max-w-xl max-h-[90dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs">
             <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
               <div className="text-sm font-bold">پنجره ثبت سفارش فروش (پیش از باسکول و حواله خروج)</div>
               <button type="button" onClick={() => setShowOrderModal(false)}><X className="w-4 h-4" /></button>
@@ -1156,7 +1156,7 @@ export const ImportAndSubcontractView: React.FC<{
       {/* HOLOO MODAL: WEIGHBRIDGE DISPATCH */}
       {dispatchingOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden text-xs">
+          <div className="w-full max-w-xl max-h-[90dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs">
             <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
               <div className="text-sm font-bold">پنجره توزین باسکول و صدور حواله خروج ({dispatchingOrder.orderNumber})</div>
               <button type="button" onClick={() => setDispatchingOrder(null)}><X className="w-4 h-4" /></button>
@@ -1239,7 +1239,7 @@ export const ImportAndSubcontractView: React.FC<{
       {/* PRINTABLE BARCODE LABEL MODAL */}
       {barcodeOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
             <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between no-print">
               <div className="text-sm font-bold">برچسب بارکد کارتن و شماره لات نخ ({barcodeOrder.orderNumber})</div>
               <button type="button" onClick={() => setBarcodeOrder(null)}><X className="w-4 h-4" /></button>
@@ -1280,7 +1280,7 @@ export const ImportAndSubcontractView: React.FC<{
       {/* HOLOO MODAL: NEW SUBCONTRACT JOB */}
       {showSubModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-          <form onSubmit={handleCreateSubcontract} className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden text-xs">
+          <form onSubmit={handleCreateSubcontract} className="w-full max-w-xl max-h-[90dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs">
             <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
               <div className="text-sm font-bold">پنجره ارسال نخ به پیمانکار رنگرزی / بافندگی</div>
               <button type="button" onClick={() => setShowSubModal(false)}><X className="w-4 h-4" /></button>
@@ -1377,7 +1377,7 @@ export const ImportAndSubcontractView: React.FC<{
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
-            <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden text-xs">
+            <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs">
               <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
                 <div className="text-sm font-bold">
                   دریافت محصول تکمیل‌شده ({completingSub.jobNumber})

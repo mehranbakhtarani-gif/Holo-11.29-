@@ -522,7 +522,7 @@ export const CommandPaletteModal: React.FC<{
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center pt-[6vh] sm:pt-[10vh] bg-slate-950/60 p-3 sm:p-4 no-print">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center pt-[6dvh] sm:pt-[10dvh] bg-slate-950/60 p-3 sm:p-4 no-print">
       <div className="w-full max-w-2xl max-h-[88dvh] flex flex-col rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xl">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-800">
           <Search className="w-4 h-4 text-teal-600 shrink-0" />
