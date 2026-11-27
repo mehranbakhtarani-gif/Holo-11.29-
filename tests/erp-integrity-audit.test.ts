@@ -27,6 +27,7 @@ import {
   saveDocumentAttachment,
 } from '../src/lib/documentVault';
 import { evaluateMultiDeviceSyncState } from '../src/lib/dualCloudSync';
+import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
 import { computeFinancialForecast } from '../src/lib/financialForecastEngine';
 import { parseHolo203Json, runHolo203Migration } from '../src/lib/holoMigrationEngine';
 import {
@@ -1199,6 +1200,7 @@ test('11. Backup Integrity Verifies Checksum and Detects Tampered/Corrupted Snap
 // TEST 12: OFFLINE DOCUMENT VAULT (SHA-256 INTEGRITY & RBAC SENSITIVITY)
 // ============================================================================
 test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification & RBAC Sensitivity', async () => {
+  unlockBackupSession('document-vault-test-passphrase');
   const badMime = await saveDocumentAttachment({
     entityType: 'invoice',
     entityId: 'inv_1',
@@ -1234,13 +1236,16 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
   assert.equal(allowed.ok, true);
   if (allowed.ok) {
     assert.equal(allowed.integrityValid, true);
+    assert.equal(allowed.record.dataUrl, 'data:application/pdf;base64,JVBERi0xLjQK');
   }
+  lockBackupSession();
 });
 
 // ============================================================================
 // TEST 12B: DOCUMENT VAULT MUST FAIL CLOSED WHEN BROWSER PERSISTENCE FAILS
 // ============================================================================
 test('12B. Document Vault Never Reports Success When Browser IndexedDB Is Unavailable', async () => {
+  unlockBackupSession('document-vault-test-passphrase');
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
@@ -1262,6 +1267,7 @@ test('12B. Document Vault Never Reports Success When Browser IndexedDB Is Unavai
   } finally {
     if (previous) Object.defineProperty(globalThis, 'window', previous);
     else Reflect.deleteProperty(globalThis, 'window');
+    lockBackupSession();
   }
 });
 
