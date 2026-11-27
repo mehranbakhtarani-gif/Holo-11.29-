@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { commitChequeStatusOperationalTx, commitDepreciationOperationalTx, commitInvoiceOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
-import type { Cheque, FixedAsset, Invoice, Product, Voucher } from '../src/types/accounting';
+import { commitChequeStatusOperationalTx, commitDepreciationOperationalTx, commitInvoiceOperationalTx, commitSalesOrderDispatchOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
+import type { Cheque, FixedAsset, Invoice, Product, SalesOrder, Voucher } from '../src/types/accounting';
 
 /**
  * ACID Transactional In-Memory IndexedDB Simulator
@@ -12,7 +12,7 @@ import type { Cheque, FixedAsset, Invoice, Product, Voucher } from '../src/types
  * - On `tx.abort()` OR any store request error, staged writes are discarded (100% ROLLBACK).
  */
 interface SimulatedIdbOptions {
-  failOnStore?: 'products' | 'vouchers' | 'cheques' | 'invoices' | 'assets' | 'meta';
+  failOnStore?: 'products' | 'vouchers' | 'cheques' | 'invoices' | 'assets' | 'salesOrders' | 'meta';
   failMode?: 'throw' | 'async_error';
   errorMessage?: string;
 }
@@ -23,6 +23,7 @@ function createTransactionalIdbSimulator(initialData?: {
   cheques?: Cheque[];
   invoices?: Invoice[];
   assets?: FixedAsset[];
+  salesOrders?: SalesOrder[];
   meta?: Array<{ key: string; [k: string]: unknown }>;
 }) {
   const stores: Record<string, Map<string, any>> = {
@@ -32,6 +33,7 @@ function createTransactionalIdbSimulator(initialData?: {
     cheques: new Map((initialData?.cheques ?? []).map((c) => [c.id, structuredClone(c)])),
     invoices: new Map((initialData?.invoices ?? []).map((i) => [i.id, structuredClone(i)])),
     assets: new Map((initialData?.assets ?? []).map((a) => [a.id, structuredClone(a)])),
+    salesOrders: new Map((initialData?.salesOrders ?? []).map((o) => [o.id, structuredClone(o)])),
   };
 
   let abortCount = 0;
@@ -1050,6 +1052,71 @@ async function runTests() {
   assert.equal(staleDepreciationSim.stores.vouchers.size, 0);
   assert.equal(staleDepreciationSim.stores.meta.get('workspace_meta').localRevision, 21);
   console.log('✓ 7b. Stale depreciation balances are rejected without overwriting newer asset state');
+
+  const localOrder: SalesOrder = {
+    id: 'order_dispatch_1',
+    ownerId: 'local_owner',
+    orderNumber: 'SO-1001',
+    date: '1405/01/10',
+    partyId: 'party_1',
+    partyName: 'شرکت آلفا',
+    warehouse: 'انبار مرکزی',
+    status: 'ordered',
+    items: [],
+    _version: 4,
+  };
+  const dispatchSim = createTransactionalIdbSimulator({
+    salesOrders: [localOrder],
+    meta: [{ key: 'workspace_meta', localRevision: 30 }],
+  });
+  const dispatchedOrder = await commitSalesOrderDispatchOperationalTx({
+    orderId: localOrder.id,
+    ownerId: localOrder.ownerId,
+    dispatchNumber: 'DSP-1405-101',
+    dispatchDate: '1405/01/12',
+    driverName: 'راننده آزمون',
+    plateNumber: '۱۲الف۳۴۵',
+    items: [],
+    updatedByDevice: 'qa_device',
+  }, { dbOverride: dispatchSim.db });
+  assert.equal(dispatchedOrder.status, 'dispatched');
+  assert.equal(dispatchSim.stores.salesOrders.get(localOrder.id).status, 'dispatched');
+  assert.equal(dispatchSim.stores.salesOrders.get(localOrder.id)._version, 5);
+  assert.equal(dispatchSim.stores.meta.get('workspace_meta').localRevision, 31);
+  await assert.rejects(() => commitSalesOrderDispatchOperationalTx({
+    orderId: localOrder.id,
+    ownerId: localOrder.ownerId,
+    dispatchNumber: 'DSP-1405-102',
+    dispatchDate: '1405/01/13',
+    driverName: 'راننده دوم',
+    plateNumber: '۱۲ب۳۴۵',
+    items: [],
+    updatedByDevice: 'qa_device_2',
+  }, { dbOverride: dispatchSim.db }), /قبلاً حواله شده/);
+  assert.equal(dispatchSim.stores.meta.get('workspace_meta').localRevision, 31);
+  const dispatchRollbackSim = createTransactionalIdbSimulator({
+    salesOrders: [localOrder],
+    meta: [{ key: 'workspace_meta', localRevision: 40 }],
+  });
+  dispatchRollbackSim.setFailure({
+    failOnStore: 'salesOrders',
+    failMode: 'async_error',
+    errorMessage: 'ConstraintError: dispatch order write rejected',
+  });
+  await assert.rejects(() => commitSalesOrderDispatchOperationalTx({
+    orderId: localOrder.id,
+    ownerId: localOrder.ownerId,
+    dispatchNumber: 'DSP-1405-103',
+    dispatchDate: '1405/01/14',
+    driverName: 'راننده سوم',
+    plateNumber: '۱۲ج۳۴۵',
+    items: [],
+    updatedByDevice: 'qa_device_3',
+  }, { dbOverride: dispatchRollbackSim.db }), /dispatch order write rejected/);
+  assert.equal(dispatchRollbackSim.getStats().abortCount, 1);
+  assert.equal(dispatchRollbackSim.stores.salesOrders.get(localOrder.id).status, 'ordered');
+  assert.equal(dispatchRollbackSim.stores.meta.get('workspace_meta').localRevision, 40);
+  console.log('✓ 8. Local sales order dispatch commits status/version/revision atomically and rejects duplicates; failed writes roll back');
 
   console.log('\nALL OFFLINE-FIRST & ATOMIC INDEXEDDB ROLLBACK AUDIT TESTS PASSED ✅');
 }
