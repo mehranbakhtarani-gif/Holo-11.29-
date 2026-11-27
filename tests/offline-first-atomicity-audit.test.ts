@@ -314,6 +314,7 @@ async function runTests() {
   const accountingCtxSrc = fs.readFileSync(path.join(root, 'src/context/AccountingContext.tsx'), 'utf8');
   const operationalDbSrc = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
   const appSrc = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
+  const offlinePanelSrc = fs.readFileSync(path.join(root, 'src/components/OfflineFirstControlPanel.tsx'), 'utf8');
 
   // Operational DB read failures must not be mistaken for an empty workspace,
   // otherwise fallback/demo hydration could mask or overwrite inaccessible data.
@@ -340,6 +341,13 @@ async function runTests() {
   assert.match(pwaUpdateBackup, /requireBackupSessionPassphrase/);
   assert.match(pwaUpdateBackup, /envelopeJson:/);
   assert.doesNotMatch(pwaUpdateBackup, /snapshotJson:/);
+  const offlinePanelUpdateStart = offlinePanelSrc.indexOf('const handleSafePwaUpdate = async () =>');
+  const offlinePanelUpdateEnd = offlinePanelSrc.indexOf('\n  };', offlinePanelUpdateStart);
+  const offlinePanelUpdate = offlinePanelSrc.slice(offlinePanelUpdateStart, offlinePanelUpdateEnd);
+  assert.match(offlinePanelUpdate, /encryptBackupEnvelope/);
+  assert.match(offlinePanelUpdate, /requireBackupSessionPassphrase/);
+  assert.match(offlinePanelUpdate, /envelopeJson:/);
+  assert.doesNotMatch(offlinePanelUpdate, /snapshotJson:/);
 
   // Subcontract completion must remain blocked until raw stock, finished product,
   // permanent voucher and job status share one atomic transaction.
