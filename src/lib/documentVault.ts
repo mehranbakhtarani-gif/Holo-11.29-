@@ -200,12 +200,15 @@ export async function listDocumentAttachments(filter?: {
         req.onsuccess = () => resolve((req.result as DocumentAttachmentRecord[]) || []);
         req.onerror = () => reject(req.error);
       });
-      db.close();
-    } catch {
-      rows = Array.from(memoryVault.values());
+    } catch (err) {
+      throw new Error(`خواندن فهرست اسناد از بایگانی پایدار ناموفق بود: ${err instanceof Error ? err.message : 'خطای IndexedDB'}`);
+    } finally {
+      db?.close();
     }
-  } else {
+  } else if (isNonBrowserTestRuntime()) {
     rows = Array.from(memoryVault.values());
+  } else {
+    throw new Error('بایگانی پایدار اسناد در این مرورگر در دسترس نیست.');
   }
 
   return rows
