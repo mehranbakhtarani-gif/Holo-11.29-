@@ -408,7 +408,7 @@ async function runTests() {
   const payrollEnd = accountingCtxSrc.indexOf('const paySalariesVoucher = useCallback', payrollIdx);
   assert.ok(payrollIdx !== -1 && payrollEnd > payrollIdx);
   const payrollBody = accountingCtxSrc.slice(payrollIdx, payrollEnd);
-  assert.match(payrollBody, /Number\\.isSafeInteger\\(totalExpense\\)/);
+  assert.match(payrollBody, /Number\.isSafeInteger\(totalExpense\)/);
   assert.match(payrollBody, /totalExpense !== totalNet \+ totalInsurance \+ totalTax/);
   assert.match(payrollBody, /ماه حقوق باید یک عنوان معتبر/);
 
