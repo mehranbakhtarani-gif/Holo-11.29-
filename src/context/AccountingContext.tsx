@@ -4946,41 +4946,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           unit: profile.currencyUnit,
         });
       } else {
-        const assetUpdates: { id: string; accumulatedDepreciation: number }[] = [];
-        let totalDep = 0;
-        for (const asset of assets) {
-          const dep = calculateMonthlyDepreciation(asset);
-          if (!Number.isFinite(dep) || dep < 0) {
-            throw new Error(`محاسبه استهلاک دارایی ${asset.assetCode} نامعتبر است.`);
-          }
-          if (dep > 0) {
-            const nextAccum = asset.accumulatedDepreciation + dep;
-            if (nextAccum > asset.purchaseCost - asset.salvageValue) {
-              throw new Error(`استهلاک انباشته دارایی ${asset.assetCode} از مبلغ استهلاک‌پذیر بیشتر می‌شود.`);
-            }
-            totalDep += dep;
-            assetUpdates.push({ id: asset.id, accumulatedDepreciation: nextAccum });
-          }
-        }
-        if (totalDep <= 0) {
-          showToast('دارایی قابل استهلاک برای این دوره وجود ندارد.');
-          return;
-        }
-        await createVoucher({
-          date,
-          description,
-          voucherType: 'depreciation',
-          status: 'permanent',
-          referenceId: depreciationReferenceId,
-          lines: buildLines(totalDep),
-        });
-        const updated = new Map(assetUpdates.map((item) => [item.id, item.accumulatedDepreciation]));
-        setAssets((prev) =>
-          prev.map((asset) =>
-            updated.has(asset.id)
-              ? { ...asset, accumulatedDepreciation: updated.get(asset.id)! }
-              : asset
-          )
+        // The offline path must not create a ledger voucher and then rely on a
+        // later React persistence effect to save asset balances. Until both
+        // writes are committed in one IndexedDB transaction, fail closed.
+        throw new Error(
+          'ثبت استهلاک در حالت آفلاین موقتاً متوقف است؛ برای جلوگیری از ثبت سند بدون به‌روزرسانی اتمیک دارایی‌ها، اتصال اینترنت لازم است.'
         );
       }
       showToast(`سند استهلاک دوره «${periodLabel}» با ثبت اتمیک دارایی‌ها و سند حسابداری صادر شد.`, 'success');
