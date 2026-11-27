@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { commitInvoiceOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
+import { commitChequeStatusOperationalTx, commitInvoiceOperationalTx, commitStockAdjustmentOperationalTx } from '../src/lib/operationalDb';
 import type { Cheque, Invoice, Product, Voucher } from '../src/types/accounting';
 
 /**
@@ -457,6 +457,43 @@ async function runTests() {
   );
   assert.equal(stockSim.stores.products.get('prod_1').stock, 8, 'Invalid voucher must not change stock');
   console.log('✓ 2b. Invalid stock voucher is rejected before any write');
+
+  const transitionedCheque = { ...cheque, status: 'endorsed' as const };
+  const chequeVoucher: Voucher = { ...balancedVoucher, id: 'vch_cheque_transition' };
+  const chequeTxSim = createTransactionalIdbSimulator({
+    cheques: [cheque],
+    meta: [{ key: 'workspace_meta', localRevision: 30 }],
+  });
+  const chequeTransitionOk = await commitChequeStatusOperationalTx(
+    { cheque: transitionedCheque, voucher: chequeVoucher },
+    { dbOverride: chequeTxSim.db }
+  );
+  assert.equal(chequeTransitionOk, true);
+  assert.equal(chequeTxSim.stores.cheques.get('chq_1').status, 'endorsed');
+  assert.equal(chequeTxSim.stores.vouchers.get('vch_cheque_transition').id, 'vch_cheque_transition');
+  assert.equal(chequeTxSim.stores.meta.get('workspace_meta').localRevision, 31);
+  console.log('✓ 2c. Cheque status and permanent ledger voucher commit atomically');
+
+  const chequeRollbackSim = createTransactionalIdbSimulator({
+    cheques: [cheque],
+    meta: [{ key: 'workspace_meta', localRevision: 40 }],
+  });
+  chequeRollbackSim.setFailure({
+    failOnStore: 'vouchers',
+    failMode: 'async_error',
+    errorMessage: 'ConstraintError: cheque transition voucher rejected',
+  });
+  await assert.rejects(
+    () => commitChequeStatusOperationalTx(
+      { cheque: transitionedCheque, voucher: chequeVoucher },
+      { dbOverride: chequeRollbackSim.db }
+    ),
+    /cheque transition voucher rejected/
+  );
+  assert.equal(chequeRollbackSim.stores.cheques.get('chq_1').status, cheque.status);
+  assert.equal(chequeRollbackSim.stores.vouchers.size, 0);
+  assert.equal(chequeRollbackSim.stores.meta.get('workspace_meta').localRevision, 40);
+  console.log('✓ 2d. Failed cheque voucher write rolls back the status transition');
 
   const invalidInvoiceVoucher: Voucher = {
     ...balancedVoucher,
