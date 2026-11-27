@@ -4845,24 +4845,47 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               throw new Error(`دارایی ${assets[index].id} در فضای ابری پیدا نشد؛ ثبت استهلاک متوقف شد.`);
             }
             const live = assetSnap.data();
+            if (live.ownerId !== ownerId) {
+              throw new Error(`مالکیت دارایی ${assets[index].assetCode} با فضای کاری فعلی مطابقت ندارد.`);
+            }
             const liveAsset: FixedAsset = {
               ...assets[index],
               purchaseCost: Number(live.purchaseCost),
               salvageValue: Number(live.salvageValue),
               usefulLifeYears: Number(live.usefulLifeYears),
-              accumulatedDepreciation: Number(live.accumulatedDepreciation) || 0,
+              accumulatedDepreciation: Number(live.accumulatedDepreciation ?? 0),
               purchaseDate: String(live.purchaseDate || assets[index].purchaseDate),
             };
+            if (
+              !Number.isSafeInteger(liveAsset.purchaseCost) ||
+              liveAsset.purchaseCost <= 0 ||
+              !Number.isSafeInteger(liveAsset.salvageValue) ||
+              liveAsset.salvageValue < 0 ||
+              liveAsset.salvageValue > liveAsset.purchaseCost ||
+              !Number.isFinite(liveAsset.usefulLifeYears) ||
+              liveAsset.usefulLifeYears <= 0 ||
+              !Number.isSafeInteger(liveAsset.accumulatedDepreciation) ||
+              liveAsset.accumulatedDepreciation < 0 ||
+              liveAsset.accumulatedDepreciation > liveAsset.purchaseCost - liveAsset.salvageValue
+            ) {
+              throw new Error(`اطلاعات مبنای استهلاک دارایی ${liveAsset.assetCode} نامعتبر است.`);
+            }
             const dep = calculateMonthlyDepreciation(liveAsset);
-            if (!Number.isFinite(dep) || dep < 0) {
+            if (!Number.isSafeInteger(dep) || dep < 0) {
               throw new Error(`محاسبه استهلاک دارایی ${liveAsset.assetCode} نامعتبر است.`);
             }
             if (dep > 0) {
               const nextAccum = liveAsset.accumulatedDepreciation + dep;
-              if (nextAccum > liveAsset.purchaseCost - liveAsset.salvageValue) {
+              if (
+                !Number.isSafeInteger(nextAccum) ||
+                nextAccum > liveAsset.purchaseCost - liveAsset.salvageValue
+              ) {
                 throw new Error(`استهلاک انباشته دارایی ${liveAsset.assetCode} از مبلغ استهلاک‌پذیر بیشتر می‌شود.`);
               }
               totalDep += dep;
+              if (!Number.isSafeInteger(totalDep)) {
+                throw new Error('جمع استهلاک دوره از محدوده امن اعداد صحیح خارج شده است.');
+              }
               assetUpdates.push({ id: liveAsset.id, accumulatedDepreciation: nextAccum });
             }
           });
