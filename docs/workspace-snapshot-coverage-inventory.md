@@ -159,3 +159,21 @@ The complete-backup package was hardened after review: schema 2 encrypts the acc
 The schema-2 manual complete-backup export now also reads the operational IndexedDB snapshot and includes `warehouses`, `taxReports`, `localProfiles`, `syncOutbox`, `syncInbox`, and `localRevision`; the base accounting export already includes bank-reconciliation decisions, which are now validated and restored as part of the journaled workspace apply. These additions do not yet cover the separate WorkspaceExtensions aggregate localStorage dataset or all smart-intelligence duplicate keys; that remains a known coverage gap.
 
 Document Vault envelope payloads now also include a SHA-256 binding of the public attachment metadata (entity type/id, label, filename, MIME, size, content digest, sensitivity, uploader/role, timestamp and notes). Retrieval and export verify this binding; legacy encrypted rows are re-encrypted with the binding only after their content is authenticated. New attachment bundles use schema 2. Restoring a schema-1 attachment bundle requires explicit user confirmation because its public metadata was not cryptographically bound to the encrypted file bytes; the staging path upgrades accepted legacy rows before they enter the live vault.
+
+
+## Allowlisted legacy business-state snapshot integration
+
+The schema-2 encrypted workspace payload now carries a versioned `businessLocalState` section (schema 1) containing the explicit allowlist below. The snapshot preserves raw serialized values to avoid lossy re-serialization and validates each dataset before export and before restore:
+
+- Workspace extensions aggregate and the three smart-intelligence duplicate stores (reserved invoices, product metadata, favorites).
+- Custom voucher templates and their usage map.
+- Bank reconciliation sessions and reviewed decisions.
+- Tracked warehouse transfers, including FIFO layer payloads and in-transit status.
+- Invoice print settings, including the embedded logo data URL and company print configuration.
+- Conflict resolution defaults/policy, local sync outbox diagnostics, and Supabase revision/last-sync/workspace locator/auto-backup metadata.
+
+Restore applies the complete allowlisted set only after the encrypted workspace envelope and journal metadata have been authenticated. The durable commit-intent journal remains active while localStorage keys are replaced. Writes are deliberately replayable: if a browser exits part-way through the key set, the next recovery repeats the entire validated set before normal application hydration. Storage write errors are not swallowed. Legacy schema-2 packages without `businessLocalState` retain their previous compatibility behavior; their existing bank reconciliation field is still imported through the legacy path.
+
+The allowlist excludes credentials, PIN hashes, mesh secrets, device identity, presence heartbeats, UI theme/dashboard preferences, and transient in-memory conflict dialogs. Conflict policy and revision cursors are backed up as configuration/diagnostics only; they are not authority to overwrite newer server state. Sync cursors must be revalidated against the remote service after restore.
+
+Current boundary: the live application still uses legacy localStorage APIs for these datasets. This change closes complete manual-backup export and journaled restore coverage, but does not claim that all live writers have migrated to an encrypted IndexedDB repository or that Firestore extension synchronization has gained compare-and-swap semantics. Those remain explicit phase-4 release gates.

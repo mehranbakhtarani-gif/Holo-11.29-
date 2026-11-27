@@ -10,6 +10,12 @@ import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offline
 import { requireBackupSessionPassphrase } from './backupSession';
 import { importAllBankReconciliationSessions } from './bankReconciliationEngine';
 import {
+  countBusinessLocalStateSnapshotRecords,
+  restoreBusinessLocalStateSnapshot,
+  validateBusinessLocalStateSnapshot,
+  type BusinessLocalStateSnapshot,
+} from './businessLocalStateSnapshot';
+import {
   Account,
   AuditActivityLog,
   Cheque,
@@ -110,6 +116,7 @@ export interface OperationalWorkspaceData {
   localRevision?: number;
   updatedAt?: string;
   bankReconciliationSessions?: Record<string, unknown>;
+  businessLocalState?: BusinessLocalStateSnapshot;
 }
 
 export interface SyncOutboxOperation {
@@ -375,7 +382,12 @@ export async function applyOperationalRestoreJournalWorkspace(
     if (recordCount !== journal.workspaceRecordCount) {
       throw new Error('تعداد رکوردهای فضای کاری با ژورنال بازیابی مطابقت ندارد.');
     }
-    if (workspace.bankReconciliationSessions !== undefined) {
+    if (workspace.businessLocalState) {
+      // The commit-intent journal is durable before this replayable localStorage apply.
+      // If the browser stops mid-write, recovery repeats the complete allowlisted set.
+      restoreBusinessLocalStateSnapshot(workspace.businessLocalState);
+    }
+    if (!workspace.businessLocalState && workspace.bankReconciliationSessions !== undefined) {
       const sessions = workspace.bankReconciliationSessions;
       if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) {
         throw new Error('ساختار تطبیق بانکی در فضای کاری بازیابی معتبر نیست.');
@@ -1300,7 +1312,8 @@ export function countOperationalWorkspaceRecords(workspace: OperationalWorkspace
   if (!collections.every(Array.isArray)) {
     throw new Error('ساختار مجموعه رکوردهای فضای کاری معتبر نیست.');
   }
-  const total = collections.reduce((sum, rows) => sum + rows.length, 0);
+  const total = collections.reduce((sum, rows) => sum + rows.length, 0) +
+    (workspace.businessLocalState ? countBusinessLocalStateSnapshotRecords(workspace.businessLocalState) : 0);
   if (!Number.isSafeInteger(total) || total < 0) {
     throw new Error('تعداد رکوردهای فضای کاری خارج از محدوده مجاز است.');
   }
@@ -1334,7 +1347,11 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
     (parsed.taxReports !== undefined && !Array.isArray(parsed.taxReports)) ||
     (parsed.localProfiles !== undefined && !Array.isArray(parsed.localProfiles)) ||
     (parsed.syncOutbox !== undefined && !Array.isArray(parsed.syncOutbox)) ||
-    (parsed.syncInbox !== undefined && !Array.isArray(parsed.syncInbox))
+    (parsed.syncInbox !== undefined && !Array.isArray(parsed.syncInbox)) ||
+    (parsed.businessLocalState !== undefined && (() => {
+      try { validateBusinessLocalStateSnapshot(parsed.businessLocalState); return false; }
+      catch { return true; }
+    })())
   ) {
     throw new Error('ساختار فضای کاری رمزگذاری‌شده ناقص یا ناسازگار است.');
   }

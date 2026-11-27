@@ -56,6 +56,7 @@ import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
 import { requireBackupSessionPassphrase } from '../lib/backupSession';
 import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
 import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, loadOperationalWorkspace, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
+import { captureBusinessLocalStateSnapshot } from '../lib/businessLocalStateSnapshot';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -524,6 +525,7 @@ export const SettingsView: React.FC<{
         syncOutbox: operationalWorkspace?.syncOutbox ?? [],
         syncInbox: operationalWorkspace?.syncInbox ?? [],
         localRevision: operationalWorkspace?.localRevision ?? 1,
+        businessLocalState: captureBusinessLocalStateSnapshot(),
       }, null, 2);
       if (new Blob([workspaceJson]).size > 8_000_000) {
         showToast('حجم اطلاعات حسابداری از سقف ۸ مگابایت مسیر بازیابی فعلی بیشتر است؛ خروجی یکپارچه متوقف شد.', 'error');

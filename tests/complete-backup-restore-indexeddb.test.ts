@@ -3,6 +3,13 @@ import 'fake-indexeddb/auto';
 import { webcrypto } from 'node:crypto';
 
 const indexedDb = globalThis.indexedDB;
+const localStorageValues = new Map<string, string>();
+const localStorageMock = {
+  getItem: (key: string) => localStorageValues.get(key) ?? null,
+  setItem: (key: string, value: string) => { localStorageValues.set(key, String(value)); },
+  removeItem: (key: string) => { localStorageValues.delete(key); },
+  clear: () => localStorageValues.clear(),
+};
 Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
@@ -17,6 +24,7 @@ Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: {
     indexedDB,
+    localStorage: localStorageMock,
     crypto: webcrypto,
     location: { reload: () => undefined },
     dispatchEvent: () => true,
@@ -140,6 +148,31 @@ async function run() {
     syncOutbox: [],
     syncInbox: [],
     localRevision: 8,
+    businessLocalState: {
+      schemaVersion: 1,
+      capturedAt: new Date().toISOString(),
+      stores: {
+        holoo_apex_voucher_templates_v1: JSON.stringify([{
+          id: 'custom-template-1', name: 'Template', lines: [{ accountCode: '101', side: 'debit' }],
+        }]),
+        holoo_apex_invoice_settings_v1: JSON.stringify({ template: 'modern_textile', logoDataUrl: 'data:image/png;base64,QQ==' }),
+        holoo_apex_warehouse_transfers_v1: JSON.stringify([{
+          id: 'transfer-1', productId: 'product-1', fromWarehouse: 'A', toWarehouse: 'B',
+          qty: 2, status: 'in_transit',
+        }]),
+        holoo_apex_bank_recon_sessions_v1: JSON.stringify({
+          '10201': {
+            'statement-row-1': {
+              statementRowId: 'statement-row-1', reviewStatus: 'confirmed',
+              reviewedBy: 'test', reviewedAt: new Date().toISOString(),
+            },
+          },
+        }),
+        holoo_apex_sync_conflict_default_v1: 'ask',
+        holoo_apex_conflict_policy_v1: 'last_write_wins',
+        holoo_apex_supabase_revision_v1: '17',
+      },
+    },
   };
   const workspaceEnvelope = await encryptBackupEnvelope(JSON.stringify(workspace), passphrase);
   const documentAttachments = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as {
@@ -224,6 +257,18 @@ async function run() {
   assert.equal(resumed.restoredWorkspaceRecords, interrupted.workspaceRecordCount);
   assert.equal(await getActiveOperationalRestoreJournal(), null, 'successful recovery must close the journal');
   assert.equal(await countLiveAttachments(), 1, 'retry must atomically replace the live set with the one snapshotted attachment');
+  assert.equal(localStorageValues.get('holoo_apex_voucher_templates_v1'), workspace.businessLocalState.stores.holoo_apex_voucher_templates_v1,
+    'custom voucher templates must be replayed from the encrypted restore journal');
+  assert.equal(localStorageValues.get('holoo_apex_invoice_settings_v1'), workspace.businessLocalState.stores.holoo_apex_invoice_settings_v1,
+    'invoice print settings and embedded logo must be restored');
+  assert.equal(localStorageValues.get('holoo_apex_warehouse_transfers_v1'), workspace.businessLocalState.stores.holoo_apex_warehouse_transfers_v1,
+    'tracked warehouse transfers and in-transit state must be restored');
+  assert.equal(localStorageValues.get('holoo_apex_bank_recon_sessions_v1'), workspace.businessLocalState.stores.holoo_apex_bank_recon_sessions_v1,
+    'bank reconciliation decisions must be restored');
+  assert.equal(localStorageValues.get('holoo_apex_sync_conflict_default_v1'), 'ask',
+    'the local conflict-resolution mode must be restored');
+  assert.equal(localStorageValues.get('holoo_apex_supabase_revision_v1'), '17',
+    'sync revision metadata must be restored as non-authoritative state');
   assert.equal(isOperationalRestoreBarrierActive(), true,
     'the restored tab remains blocked until reload hydrates the committed workspace');
 
