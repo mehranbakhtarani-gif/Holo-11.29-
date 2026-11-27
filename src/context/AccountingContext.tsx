@@ -2725,36 +2725,113 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return;
       }
 
-      // Stable transition reference makes retries idempotent: if voucher posting succeeded
-      // but the cheque write failed, a retry reuses the existing transition instead of
-      // creating a second permanent voucher.
+      // Commit the cheque transition and its permanent voucher in one Firestore transaction.
+      // A deterministic voucher document ID makes retries idempotent even after a lost response.
       const transitionReferenceId = `cheque-transition:${chequeId}:${newStatus}`;
-      const transitionVoucherExists = vouchers.some(
-        (voucher) => voucher.referenceId === transitionReferenceId && !voucher.reversalOfVoucherId
-      );
-      if (plan.lines.length >= 2 && !transitionVoucherExists) {
-        await createVoucher({
+      const transitionVoucherId = `chqtx_${sha256HexSync(transitionReferenceId).slice(0, 32)}`;
+      const chequeRef = doc(db, 'cheques', chequeId);
+      const transitionVoucherRef = doc(db, 'vouchers', transitionVoucherId);
+      const counterRef = user ? doc(db, 'counters', user.uid) : null;
+
+      let transitionVoucher: Omit<Voucher, 'id'> | null = null;
+      if (plan.lines.length >= 2) {
+        const validation = validateVoucherPayload({
+          payload: {
+            date: getTodayShamsi(),
+            description: plan.description,
+            voucherType: 'treasury',
+            status: 'permanent',
+            lines: plan.lines,
+            referenceId: transitionReferenceId,
+            allowDuplicate: true,
+          },
+          accounts,
+          parties,
+          existingVouchers: vouchers,
+          closedFiscalYears: profile.closedFiscalYears,
+          allowDuplicate: true,
+        });
+        if (!validation.valid) {
+          throw new Error(validation.errors[0] || 'سند حسابداری تغییر وضعیت چک معتبر نیست.');
+        }
+        const { sanitizedLines, totalDebit, totalCredit, fiscalYear } = validation;
+        transitionVoucher = {
+          ownerId,
+          voucherNumber: 0,
           date: getTodayShamsi(),
-          description: plan.description,
+          fiscalYear,
+          description: plan.description.trim().slice(0, 300),
           voucherType: 'treasury',
           status: 'permanent',
-          lines: plan.lines,
+          totalDebit,
+          totalCredit,
           referenceId: transitionReferenceId,
-          allowDuplicate: true,
-          internalSystemCall: true,
-        });
+          lines: sanitizedLines.slice(0, 100),
+          _version: 1,
+          updatedByDevice: deviceId,
+        };
       }
 
       if (user) {
-        try {
-          await updateDoc(doc(db, 'cheques', chequeId), {
+        await runTransaction(db, async (tx) => {
+          // All reads happen before writes, as required by Firestore transactions.
+          const liveChequeSnap = await tx.get(chequeRef);
+          const existingVoucherSnap = await tx.get(transitionVoucherRef);
+          const counterSnap = counterRef ? await tx.get(counterRef) : null;
+
+          if (!liveChequeSnap.exists()) {
+            throw new Error('چک موردنظر در سرور پیدا نشد؛ وضعیت تغییر نکرد.');
+          }
+          const liveCheque = liveChequeSnap.data();
+          if (liveCheque.status === newStatus) {
+            // Idempotent retry: the previous transaction already committed.
+            return;
+          }
+          if (liveCheque.status !== chq.status) {
+            throw new Error('وضعیت چک هم‌زمان در دستگاه دیگری تغییر کرده است؛ اطلاعات را تازه‌سازی و دوباره اقدام کنید.');
+          }
+
+          if (transitionVoucher && !existingVoucherSnap.exists()) {
+            const sameYearMax = vouchers
+              .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === transitionVoucher!.fiscalYear)
+              .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
+            const currentMax = counterSnap?.exists()
+              ? Math.max(Number(counterSnap.data().lastVoucherNumber) || 0, sameYearMax)
+              : sameYearMax;
+            const nextNumber = currentMax + 1;
+            const voucherBase = { ...transitionVoucher, voucherNumber: nextNumber };
+            const voucherHash = computeVoucherIntegrityHash(voucherBase as Voucher);
+            tx.set(transitionVoucherRef, {
+              ...voucherBase,
+              integrityHash: voucherHash,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            if (counterRef) {
+              if (counterSnap?.exists()) {
+                tx.update(counterRef, {
+                  lastVoucherNumber: nextNumber,
+                  updatedByDevice: deviceId.slice(0, 64),
+                  updatedAt: serverTimestamp(),
+                });
+              } else {
+                tx.set(counterRef, {
+                  ownerId: user.uid,
+                  lastVoucherNumber: nextNumber,
+                  lastInvoiceSeq: 102,
+                  updatedByDevice: deviceId.slice(0, 64),
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                });
+              }
+            }
+          }
+
+          tx.update(chequeRef, {
             status: newStatus,
             updatedAt: serverTimestamp(),
           });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `cheques/${chequeId}`);
-          throw err;
-        }
+        });
       } else {
         setCheques((prev) =>
           prev.map((c) => (c.id === chequeId ? { ...c, status: newStatus } : c))
@@ -2765,7 +2842,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         showToast(plan.description || 'وضعیت چک صیادی به‌روزرسانی شد.');
       }
     },
-    [cheques, vouchers, accounts, parties, user, createVoucher, showToast, assertPermission]
+    [cheques, vouchers, accounts, parties, profile.closedFiscalYears, ownerId, user, deviceId, showToast, assertPermission]
   );
 
   const recordQuickTreasury = useCallback(
