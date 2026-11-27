@@ -77,6 +77,20 @@ Do not store a passphrase or encryption key in localStorage, ordinary IndexedDB,
 
 A separate technical gate plan now documents the store inventory, encrypted repository contract, atomic transaction requirements, revision fencing, restore/rollback design, cross-tab coordination, and mandatory release checklist: [operational-db-cutover-plan.md](./operational-db-cutover-plan.md). This is a design and audit artifact only; it does not authorize or enable cutover.
 
+### Newly identified extension data outside the encrypted shadow (2026-11-28)
+
+The application data inventory extends beyond the IndexedDB operational stores. `WorkspaceExtensionsContext` persists business-critical state under the localStorage key `holoo_apex96_workspace_extensions_v2`, including reserved invoices, product metadata, petty cash, recurring voucher templates, bank loans, dye lots, warehouse slips, BOM formulas, installment plans, volume-discount rules, Moadian invoice links, and fiscal archives. Selected extension state is also patched to the Firestore `workspaceExtensions` document.
+
+This state is not included by `loadOperationalWorkspace()` or the current `secureWorkspace` encrypted shadow. Consequently, the shadow is not a complete application/workspace backup and is not eligible for cutover.
+
+Required work before cutover:
+- Define a typed, versioned extension snapshot contract covering every `WorkspaceExtensionsState` field and separate smart-intelligence persistence helpers.
+- Include extension state in the encrypted staging payload and bind its revision to the same migration generation as accounting data.
+- Surface localStorage quota/write failures for business-critical extension state instead of silently swallowing them.
+- Define explicit cloud/local restore and conflict semantics for `workspaceExtensions`; do not use blind last-write-wins.
+- Add round-trip, malformed/missing-field, stale-revision, interrupted-write, and restore-atomicity tests.
+- Retain legacy localStorage values until an authenticated encrypted replacement has been verified.
+
 ### Encrypted operational shadow mirror (2026-11-27)
 
 - When the session backup vault is unlocked, the application now schedules a debounced encrypted shadow snapshot after operational workspace changes.
