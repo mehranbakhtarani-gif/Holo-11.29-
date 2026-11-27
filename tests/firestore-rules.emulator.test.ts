@@ -168,7 +168,7 @@ async function run() {
       ownerId: 'company_a',
     }));
 
-    console.log('Firestore Emulator security tests: 11 passed, 0 failed');
+    console.log('Firestore Emulator security tests: 12 passed, 0 failed');
   } finally {
     await testEnv.cleanup();
   }
