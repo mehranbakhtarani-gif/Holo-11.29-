@@ -312,6 +312,7 @@ export function useLocalFirstMeshSync() {
   // ---- Helper: Mirror snapshot into selected local folder ----
   const writeSnapshotToLocalFolder = useCallback(
     async (taggedJson: string, payloadHash: string, enqueueOnPrompt = true): Promise<boolean> => {
+      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return false;
       const handle = dirHandleRef.current;
       if (!handle) return false;
       const result = await writeMirrorToSelectedFolder(handle, taggedJson);
@@ -1023,6 +1024,10 @@ export function useLocalFirstMeshSync() {
         readRes.snapshotJson,
         activeDeviceIdentity
       );
+      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) {
+        showToast('بازیابی از پوشه محلی به‌دلیل شروع بازیابی پشتیبان دیگر متوقف شد.');
+        return false;
+      }
 
       isRemoteUpdateRef.current = true;
       try {
@@ -1270,6 +1275,10 @@ export function useLocalFirstMeshSync() {
       choice: SyncConflictResolutionChoice,
       rememberAsDefault: boolean
     ): Promise<boolean> => {
+      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) {
+        showToast('حل تعارض P2P تا پایان بازیابی پشتیبان متوقف است.');
+        return false;
+      }
       if (!pendingMeshConflict) return false;
       setIsResolvingMeshConflict(true);
       try {
