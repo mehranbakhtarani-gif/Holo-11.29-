@@ -5158,7 +5158,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         referenceId: string,
         voucherId: string,
         voucherType: 'closing' | 'opening'
-      ): Promise<boolean> => {
+      ): Promise<Voucher | null> => {
         const localMatch = vouchers.find(
           (v) =>
             v.referenceId === referenceId &&
@@ -5166,31 +5166,38 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             v.status === 'permanent' &&
             v.ownerId === ownerId
         );
-        if (localMatch) return true;
-        if (!user) return false;
+        if (localMatch) return localMatch;
+        if (!user) return null;
         const snapshot = await getDoc(doc(db, 'vouchers', voucherId));
-        if (!snapshot.exists()) return false;
+        if (!snapshot.exists()) return null;
         const persisted = snapshot.data();
         if (
           persisted.ownerId !== ownerId ||
           persisted.referenceId !== referenceId ||
           persisted.voucherType !== voucherType ||
-          persisted.status !== 'permanent'
+          persisted.status !== 'permanent' ||
+          !Number.isSafeInteger(persisted.voucherNumber) ||
+          !Number.isSafeInteger(persisted.totalDebit) ||
+          persisted.totalDebit <= 0 ||
+          persisted.totalDebit !== persisted.totalCredit ||
+          !Array.isArray(persisted.lines)
         ) {
-          throw new Error(`شناسه سند ${voucherType} پایان سال با اطلاعات دیگری اشغال شده است؛ عملیات متوقف شد.`);
+          throw new Error(`سند ${voucherType} پایان سال موجود ناقص یا با اطلاعات دیگری ثبت شده است؛ عملیات متوقف شد.`);
         }
-        return true;
+        return { ...persisted, id: voucherId } as Voucher;
       };
-      const existingClosing = await findPersistedYearEndVoucher(
+      const existingClosingVoucher = await findPersistedYearEndVoucher(
         closingReferenceId,
         closingVoucherId,
         'closing'
       );
-      const existingOpening = await findPersistedYearEndVoucher(
+      const existingOpeningVoucher = await findPersistedYearEndVoucher(
         openingReferenceId,
         openingVoucherId,
         'opening'
       );
+      const existingClosing = Boolean(existingClosingVoucher);
+      const existingOpening = Boolean(existingOpeningVoucher);
       // Never derive a missing opening voucher from a newly recalculated close plan:
       // new postings may have occurred after the original closing voucher committed.
       if (existingClosing && options?.createNextYearOpening && !existingOpening) {
@@ -5210,6 +5217,19 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy
           )
       );
+      if (
+        existingClosingVoucher &&
+        planningVouchers.some(
+          (v) =>
+            (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy &&
+            v.status === 'permanent' &&
+            Number(v.voucherNumber || 0) > existingClosingVoucher.voucherNumber
+        )
+      ) {
+        throw new Error(
+          'پس از سند اختتامیه موجود، اسناد دائم دیگری در همان سال ثبت شده‌اند؛ قفل سال مالی تا زمان اصلاح و تطبیق اختتامیه متوقف شد.'
+        );
+      }
       const sameYearMax = planningVouchers
         .filter((v) => (v.fiscalYear || extractFiscalYearFromDate(v.date)) === fy)
         .reduce((max, v) => Math.max(max, v.voucherNumber || 0), 0);
