@@ -623,47 +623,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, []);
 
   // Atomic multi-device sequential counter using Firestore Transaction so 3 simultaneous devices never collide
-  const reserveNextVoucherNumber = useCallback(
-    async (fallbackMax: number): Promise<number> => {
-      if (!user) return fallbackMax + 1;
-      const counterRef = doc(db, 'counters', user.uid);
-      try {
-        const reserved = await runTransaction(db, async (tx) => {
-          const snap = await tx.get(counterRef);
-          const currentMax = snap.exists()
-            ? Math.max(Number(snap.data().lastVoucherNumber) || 0, fallbackMax)
-            : fallbackMax;
-          const nextNum = currentMax + 1;
-          if (!snap.exists()) {
-            tx.set(counterRef, {
-              ownerId: user.uid,
-              lastVoucherNumber: nextNum,
-              lastInvoiceSeq: 102,
-              updatedByDevice: deviceId.slice(0, 64),
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          } else {
-            tx.update(counterRef, {
-              lastVoucherNumber: nextNum,
-              updatedByDevice: deviceId.slice(0, 64),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          return nextNum;
-        });
-        return reserved;
-      } catch (err) {
-        if (isFirestoreOfflineError(err)) {
-          return fallbackMax + 1;
-        }
-        handleFirestoreError(err, OperationType.UPDATE, `counters/${user.uid}`);
-        throw err;
-      }
-    },
-    [user, deviceId]
-  );
-
   const ensureCloudSeed = useCallback(
     async (firebaseUser: User) => {
       const uid = firebaseUser.uid;
@@ -1631,7 +1590,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       ownerId,
       user,
       deviceId,
-      reserveNextVoucherNumber,
       showToast,
       assertPermission,
     ]
