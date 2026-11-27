@@ -458,6 +458,58 @@ async function runTests() {
   assert.equal(stockSim.stores.products.get('prod_1').stock, 8, 'Invalid voucher must not change stock');
   console.log('✓ 2b. Invalid stock voucher is rejected before any write');
 
+  const invalidInvoiceVoucher: Voucher = {
+    ...balancedVoucher,
+    id: 'vch_negative_invoice',
+    lines: [
+      { accountCode: '10301', accountTitle: 'دریافتنی', description: 'منفی', debit: -50_000_000, credit: 0 },
+      { accountCode: '40101', accountTitle: 'فروش', description: 'منفی', debit: 0, credit: -50_000_000 },
+    ],
+  };
+  const invalidInvoiceSim = createTransactionalIdbSimulator({
+    products: [initialProduct],
+    meta: [{ key: 'workspace_meta', localRevision: 4 }],
+  });
+  await assert.rejects(
+    () => commitInvoiceOperationalTx(
+      { updatedProducts: [updatedProduct], voucher: invalidInvoiceVoucher, invoice },
+      { dbOverride: invalidInvoiceSim.db }
+    ),
+    /ATOMIC_ROLLBACK_INVALID_VOUCHER_LINE/
+  );
+  assert.equal(invalidInvoiceSim.stores.products.get('prod_1').stock, 10);
+  assert.equal(invalidInvoiceSim.stores.vouchers.size, 0);
+  assert.equal(invalidInvoiceSim.stores.invoices.size, 0);
+  assert.equal(invalidInvoiceSim.stores.meta.get('workspace_meta').localRevision, 4);
+  console.log('✓ 2c. Invoice rejects negative ledger lines before any inventory or document write');
+
+  const duplicateProductSim = createTransactionalIdbSimulator({ products: [initialProduct] });
+  await assert.rejects(
+    () => commitInvoiceOperationalTx(
+      { updatedProducts: [updatedProduct, updatedProduct], invoice },
+      { dbOverride: duplicateProductSim.db }
+    ),
+    /ATOMIC_ROLLBACK_INVALID_PRODUCT/
+  );
+  assert.equal(duplicateProductSim.stores.products.get('prod_1').stock, 10);
+  assert.equal(duplicateProductSim.stores.invoices.size, 0);
+  console.log('✓ 2d. Invoice rejects duplicate product mutations before writes');
+
+  const overflowRevisionSim = createTransactionalIdbSimulator({
+    products: [initialProduct],
+    meta: [{ key: 'workspace_meta', localRevision: Number.MAX_SAFE_INTEGER }],
+  });
+  await assert.rejects(
+    () => commitInvoiceOperationalTx(
+      { updatedProducts: [updatedProduct], invoice },
+      { dbOverride: overflowRevisionSim.db }
+    ),
+    /ATOMIC_ROLLBACK_INVALID_REVISION/
+  );
+  assert.equal(overflowRevisionSim.stores.products.get('prod_1').stock, 10);
+  assert.equal(overflowRevisionSim.stores.invoices.size, 0);
+  console.log('✓ 2e. Invoice rejects unsafe workspace revision without partial writes');
+
   const sim = createTransactionalIdbSimulator({ products: [initialProduct] });
 
   const okCreate = await commitInvoiceOperationalTx(
