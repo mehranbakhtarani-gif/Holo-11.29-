@@ -12,8 +12,8 @@ import {
 
 async function run() {
   const workspace = {
-    profile: { uid: 'workspace-1', companyName: 'Migration Test', fiscalYear: '1405' },
-    accounts: [{ id: 'a1', accountCode: '101', title: 'Cash' }],
+    profile: { uid: 'workspace-1', displayName: 'Migration Test', companyName: 'Migration Test', fiscalYear: '1405', currencyUnit: 'IRR' as const, role: 'accountant' as const },
+    accounts: [{ id: 'a1', ownerId: 'workspace-1', code: '101', title: 'Cash', level: 'kol' as const, category: 'asset' as const, nature: 'debit' as const, isSystem: false }],
     parties: [],
     products: [],
     vouchers: [],
