@@ -111,6 +111,7 @@ export interface EncryptedOperationalWorkspaceRecord {
   envelopeJson: string;
   schemaVersion: number;
   recordCount: number;
+  sourceRevision: number;
   plaintextSha256: string;
   preparedAt: string;
   migrationState: 'prepared';
@@ -691,6 +692,7 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
     envelopeJson: JSON.stringify(envelope),
     schemaVersion: 1,
     recordCount,
+    sourceRevision: Math.max(1, Number(workspace.localRevision) || 1),
     plaintextSha256: envelope.plaintextSha256,
     preparedAt,
     migrationState: 'prepared',
@@ -700,11 +702,38 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
   const db = await openOperationalDb();
   try {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(['secureWorkspace'], 'readwrite');
-      tx.objectStore('secureWorkspace').put(record);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('Encrypted workspace migration write failed.'));
-      tx.onabort = () => reject(tx.error ?? new Error('Encrypted workspace migration write aborted.'));
+      let settled = false;
+      const tx = db.transaction(['meta', 'secureWorkspace'], 'readwrite');
+      const metaReq = tx.objectStore('meta').get('workspace_meta');
+      metaReq.onsuccess = () => {
+        const current = metaReq.result as { localRevision?: number } | undefined;
+        const currentRevision = Math.max(1, Number(current?.localRevision) || 1);
+        if (currentRevision !== record.sourceRevision) {
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+          if (!settled) {
+            settled = true;
+            reject(new Error('داده‌های عملیاتی هنگام آماده‌سازی تغییر کرده‌اند؛ دوباره عملیات مهاجرت را اجرا کنید.'));
+          }
+          return;
+        }
+        tx.objectStore('secureWorkspace').put(record);
+      };
+      metaReq.onerror = () => {
+        if (!settled) {
+          settled = true;
+          reject(metaReq.error ?? new Error('خواندن نسخه عملیاتی برای مهاجرت ناموفق بود.'));
+        }
+        try { tx.abort(); } catch { /* transaction may already be inactive */ }
+      };
+      tx.oncomplete = () => {
+        if (!settled) { settled = true; resolve(); }
+      };
+      tx.onerror = () => {
+        if (!settled) { settled = true; reject(tx.error ?? new Error('Encrypted workspace migration write failed.')); }
+      };
+      tx.onabort = () => {
+        if (!settled) { settled = true; reject(tx.error ?? new Error('Encrypted workspace migration write aborted.')); }
+      };
     });
   } finally {
     db.close();
@@ -714,6 +743,7 @@ export async function prepareEncryptedOperationalWorkspaceMigration(
     workspaceId: record.workspaceId,
     schemaVersion: record.schemaVersion,
     recordCount: record.recordCount,
+    sourceRevision: record.sourceRevision,
     plaintextSha256: record.plaintextSha256,
     preparedAt: record.preparedAt,
     migrationState: record.migrationState,
@@ -738,6 +768,11 @@ export async function loadPreparedEncryptedOperationalWorkspace(
     db.close();
   }
   if (!record || record.migrationState !== 'prepared' || typeof record.envelopeJson !== 'string') return null;
+
+  const currentMeta = await getOperationalDbStats();
+  if (currentMeta.localRevision !== record.sourceRevision) {
+    throw new Error('نسخه رمزگذاری‌شده آماده‌شده قدیمی است و با داده عملیاتی فعلی تطابق ندارد.');
+  }
 
   const result = await decryptAndVerifyBackupEnvelope(
     record.envelopeJson,
@@ -769,6 +804,7 @@ export async function getPreparedEncryptedOperationalWorkspaceMeta(
           workspaceId: row.workspaceId,
           schemaVersion: row.schemaVersion,
           recordCount: row.recordCount,
+          sourceRevision: row.sourceRevision,
           plaintextSha256: row.plaintextSha256,
           preparedAt: row.preparedAt,
           migrationState: row.migrationState,
