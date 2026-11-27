@@ -26,6 +26,7 @@ import {
   OperationType,
 } from '../lib/firebase';
 import { useAccounting } from './AccountingContext';
+import { isOperationalRestoreBarrierActive } from '../lib/operationalDb';
 import {
   BankLoan,
   BomFormula,
@@ -180,6 +181,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   // Seed default dye-lots once from existing products if user has none yet
   useEffect(() => {
+    if (isOperationalRestoreBarrierActive()) return;
     if (stateRef.current.dyeLots.length === 0 && products.length > 0) {
       const seededLots: YarnDyeLot[] = products
         .filter((p) => p.lotNumber && p.stock > 0)
@@ -207,6 +209,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   // Persist local mirror whenever state changes
   const persistLocalMirror = useCallback((next: WorkspaceExtensionsState) => {
+    if (isOperationalRestoreBarrierActive()) return;
     try {
       localStorage.setItem(LOCAL_EXT_STORAGE_KEY, JSON.stringify(next));
       saveReservedInvoices(next.reservedInvoices);
@@ -222,7 +225,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   // Push cloud patch safely matching firestore.rules bounds
   const pushToCloud = useCallback(
     async (next: WorkspaceExtensionsState) => {
-      if (!isCloudMode || !user?.uid) return;
+      if (isOperationalRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
       const docRef = doc(db, 'workspaceExtensions', user.uid);
       const bounded = stripUndefinedDeep({
         reservedInvoices: next.reservedInvoices.slice(0, 50),
@@ -287,6 +290,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     const unsub = onSnapshot(
       docRef,
       (snap) => {
+        if (isOperationalRestoreBarrierActive()) return;
         if (!snap.exists()) {
           hasCloudExtDocRef.current = false;
           // Bootstrap cloud extensions from current local workspace
@@ -299,6 +303,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
           versionRef.current = Math.max(versionRef.current, data._version);
         }
         setState((prev) => {
+          if (isOperationalRestoreBarrierActive()) return prev;
           const merged: WorkspaceExtensionsState = {
             reservedInvoices: Array.isArray(data.reservedInvoices)
               ? data.reservedInvoices
@@ -462,6 +467,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   const updateExtensions = useCallback(
     (updater: (prev: WorkspaceExtensionsState) => WorkspaceExtensionsState) => {
       setState((prev) => {
+        if (isOperationalRestoreBarrierActive()) return prev;
         const next = updater(prev);
         persistLocalMirror(next);
         void pushToCloud(next);
