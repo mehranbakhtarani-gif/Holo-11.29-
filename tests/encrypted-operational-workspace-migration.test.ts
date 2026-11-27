@@ -32,7 +32,7 @@ async function run() {
     warehouses: [{ id: 'wh-1', name: 'Main' }],
     taxReports: [{ id: 'tax-1', period: '1405-01' }],
     localProfiles: [{ workspaceId: 'workspace-1', profileId: 'local-1' }],
-    syncOutbox: [{ operationId: 'op-1', target: 'firebase', workspaceId: 'workspace-1', deviceId: 'dev-1', clientRevision: 7, payloadHash: 'abc', createdAt: '2026-11-27T00:00:00.000Z', retryCount: 0, status: 'pending' as const }],
+    syncOutbox: [{ operationId: 'op-1', target: 'firebase' as const, workspaceId: 'workspace-1', deviceId: 'dev-1', clientRevision: 7, payloadHash: 'abc', createdAt: '2026-11-27T00:00:00.000Z', retryCount: 0, status: 'pending' as const }],
     syncInbox: [{ operationId: 'in-1', sourceDeviceId: 'dev-2', payloadHash: 'def', receivedAt: '2026-11-27T00:00:00.000Z' }],
     localRevision: 7,
     updatedAt: '2026-11-27T00:00:00.000Z',
