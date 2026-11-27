@@ -74,6 +74,13 @@ export function mergeWorkspaceExtensionField(
   local: unknown,
   remote: unknown
 ): WorkspaceExtensionMergeResult {
+  const unsafeMapKeys = [base, local, remote]
+    .filter(isRecord)
+    .flatMap((record) => Object.keys(record))
+    .filter((key) => key === '__proto__' || key === 'constructor' || key === 'prototype');
+  if (unsafeMapKeys.length) {
+    return { ok: false, conflicts: [...new Set(unsafeMapKeys)] };
+  }
   if (sameValue(remote, base) || sameValue(local, remote)) {
     return { ok: true, value: local, conflicts: [] };
   }
