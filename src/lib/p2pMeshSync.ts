@@ -1296,8 +1296,9 @@ export class HolooPeerMeshManager {
     if (this.destroyed || !this.peer || this.peer.destroyed || !this.selfOnline) return;
     for (const targetPeerId of getOtherMeshPeerIds(this.myPeerId)) {
       const existing = this.connections.get(targetPeerId);
-      if (existing && existing.open) {
-        void this.sendHello(existing);
+      if (existing) {
+        if (existing.open) void this.sendHello(existing);
+        // A pending attempt is bounded by watchPeerConnection; do not create parallel offers.
         continue;
       }
       this.updatePeerState(targetPeerId, { status: 'connecting', lastError: null });
@@ -1406,8 +1407,13 @@ export class HolooPeerMeshManager {
 
   private attachConnection(remotePeerId: MeshDevicePeerId, conn: DataConnection): void {
     const prev = this.connections.get(remotePeerId);
-    if (prev && prev !== conn && prev.open) {
-      prev.close();
+    if (prev && prev !== conn) {
+      // Close pending as well as open connections; PeerJS may not emit "close" before open.
+      try {
+        prev.close();
+      } catch {
+        // ignore stale connection cleanup failures
+      }
     }
     this.connections.set(remotePeerId, conn);
 
