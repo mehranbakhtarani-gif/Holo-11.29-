@@ -1657,9 +1657,20 @@ export async function clearPendingSyncOutboxOperations(): Promise<void> {
     const db = await openOperationalDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(['syncOutbox'], 'readwrite');
-      tx.objectStore('syncOutbox').clear();
+      const store = tx.objectStore('syncOutbox');
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const rows = (request.result as SyncOutboxOperation[]) ?? [];
+        for (const row of rows) {
+          // A Supabase snapshot push must not erase a separately encrypted Firebase
+          // workspace-extension mutation waiting for connectivity/key availability.
+          if (row.target === 'firebase' && row.operationId.startsWith('workspace_ext_')) continue;
+          store.delete(row.operationId);
+        }
+      };
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Sync outbox cleanup aborted'));
     });
     db.close();
   } catch {
