@@ -12,6 +12,7 @@ import {
 } from './operationalRecordEncryption';
 import {
   prepareEncryptedOperationalRecordBatch,
+  getOperationalRecordPrimaryKey,
   type EncryptedOperationalRow,
   isEncryptedOperationalRow,
 } from './encryptedOperationalRecordAdapter';
@@ -59,37 +60,57 @@ function assertWorkspaceLease(lease: OperationalDataKeyLease, workspaceId: strin
  * requested stores in one readwrite transaction. Any validation, encryption,
  * lease, quota, or IndexedDB error rejects the whole operation.
  */
+const ENCRYPTED_SHADOW_STORE = 'encryptedOperationalRecords';
+
+interface EncryptedOperationalShadowRow {
+  workspaceId: string;
+  storeName: OperationalEncryptedStore;
+  recordId: string;
+  encryptedRecord: EncryptedOperationalRow['encryptedRecord'];
+}
+
+function toShadowRows(storeName: OperationalEncryptedStore, workspaceId: string, rows: readonly EncryptedOperationalRow[]): EncryptedOperationalShadowRow[] {
+  return rows.map((row) => {
+    if (!isEncryptedOperationalRow(storeName, row, workspaceId)) {
+      throw new Error('Prepared encrypted operational row failed shadow-store validation.');
+    }
+    return {
+      workspaceId,
+      storeName,
+      recordId: getOperationalRecordPrimaryKey(storeName, row),
+      encryptedRecord: row.encryptedRecord,
+    };
+  });
+}
+
+function workspaceStoreKeyRange(workspaceId: string, storeName: OperationalEncryptedStore): IDBKeyRange {
+  const keyRange = typeof window !== 'undefined' ? window.IDBKeyRange : globalThis.IDBKeyRange;
+  if (!keyRange) throw new Error('IndexedDB key-range support is unavailable.');
+  return keyRange.only([workspaceId, storeName]);
+}
+
+/** Write ciphertext only to the isolated shadow store; source business stores remain untouched. */
 export async function writeEncryptedOperationalStoresAtomically(
   db: IDBDatabase,
   workspaceId: string,
   writes: readonly EncryptedOperationalWrite[]
 ): Promise<number> {
-  if (!db || !db.objectStoreNames || !Array.isArray(writes) || writes.length === 0) {
-    throw new Error('Encrypted operational transaction input is invalid.');
+  if (!db || !db.objectStoreNames || !Array.isArray(writes) || writes.length === 0 ||
+      !db.objectStoreNames.contains(ENCRYPTED_SHADOW_STORE)) {
+    throw new Error('Encrypted operational shadow-store transaction input is invalid.');
   }
   const total = writes.reduce((sum, write) => sum + write.records.length, 0);
-  if (total > MAX_BATCH_RECORDS) {
-    throw new Error('Encrypted operational transaction exceeds the bounded batch size.');
-  }
+  if (total > MAX_BATCH_RECORDS) throw new Error('Encrypted operational transaction exceeds the bounded batch size.');
   const storeNames = [...new Set(writes.map((write) => write.store))];
-  if (storeNames.length !== writes.length) {
-    throw new Error('Each object store may appear only once in an encrypted transaction batch.');
-  }
-  for (const storeName of storeNames) {
-    if (!db.objectStoreNames.contains(storeName)) {
-      throw new Error(`Operational object store ${storeName} does not exist.`);
-    }
-  }
+  if (storeNames.length !== writes.length) throw new Error('Each logical store may appear only once in an encrypted transaction batch.');
 
   const lease = captureOperationalDataKeyLease();
   assertWorkspaceLease(lease, workspaceId);
-  const prepared: Array<{ store: OperationalEncryptedStore; rows: EncryptedOperationalRow[] }> = [];
+  const prepared: EncryptedOperationalShadowRow[] = [];
   for (const write of writes) {
     assertWorkspaceLease(lease, workspaceId);
-    prepared.push({
-      store: write.store,
-      rows: await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId),
-    });
+    const rows = await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId);
+    prepared.push(...toShadowRows(write.store, workspaceId, rows));
     assertWorkspaceLease(lease, workspaceId);
   }
 
@@ -105,65 +126,33 @@ export async function writeEncryptedOperationalStoresAtomically(
     };
     try {
       assertWorkspaceLease(lease, workspaceId);
-      const transaction = db.transaction(storeNames, 'readwrite');
-      tx = transaction;
-      for (const batch of prepared) {
-        const store = transaction.objectStore(batch.store);
-        for (const row of batch.rows) {
-          assertWorkspaceLease(lease, workspaceId);
-          const request = store.put(row);
-          request.onsuccess = () => {
-            try {
-              assertWorkspaceLease(lease, workspaceId);
-              written += 1;
-            } catch (error) {
-              fail(error);
-            }
-          };
-          request.onerror = () => fail(request.error ?? new Error('Encrypted operational row write failed.'));
-        }
+      tx = db.transaction([ENCRYPTED_SHADOW_STORE], 'readwrite');
+      const target = tx.objectStore(ENCRYPTED_SHADOW_STORE);
+      for (const row of prepared) {
+        assertWorkspaceLease(lease, workspaceId);
+        const request = target.put(row);
+        request.onsuccess = () => {
+          try { assertWorkspaceLease(lease, workspaceId); written += 1; }
+          catch (error) { fail(error); }
+        };
+        request.onerror = () => fail(request.error ?? new Error('Encrypted operational shadow row write failed.'));
       }
-      transaction.oncomplete = () => {
+      tx.oncomplete = () => {
         if (settled) return;
-        try {
-          assertWorkspaceLease(lease, workspaceId);
-          settled = true;
-          resolve(written);
-        } catch (error) {
-          settled = true;
-          reject(error);
-        }
+        try { assertWorkspaceLease(lease, workspaceId); settled = true; resolve(written); }
+        catch (error) { settled = true; reject(error); }
       };
-      transaction.onerror = () => {
-        if (!settled) {
-          settled = true;
-          reject(transaction.error ?? new Error('Encrypted operational transaction failed.'));
-        }
+      tx.onerror = () => {
+        if (!settled) { settled = true; reject(tx?.error ?? new Error('Encrypted operational shadow transaction failed.')); }
       };
-      transaction.onabort = () => {
-        if (!settled) {
-          settled = true;
-          reject(transaction.error ?? new Error('Encrypted operational transaction aborted.'));
-        }
+      tx.onabort = () => {
+        if (!settled) { settled = true; reject(tx?.error ?? new Error('Encrypted operational shadow transaction aborted.')); }
       };
-    } catch (error) {
-      if (tx) {
-        try { tx.abort(); } catch { /* no active transaction */ }
-      }
-      if (!settled) {
-        settled = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    }
+    } catch (error) { fail(error); }
   });
 }
 
-/**
- * Atomically persist one encrypted migration batch and its durable checkpoint.
- * All ciphertext and the next checkpoint are prepared before the IDB transaction.
- * The current journal is compare-and-swapped inside that transaction; either all
- * target rows and the checkpoint commit, or IndexedDB rolls the entire batch back.
- */
+/** Persist ciphertext and the corresponding checkpoint in one shadow+journal transaction. */
 export async function writeEncryptedOperationalMigrationBatchAtomically(
   db: IDBDatabase,
   workspaceId: string,
@@ -174,63 +163,41 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
 ): Promise<{ written: number; journal: OperationalMigrationJournalRecord }> {
   const journalStoreName = 'operationalMigrationJournal';
   if (!db || !db.objectStoreNames || !Array.isArray(writes) || writes.length === 0 ||
-      !db.objectStoreNames.contains(journalStoreName)) {
-    throw new Error('Encrypted migration transaction input or journal store is invalid.');
+      !db.objectStoreNames.contains(journalStoreName) || !db.objectStoreNames.contains(ENCRYPTED_SHADOW_STORE)) {
+    throw new Error('Encrypted migration transaction input or shadow/journal stores are invalid.');
   }
-  if (!isValidOperationalMigrationJournalRecord(expectedJournal)) {
-    throw new Error('Expected operational migration journal is invalid.');
-  }
+  if (!isValidOperationalMigrationJournalRecord(expectedJournal)) throw new Error('Expected operational migration journal is invalid.');
   assertOperationalMigrationBinding(expectedJournal, binding);
-  if (expectedJournal.phase !== 'copying') {
-    throw new Error('Encrypted migration batches are permitted only during the copying phase.');
-  }
+  if (expectedJournal.phase !== 'copying') throw new Error('Encrypted migration batches are permitted only during the copying phase.');
   const total = writes.reduce((sum, write) => sum + write.records.length, 0);
-  if (total > MAX_BATCH_RECORDS) {
-    throw new Error('Encrypted migration batch exceeds the bounded record count.');
-  }
+  if (total > MAX_BATCH_RECORDS) throw new Error('Encrypted migration batch exceeds the bounded record count.');
   const storeNames = [...new Set(writes.map((write) => write.store))];
-  if (storeNames.length !== writes.length || storeNames.includes(journalStoreName as OperationalEncryptedStore)) {
-    throw new Error('Migration batch contains duplicate or reserved object stores.');
-  }
-  for (const storeName of storeNames) {
-    if (!db.objectStoreNames.contains(storeName)) {
-      throw new Error(`Operational object store ${storeName} does not exist.`);
-    }
+  if (storeNames.length !== writes.length) throw new Error('Migration batch contains duplicate logical stores.');
+  if (!storeNames.includes(checkpoint.storeName as OperationalEncryptedStore)) {
+    throw new Error('Migration checkpoint store does not match a store in the encrypted batch.');
   }
 
   const lease = captureOperationalDataKeyLease();
   assertWorkspaceLease(lease, workspaceId);
-  if (lease.backupSessionGeneration !== binding.backupSessionGeneration ||
-      binding.workspaceId !== workspaceId) {
+  if (lease.backupSessionGeneration !== binding.backupSessionGeneration || binding.workspaceId !== workspaceId) {
     throw new Error('Migration batch is bound to another workspace or backup session.');
   }
-  const prepared: Array<{ store: OperationalEncryptedStore; rows: EncryptedOperationalRow[] }> = [];
+  const prepared: EncryptedOperationalShadowRow[] = [];
   for (const write of writes) {
     assertWorkspaceLease(lease, workspaceId);
-    prepared.push({
-      store: write.store,
-      rows: await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId),
-    });
+    const rows = await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId);
+    prepared.push(...toShadowRows(write.store, workspaceId, rows));
     assertWorkspaceLease(lease, workspaceId);
   }
-  const nextJournal = advanceOperationalMigrationStoreCheckpoint(
-    expectedJournal,
-    checkpoint.storeName,
-    checkpoint,
-    binding
-  );
-  if (!isValidOperationalMigrationJournalRecord(nextJournal)) {
-    throw new Error('Prepared migration checkpoint failed validation.');
-  }
+  const nextJournal = advanceOperationalMigrationStoreCheckpoint(expectedJournal, checkpoint.storeName, checkpoint, binding);
+  if (!isValidOperationalMigrationJournalRecord(nextJournal)) throw new Error('Prepared migration checkpoint failed validation.');
 
   return new Promise((resolve, reject) => {
     let tx: IDBTransaction | undefined;
     let settled = false;
     let written = 0;
     const cleanup = () => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
-      }
+      if (typeof window !== 'undefined') window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
     };
     const fail = (error: unknown) => {
       if (settled) return;
@@ -240,37 +207,30 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
       reject(error instanceof Error ? error : new Error(String(error)));
     };
     const abortOnSessionChange = () => {
-      try { assertWorkspaceLease(lease, workspaceId); }
-      catch (error) { fail(error); }
+      try { assertWorkspaceLease(lease, workspaceId); } catch (error) { fail(error); }
     };
     try {
       assertWorkspaceLease(lease, workspaceId);
-      tx = db.transaction([...storeNames, journalStoreName], 'readwrite');
-      if (typeof window !== 'undefined') {
-        window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
-      }
+      tx = db.transaction([ENCRYPTED_SHADOW_STORE, journalStoreName], 'readwrite');
+      if (typeof window !== 'undefined') window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      const shadowStore = tx.objectStore(ENCRYPTED_SHADOW_STORE);
       const journalStore = tx.objectStore(journalStoreName);
       const journalRequest = journalStore.get(binding.migrationId);
       journalRequest.onsuccess = () => {
         try {
           assertWorkspaceLease(lease, workspaceId);
           const current = journalRequest.result as unknown;
-          if (!isValidOperationalMigrationJournalRecord(current) ||
-              JSON.stringify(current) !== JSON.stringify(expectedJournal)) {
+          if (!isValidOperationalMigrationJournalRecord(current) || JSON.stringify(current) !== JSON.stringify(expectedJournal)) {
             throw new Error('Operational migration journal changed; stale batch was rejected.');
           }
           assertOperationalMigrationBinding(current, binding);
-          for (const batch of prepared) {
-            const target = tx!.objectStore(batch.store);
-            for (const row of batch.rows) {
-              assertWorkspaceLease(lease, workspaceId);
-              const request = target.put(row);
-              request.onsuccess = () => {
-                try { assertWorkspaceLease(lease, workspaceId); written += 1; }
-                catch (error) { fail(error); }
-              };
-              request.onerror = () => fail(request.error ?? new Error('Encrypted migration row write failed.'));
-            }
+          for (const row of prepared) {
+            assertWorkspaceLease(lease, workspaceId);
+            const request = shadowStore.put(row);
+            request.onsuccess = () => {
+              try { assertWorkspaceLease(lease, workspaceId); written += 1; } catch (error) { fail(error); }
+            };
+            request.onerror = () => fail(request.error ?? new Error('Encrypted migration shadow row write failed.'));
           }
           assertWorkspaceLease(lease, workspaceId);
           journalStore.put(nextJournal);
@@ -279,37 +239,20 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
       journalRequest.onerror = () => fail(journalRequest.error ?? new Error('Migration journal compare-and-swap read failed.'));
       tx.oncomplete = () => {
         if (settled) return;
-        try {
-          assertWorkspaceLease(lease, workspaceId);
-          settled = true;
-          cleanup();
-          resolve({ written, journal: nextJournal });
-        } catch (error) {
-          settled = true;
-          cleanup();
-          reject(error);
-        }
+        try { assertWorkspaceLease(lease, workspaceId); settled = true; cleanup(); resolve({ written, journal: nextJournal }); }
+        catch (error) { settled = true; cleanup(); reject(error); }
       };
       tx.onerror = () => {
-        if (!settled) {
-          settled = true;
-          cleanup();
-          reject(tx?.error ?? new Error('Encrypted migration transaction failed.'));
-        }
+        if (!settled) { settled = true; cleanup(); reject(tx?.error ?? new Error('Encrypted migration transaction failed.')); }
       };
       tx.onabort = () => {
-        if (!settled) {
-          settled = true;
-          cleanup();
-          reject(tx?.error ?? new Error('Encrypted migration transaction aborted.'));
-        }
+        if (!settled) { settled = true; cleanup(); reject(tx?.error ?? new Error('Encrypted migration transaction aborted.')); }
       };
-    } catch (error) {
-      fail(error);
-    }
+    } catch (error) { fail(error); }
   });
 }
 
+/** Read only the isolated ciphertext shadow store, never the plaintext source stores. */
 /**
  * Decrypt a bounded cursor scan. No business-field IDB indexes are used:
  * date/status/party/SKU lookups are filtered after authenticated decryption.
@@ -322,29 +265,26 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
   workspaceId: string,
   options: EncryptedOperationalQueryOptions = {}
 ): Promise<{ items: T[]; scanned: number; hasMore: boolean }> {
-  if (!db.objectStoreNames.contains(storeName)) {
-    throw new Error(`Operational object store ${storeName} does not exist.`);
-  }
+  if (!db.objectStoreNames.contains(ENCRYPTED_SHADOW_STORE)) throw new Error('Encrypted operational shadow store does not exist.');
   const maxScan = Math.max(1, Math.min(MAX_QUERY_SCAN, Math.trunc(options.maxScan ?? 2_000)));
   const limit = Math.max(1, Math.min(MAX_QUERY_RESULTS, Math.trunc(options.limit ?? 100)));
   const lease = captureOperationalDataKeyLease();
   assertWorkspaceLease(lease, workspaceId);
 
-  const cursorResult = await new Promise<{ rows: unknown[]; hasMore: boolean }>((resolve, reject) => {
-    const tx = db.transaction([storeName], 'readonly');
-    const result: unknown[] = [];
-    const request = tx.objectStore(storeName).openCursor();
+  const cursorResult = await new Promise<{ rows: EncryptedOperationalShadowRow[]; hasMore: boolean }>((resolve, reject) => {
+    const tx = db.transaction([ENCRYPTED_SHADOW_STORE], 'readonly');
+    const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceStore');
+    const request = index.openCursor(workspaceStoreKeyRange(workspaceId, storeName));
+    const result: EncryptedOperationalShadowRow[] = [];
     let hasMore = false;
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return;
-      if (result.length >= maxScan) {
-        hasMore = true;
-        return;
-      }
-      result.push(cursor.value);
+      if (result.length >= maxScan) { hasMore = true; return; }
+      result.push(cursor.value as EncryptedOperationalShadowRow);
       cursor.continue();
     };
+    request.onerror = () => reject(request.error ?? new Error('Encrypted operational shadow cursor failed.'));
     tx.oncomplete = () => resolve({ rows: result, hasMore });
     tx.onerror = () => reject(tx.error ?? new Error('Encrypted operational cursor read failed.'));
     tx.onabort = () => reject(tx.error ?? new Error('Encrypted operational cursor read aborted.'));
@@ -354,17 +294,15 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
   let scanned = 0;
   for (const row of cursorResult.rows) {
     assertWorkspaceLease(lease, workspaceId);
-    if (!isEncryptedOperationalRow(storeName, row, workspaceId)) {
-      throw new Error('Plaintext or malformed row encountered in encrypted operational store.');
-    }
     const keyField = storeName === 'localProfiles' ? 'workspaceId' : 'id';
-    const recordId = (row as unknown as Record<string, unknown>)[keyField];
-    if (typeof recordId !== 'string' || recordId.length === 0) {
-      throw new Error('Encrypted operational row has an invalid primary key.');
+    const syntheticRow = { [keyField]: row.recordId, encryptedRecord: row.encryptedRecord };
+    if (row.workspaceId !== workspaceId || row.storeName !== storeName ||
+        !isEncryptedOperationalRow(storeName, syntheticRow, workspaceId)) {
+      throw new Error('Malformed or cross-workspace encrypted shadow row encountered.');
     }
     const decoded = await decryptOperationalRecord<T>(
-      (row as EncryptedOperationalRow).encryptedRecord,
-      { workspaceId, store: storeName, recordId },
+      row.encryptedRecord,
+      { workspaceId, store: storeName, recordId: row.recordId },
       lease.key
     );
     assertWorkspaceLease(lease, workspaceId);
