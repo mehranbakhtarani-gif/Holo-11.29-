@@ -197,3 +197,35 @@ The inventory also identifies a separation-of-concerns requirement: a single bro
 6. Implement a parallel encrypted generation with resumable, checksummed migration and tested rollback; switch authority only after full validation and explicit migration gating.
 
 No additional production persistence behavior was changed by this inventory. It records observed call sites and constrains the next refactor. The active primary operational stores remain plaintext; the encrypted snapshot remains a shadow/checkpoint, not the authoritative database.
+
+## Current branch re-audit — 2026-11-28
+
+The repository-port extraction has progressed beyond the earlier inventory above. On branch `fix/phase-1-financial-core` at commit `f6c5341111bec50ae89a5b7e98906628e50cbd78`, source inspection confirms:
+
+- `AccountingContext.tsx` uses `operationalTransactionPort`, `operationalWorkspacePersistencePort`, `operationalDiagnosticsPort`, and `operationalEncryptionPreparationPort`.
+- `useDualCloudSync.ts` and `useLocalFirstMeshSync.ts` use `operationalSyncPersistencePort`.
+- `SettingsView.tsx`, `OfflineFirstControlPanel.tsx`, `OfflineSyncHealthDashboard.tsx`, and `SystemResetCenter.tsx` use the recovery, backup-maintenance, health-report, and reset ports respectively.
+- `App.tsx` dynamically loads the backup-maintenance port through `repositoryAbstraction`.
+- `tests/operational-transaction-port.test.ts` statically scans all TypeScript/TSX files in `src/App.tsx`, `src/components`, `src/hooks`, and `src/context` to reject direct `operationalDb` imports. The remaining implementation imports are concentrated in the adapter module; tests intentionally import low-level functions to verify delegation.
+
+This improves the application boundary, but does not make the adapter encrypted and does not change the plaintext-primary status described above.
+
+### Newly confirmed shadow freshness gap: workspace extensions
+
+Source inspection of `WorkspaceExtensionsContext.tsx` and the encrypted-shadow scheduling effect in `AccountingContext.tsx` found a consistency gap:
+
+1. Extension mutations persist `holoo_apex96_workspace_extensions_v2` and compatibility keys through `persistLocalMirror`.
+2. Those writes do not publish a revision/generation change consumed by the encrypted-shadow scheduler.
+3. The shadow scheduler is driven by the accounting context's entity/profile dependencies. Extension-only mutations do not necessarily change those dependencies and therefore do not necessarily trigger a new encrypted shadow.
+4. The encrypted shadow's `sourceRevision` is currently the operational IndexedDB `localRevision`. Extension-only writes do not advance that revision, so the existing revision fence cannot detect that the extension payload changed after the last shadow was prepared.
+
+Impact: the encrypted shadow may be internally valid and revision-matched to the accounting stores while containing stale workspace-extension data. It must not be treated as a complete current workspace snapshot or promoted as a migration source.
+
+Required remediation before cutover:
+- Define a monotonic, durable extension revision/generation and include it in the authenticated snapshot contract.
+- Ensure every successful local extension mutation advances that generation; handle failed/rolled-back localStorage writes without advancing it.
+- Make shadow preparation capture both accounting and extension revisions, then re-check both before publishing the prepared snapshot. A changed revision must reject/retry the stale result.
+- Add regression tests proving an extension-only mutation schedules a new shadow, advances the extension generation, and rejects a snapshot prepared against an older generation.
+- Add interrupted-write and restore tests for extension generation and payload consistency.
+
+No production behavior was changed as part of this re-audit. The primary IndexedDB stores remain plaintext and authoritative; `secureWorkspace` remains a non-authoritative shadow. No schema bump, cutover, merge, or deployment was performed.
