@@ -44,6 +44,8 @@ export interface EncryptedOperationalQueryOptions {
   predicate?: (record: Record<string, unknown>) => boolean;
   /** Migration run identifier; omitted for the non-migration encrypted shadow snapshot. */
   migrationId?: string;
+  /** Exclusive logical primary-key cursor for bounded migration verification pages. */
+  afterRecordId?: string | null;
 }
 
 const MAX_BATCH_RECORDS = 10_000;
@@ -298,7 +300,7 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
   storeName: OperationalEncryptedStore,
   workspaceId: string,
   options: EncryptedOperationalQueryOptions = {}
-): Promise<{ items: T[]; scanned: number; hasMore: boolean }> {
+): Promise<{ items: T[]; scanned: number; hasMore: boolean; nextCursor: string | null }> {
   if (!db.objectStoreNames.contains(ENCRYPTED_SHADOW_STORE)) throw new Error('Encrypted operational shadow store does not exist.');
   const maxScan = Math.max(1, Math.min(MAX_QUERY_SCAN, Math.trunc(options.maxScan ?? 2_000)));
   const limit = Math.max(1, Math.min(MAX_QUERY_RESULTS, Math.trunc(options.limit ?? 100)));
@@ -309,10 +311,19 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
     throw new Error('Encrypted shadow migration id is invalid.');
   }
 
+  const afterRecordId = options.afterRecordId ?? null;
+  if (!(afterRecordId === null || (typeof afterRecordId === 'string' && afterRecordId.length > 0 && afterRecordId.length <= 512))) {
+    throw new Error('Encrypted shadow continuation cursor is invalid.');
+  }
   const cursorResult = await new Promise<{ rows: EncryptedOperationalShadowRow[]; hasMore: boolean }>((resolve, reject) => {
     const tx = db.transaction([ENCRYPTED_SHADOW_STORE], 'readonly');
-    const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceMigrationStore');
-    const request = index.openCursor(workspaceStoreKeyRange(workspaceId, migrationId, storeName));
+    const target = tx.objectStore(ENCRYPTED_SHADOW_STORE);
+    const keyRange = typeof window !== 'undefined' ? window.IDBKeyRange : globalThis.IDBKeyRange;
+    if (!keyRange) { reject(new Error('IndexedDB key-range support is unavailable.')); return; }
+    const lower = [workspaceId, migrationId, storeName, afterRecordId ?? ''];
+    const upper = [workspaceId, migrationId, storeName, '\\uffff'];
+    const range = keyRange.bound(lower, upper, afterRecordId !== null, false);
+    const request = target.openCursor(range);
     const result: EncryptedOperationalShadowRow[] = [];
     let hasMore = false;
     request.onsuccess = () => {
@@ -330,6 +341,7 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
 
   const items: T[] = [];
   let scanned = 0;
+  let nextCursor: string | null = afterRecordId;
   for (const row of cursorResult.rows) {
     assertWorkspaceLease(lease, workspaceId);
     const keyField = storeName === 'localProfiles' ? 'workspaceId' : 'id';
@@ -345,10 +357,16 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
     );
     assertWorkspaceLease(lease, workspaceId);
     scanned += 1;
+    nextCursor = row.recordId;
     if (!options.predicate || options.predicate(decoded)) {
       items.push(decoded);
       if (items.length >= limit) break;
     }
   }
-  return { items, scanned, hasMore: cursorResult.hasMore || scanned < cursorResult.rows.length };
+  return {
+    items,
+    scanned,
+    hasMore: cursorResult.hasMore || scanned < cursorResult.rows.length,
+    nextCursor,
+  };
 }
