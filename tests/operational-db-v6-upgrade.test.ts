@@ -93,8 +93,8 @@ async function run() {
       assert.equal(v6.objectStoreNames.contains('operationalMigrationJournal'), true);
       assert.equal(v6.transaction(['operationalMigrationJournal']).objectStore('operationalMigrationJournal').keyPath, 'migrationId');
       const encryptedStore = v6.transaction(['encryptedOperationalRecords']).objectStore('encryptedOperationalRecords');
-      assert.deepEqual(encryptedStore.keyPath, ['workspaceId', 'storeName', 'recordId']);
-      assert.deepEqual([...encryptedStore.indexNames], ['workspaceStore']);
+      assert.deepEqual(encryptedStore.keyPath, ['workspaceId', 'migrationId', 'storeName', 'recordId']);
+      assert.deepEqual([...encryptedStore.indexNames], ['workspaceMigrationStore']);
       const expectedKeyPaths: Record<string, string> = {
         meta: 'key', syncOutbox: 'operationId', syncInbox: 'operationId',
         localProfiles: 'workspaceId', secureWorkspace: 'workspaceId', restoreJournal: 'restoreId',
