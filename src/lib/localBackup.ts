@@ -459,10 +459,11 @@ export async function deleteLocalSnapshot(snapshotId: string): Promise<void> {
 
 export async function downloadEncryptedBackupFileToDevice(
   payloadJson: string,
-  fiscalYear: string,
-  passphrase: string
+  fiscalYear: string
 ): Promise<void> {
-  const envelope = await encryptBackupEnvelope(payloadJson, passphrase);
+  const lease = captureBackupSessionLease();
+  const envelope = await encryptBackupEnvelope(payloadJson, lease.passphrase);
+  assertBackupSessionLease(lease);
   const stamp = getTodayShamsi().replace(/\//g, '-');
   const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
