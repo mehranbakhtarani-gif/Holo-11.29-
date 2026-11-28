@@ -228,4 +228,15 @@ Required remediation before cutover:
 - Add regression tests proving an extension-only mutation schedules a new shadow, advances the extension generation, and rejects a snapshot prepared against an older generation.
 - Add interrupted-write and restore tests for extension generation and payload consistency.
 
-No production behavior was changed as part of this re-audit. The primary IndexedDB stores remain plaintext and authoritative; `secureWorkspace` remains a non-authoritative shadow. No schema bump, cutover, merge, or deployment was performed.
+## Extension shadow freshness mitigation — 2026-11-28
+
+The branch now contains a partial mitigation for the extension-only stale-shadow gap described above (source commit `6d92129d91605014af9554f8503efcd6caca004a`):
+
+- `writeEncryptedOperationalWorkspaceSnapshot` compares the snapshot's captured business-local extension stores with the current localStorage capture before encryption and again in the final IndexedDB write callback. A mismatch rejects the write rather than publishing a known-stale shadow.
+- `loadPreparedEncryptedOperationalWorkspace` compares the decrypted snapshot's extension-store capture with current localStorage before returning the prepared workspace. A mismatch rejects the read even when the IndexedDB `localRevision` is unchanged.
+- `tests/encrypted-operational-workspace-migration.test.ts` covers an extension-only localStorage mutation after snapshot preparation, verifies that loading rejects it, and verifies that restoring the original localStorage value makes the snapshot readable again.
+- CI for commit `6d92129d91605014af9554f8503efcd6caca004a` completed successfully, including TypeScript, the test suite, Firestore emulator security tests, and production build.
+
+This is a freshness guard, not a durable extension revision protocol. It does not make localStorage and IndexedDB atomic, cannot prevent a mutation immediately after a successful freshness check, and does not guarantee cross-tab ordering or automatic shadow refresh after extension-only changes. The current test also does not force a mutation during the asynchronous encryption window. A monotonic durable extension generation, explicit scheduling/retry behavior, and race/interruption tests remain required before migration or cutover.
+
+No primary-store encryption cutover, schema bump, merge, or deployment was performed. The primary IndexedDB stores remain plaintext and authoritative; `secureWorkspace` remains a non-authoritative encrypted shadow/checkpoint.
