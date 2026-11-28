@@ -90,6 +90,10 @@ async function main() {
     'closed WebRTC data channels must schedule reconnection');
   assert.match(meshSource, /conn\.on\('error',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
     'failed WebRTC data channels must schedule reconnection');
+  assert.match(meshSource, /private watchPeerConnection\([\s\S]*?}, 20_000\);[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
+    'a stalled PeerJS attempt with no lifecycle event must time out and retry');
+  assert.match(meshSource, /this\.watchPeerConnection\(remotePeerId, conn\);/,
+    'every outbound or inbound peer connection must receive a bounded open watchdog');
   assert.match(meshSource, /for \(const timer of this\.peerReconnectTimers\.values\(\)\) window\.clearTimeout\(timer\);/,
     'stopping the mesh connector must clear all peer retry timers');
   console.log('P2P HMAC-SHA256 and reconnect lifecycle tests: 9 assertions passed');
