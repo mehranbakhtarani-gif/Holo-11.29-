@@ -46,6 +46,10 @@ assert.doesNotMatch(settingsViewSource, /from ['\"]\.\.\/lib\/operationalDb['\"]
 const offlinePanelSource = fs.readFileSync(path.join(process.cwd(), 'src/components/OfflineFirstControlPanel.tsx'), 'utf8');
 assert.match(offlinePanelSource, /operationalBackupMaintenancePort/);
 assert.doesNotMatch(offlinePanelSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
+const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8');
+assert.match(appSource, /import\('\.\/lib\/repositoryAbstraction'\)/);
+assert.match(appSource, /operationalBackupMaintenancePort\.savePreUpdateSafetyBackup/);
+assert.doesNotMatch(appSource, /import\('\.\/lib\/operationalDb'\)/);
 assert.deepEqual(Object.keys(operationalSyncPersistencePort).sort(), [
   'clearPendingOutbox','enqueueOutbox','getActiveRestoreJournal','hasProcessedInbox',
   'isRestoreBarrierActive','listPendingOutbox','markOutboxStatus','recordInbox',
