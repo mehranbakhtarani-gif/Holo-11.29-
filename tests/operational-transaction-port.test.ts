@@ -53,7 +53,7 @@ assert.match(offlinePanelSource, /operationalBackupMaintenancePort/);
 assert.doesNotMatch(offlinePanelSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
 const accountingSource = fs.readFileSync(path.join(process.cwd(), 'src/context/AccountingContext.tsx'), 'utf8');
 assert.match(accountingSource, /operationalWorkspacePersistencePort/);
-assert.doesNotMatch(accountingSource, /\\b(loadOperationalWorkspace|saveOperationalWorkspaceTx|isOperationalRestoreBarrierActive)\\b/);
+assert.doesNotMatch(accountingSource, /\b(loadOperationalWorkspace|saveOperationalWorkspaceTx|isOperationalRestoreBarrierActive)\b/);
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8');
 assert.match(appSource, /import\('\.\/lib\/repositoryAbstraction'\)/);
 assert.match(appSource, /operationalBackupMaintenancePort\.savePreUpdateSafetyBackup/);
