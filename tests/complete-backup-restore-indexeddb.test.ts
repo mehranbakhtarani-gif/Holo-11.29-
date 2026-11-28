@@ -265,7 +265,7 @@ async function run() {
   assert.equal(await countLiveAttachments(), 2, 'aborted vault transaction must preserve the pre-restore attachment set');
 
   const operationalDb = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDb.open('holoo_apex_operational_db_v1', 5);
+    const request = indexedDb.open('holoo_apex_operational_db_v1', 6);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
