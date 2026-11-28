@@ -131,6 +131,8 @@ export interface SyncOutboxOperation {
   entityId?: string;
   payloadHash: string;
   payload?: Record<string, unknown>;
+  /** AES-GCM envelope only; sensitive extension snapshots must never enter this store as plaintext. */
+  encryptedPayload?: string;
   createdAt: string;
   retryCount: number;
   nextRetryAt?: string;
@@ -1584,6 +1586,12 @@ export async function getPreparedEncryptedOperationalWorkspaceMeta(
 }
 
 export async function enqueueSyncOutboxOperation(op: SyncOutboxOperation): Promise<void> {
+  if (op.encryptedPayload !== undefined && (typeof op.encryptedPayload !== 'string' || op.encryptedPayload.length === 0 || op.encryptedPayload.length > 1_500_000)) {
+    throw new Error('Encrypted sync outbox payload is invalid or exceeds the storage limit.');
+  }
+  if (op.payload !== undefined && op.encryptedPayload !== undefined) {
+    throw new Error('Sync outbox must not store plaintext and encrypted payloads together.');
+  }
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB unavailable: sync outbox was not persisted.');
   try {
     const db = await openOperationalDb();
