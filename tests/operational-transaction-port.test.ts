@@ -55,6 +55,12 @@ assert.equal(operationalResetPort.wipeAllLocalDatabases, wipeAllLocalIndexedDbs)
 assert.equal(operationalResetPort.clearLocalPreferences, clearHolooLocalStorageKeys);
 assert.deepEqual(Object.keys(operationalResetPort).sort(), ['clearLocalPreferences','wipeAllLocalDatabases'].sort());
 
+const operationalDbSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/operationalDb.ts'), 'utf8');
+assert.match(operationalDbSource, /db\.onversionchange\s*=\s*\(\)\s*=>\s*db\.close\(\)/,
+  'operational IndexedDB connections must close when another tab requests a schema upgrade');
+assert.match(operationalDbSource, /if \(blocked\) \{\s*db\.close\(\)/,
+  'a late open success after a blocked request must close its connection instead of leaking it');
+
 const settingsViewSource = fs.readFileSync(path.join(process.cwd(), 'src/components/SettingsView.tsx'), 'utf8');
 assert.match(settingsViewSource, /operationalRecoveryPort/);
 assert.doesNotMatch(settingsViewSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
