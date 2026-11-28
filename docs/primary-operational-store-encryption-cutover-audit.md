@@ -642,3 +642,27 @@ Two concrete blockers are now explicit in the adapter design:
 2. Current secondary indexes expose business attributes such as dates, statuses, party IDs, warehouse IDs, SKUs, and voucher numbers. The migration must choose and test a leakage policy (for example, narrowly scoped keyed blind indexes for approved query fields, or decrypt-and-filter bounded partitions); silently retaining ordinary plaintext indexes is not acceptable.
 
 No production reader, writer, query, or schema was changed by this inventory. It is a design constraint for the next encrypted repository implementation slice, not a claim of encryption-at-rest.
+
+### Encrypted row adapter and query-leakage policy — 2026-11-28
+
+The opt-in adapter primitives now exist in `src/lib/encryptedOperationalRecordAdapter.ts` and `src/lib/encryptedOperationalIndexedDb.ts`. They are deliberately not connected to the production IndexedDB read/write path.
+
+- Ciphertext rows preserve the existing IndexedDB primary-key paths: `id` for entity stores and `workspaceId` for `localProfiles`. The only row properties permitted by the adapter are that primary key and `encryptedRecord`.
+- The primary key and envelope routing metadata (workspace ID, store name, record ID, format/version/cipher) remain visible. These are explicit, bounded leakage accepted to preserve IndexedDB keyPath semantics; business fields and values are inside AES-256-GCM ciphertext.
+- No ordinary secondary indexes are created for encrypted business attributes. Date, status, party ID, SKU, warehouse and period queries must use bounded decrypt-and-filter scans until a separately reviewed keyed blind-index design exists. Blind indexes would themselves leak equality/frequency and require per-workspace key derivation, rotation and migration support.
+- Multi-store writes encrypt and validate every batch before opening one readwrite transaction, then write all wrappers through that transaction. Batch size and query scan/result sizes are bounded; duplicate primary keys fail closed.
+- Session leases and workspace identity are checked before and during asynchronous preparation and at IndexedDB request boundaries. Restore barriers continue to block key use through the session boundary.
+- The generic encrypted query rejects plaintext/malformed rows rather than silently mixing formats. It does not expose raw ciphertext envelopes to callers.
+
+#### Remaining cutover blockers (must all close before stage 3 can be marked complete)
+
+1. All existing primary readers/writers remain plaintext: `loadOperationalWorkspace`, `saveOperationalWorkspaceTx`, five financial transaction commands, sync outbox/inbox APIs, diagnostics and generic pagination. The new primitives are not wired into these production paths.
+2. Existing business-field indexes remain on plaintext stores. A migration must atomically replace or retire them under a reviewed query strategy; merely adding ciphertext wrappers would make current indexed queries incorrect.
+3. A durable, bounded, restartable per-store migration journal is not yet implemented. It must track source revision, per-store cursor/checkpoint, counts and authenticated verification; retain source rows until full verification and rollback expiry.
+4. Dual-read/cutover gating and rollback are not implemented. Readers must never guess record format or silently return partial workspaces.
+5. Session generation and restore-barrier fencing must cover every primary reader, writer, transaction callback, sync path and multi-tab operation, including final commit boundaries.
+6. Crash/restart, quota exhaustion, transaction abort, multi-tab versionchange, backup/restore interoperability and rollback tests against the real IndexedDB schema remain outstanding.
+7. The outbox currently supports plaintext `payload` and encryptedPayload as mutually exclusive shapes, while production durable sync hydration still expects `payload`. Converting it requires a coordinated sync transport/session design, not a store-only change.
+8. `meta.profile`, `syncInbox` identifiers, `preUpdateBackups` and local preference snapshots require explicit classification and retention decisions. They are not covered by the entity-store adapter allowlist.
+
+No schema version bump, primary-store overwrite, plaintext deletion, migration execution, merge or deployment was performed. This separation is intentional: the repository remains on the existing readable schema until the complete dual-read, migration, verification and rollback path is implemented and tested end-to-end.
