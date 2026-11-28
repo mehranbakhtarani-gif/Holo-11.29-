@@ -3,22 +3,45 @@
  * The secret is held in module memory only and is never persisted to browser storage.
  */
 let activePassphrase: string | null = null;
+let sessionGeneration = 0;
+
+export interface BackupSessionLease {
+  passphrase: string;
+  generation: number;
+}
+
+function notifySessionChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('holoo:backup-session-changed'));
+}
 
 export function unlockBackupSession(passphrase: string): void {
   const clean = passphrase.trim();
   if (clean.length < 6) throw new Error('رمز پشتیبان باید حداقل ۶ کاراکتر باشد.');
   if (!globalThis.crypto?.subtle) throw new Error('Web Crypto در این محیط در دسترس نیست.');
+  sessionGeneration += 1;
   activePassphrase = clean;
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event('holoo:backup-session-changed'));
+  notifySessionChanged();
 }
 
 export function lockBackupSession(): void {
+  sessionGeneration += 1;
   activePassphrase = null;
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event('holoo:backup-session-changed'));
+  notifySessionChanged();
 }
 
 export function isBackupSessionUnlocked(): boolean {
   return activePassphrase !== null;
+}
+
+export function captureBackupSessionLease(): BackupSessionLease {
+  return { passphrase: requireBackupSessionPassphrase(), generation: sessionGeneration };
+}
+
+/** Rejects asynchronous work started under a session that has since been locked or replaced. */
+export function assertBackupSessionLease(lease: BackupSessionLease): void {
+  if (!activePassphrase || lease.generation !== sessionGeneration || lease.passphrase !== activePassphrase) {
+    throw new Error('نشست رمزگذاری هنگام اجرای عملیات قفل یا جایگزین شد؛ نتیجه قدیمی ذخیره نشد.');
+  }
 }
 
 export function requireBackupSessionPassphrase(): string {
