@@ -38,8 +38,8 @@ function decodeSalt(value: string): Uint8Array {
     throw new Error('Operational key descriptor salt encoding is invalid.');
   }
   const decoded = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
-  if (decoded.byteLength !== 16) {
-    throw new Error('Operational key descriptor salt must decode to 16 bytes.');
+  if (decoded.byteLength !== 16 || encodeBase64(decoded) !== value) {
+    throw new Error('Operational key descriptor salt must be canonical base64 for 16 bytes.');
   }
   return decoded;
 }
@@ -47,6 +47,15 @@ function decodeSalt(value: string): Uint8Array {
 export function isOperationalKeyDescriptor(value: unknown): value is OperationalKeyDescriptor {
   if (!value || typeof value !== 'object') return false;
   const row = value as Partial<OperationalKeyDescriptor>;
+  let saltIsValid = false;
+  if (typeof row.saltB64 === 'string') {
+    try {
+      decodeSalt(row.saltB64);
+      saltIsValid = true;
+    } catch {
+      saltIsValid = false;
+    }
+  }
   return row.format === OPERATIONAL_KEY_DESCRIPTOR_FORMAT &&
     row.version === OPERATIONAL_KEY_DESCRIPTOR_VERSION &&
     typeof row.workspaceId === 'string' && row.workspaceId.trim().length > 0 && row.workspaceId.length <= 180 &&
@@ -56,7 +65,7 @@ export function isOperationalKeyDescriptor(value: unknown): value is Operational
     Number.isSafeInteger(row.iterations) &&
     Number(row.iterations) >= OPERATIONAL_RECORD_KDF_ITERATIONS &&
     Number(row.iterations) <= 1_000_000 &&
-    typeof row.saltB64 === 'string' && /^[A-Za-z0-9+/]{22}==$/.test(row.saltB64) &&
+    saltIsValid &&
     typeof row.createdAt === 'string' && Number.isFinite(Date.parse(row.createdAt));
 }
 
