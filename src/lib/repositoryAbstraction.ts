@@ -39,6 +39,8 @@ import {
   loadOperationalWorkspace,
   markSyncOutboxOperationStatus,
   recordInboxOperation,
+  savePreUpdateSafetyBackup,
+  OP_DB_VERSION,
   type OperationalRestoreJournalRecord,
   saveOperationalWorkspaceTx,
   type OperationalWorkspaceData,
@@ -102,6 +104,13 @@ export const operationalRecoveryPort = {
   loadWorkspace: loadOperationalWorkspace,
 };
 export type OperationalRecoveryPort = typeof operationalRecoveryPort;
+
+/** Backup and schema maintenance boundary for offline/PWA lifecycle workflows. */
+export const operationalBackupMaintenancePort = {
+  databaseVersion: OP_DB_VERSION,
+  savePreUpdateSafetyBackup,
+};
+export type OperationalBackupMaintenancePort = typeof operationalBackupMaintenancePort;
 export type { OperationalRestoreJournalRecord };
 
 export interface LocalRepositoryAdapter {
