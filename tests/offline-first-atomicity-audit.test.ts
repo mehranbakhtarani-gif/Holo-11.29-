@@ -540,17 +540,17 @@ async function runTests() {
 
   assert.match(
     accountingCtxSrc.slice(createInvoiceIdx, cancelInvoiceIdx),
-    /await operationalTransactionPort\.commitInvoice\(/g/,
+    /await operationalTransactionPort\.commitInvoice\(/,
     'createInvoice must commit atomically via commitInvoiceOperationalTx'
   );
   assert.match(
     accountingCtxSrc.slice(cancelInvoiceIdx, convertProformaIdx),
-    /await operationalTransactionPort\.commitInvoice\(/g/,
+    /await operationalTransactionPort\.commitInvoice\(/,
     'cancelInvoice must commit atomically via commitInvoiceOperationalTx'
   );
   assert.match(
     accountingCtxSrc.slice(convertProformaIdx, convertProformaIdx + 22000),
-    /await operationalTransactionPort\.commitInvoice\(/g/,
+    /await operationalTransactionPort\.commitInvoice\(/,
     'convertProformaToSale must commit atomically via commitInvoiceOperationalTx'
   );
 
