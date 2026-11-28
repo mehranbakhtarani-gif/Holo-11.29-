@@ -197,7 +197,7 @@ export async function persistOperationalMigrationStoreCheckpoint(
           updated = advanceOperationalMigrationStoreCheckpoint(
             current,
             storeName,
-            { ...patch, storeName },
+            patch,
             binding
           );
           store.put(updated);
