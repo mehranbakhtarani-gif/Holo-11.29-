@@ -360,8 +360,10 @@ export async function applyOperationalRestoreJournalWorkspace(
   restoreId: string
 ): Promise<{ localRevision: number; recordCount: number }> {
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای اعمال بازیابی فضای کاری در دسترس نیست.');
-  const passphrase = requireBackupSessionPassphrase();
+  const lease = captureBackupSessionLease();
+  const passphrase = lease.passphrase;
   const db = await openOperationalDb(true);
+  assertBackupSessionLease(lease);
   try {
     const journal = await new Promise<OperationalRestoreJournalRecord>((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
@@ -377,6 +379,7 @@ export async function applyOperationalRestoreJournalWorkspace(
       request.onerror = () => reject(request.error ?? new Error('خواندن ژورنال بازیابی ناموفق بود.'));
     });
     const verified = await decryptAndVerifyBackupEnvelope(journal.workspaceEnvelopeJson, passphrase);
+    assertBackupSessionLease(lease);
     if (!verified.ok || !verified.snapshotJson || verified.sha256 !== journal.workspacePlaintextSha256) {
       throw new Error(verified.error || 'اصالت فضای کاری staging شده تأیید نشد.');
     }
@@ -385,6 +388,7 @@ export async function applyOperationalRestoreJournalWorkspace(
     if (recordCount !== journal.workspaceRecordCount) {
       throw new Error('تعداد رکوردهای فضای کاری با ژورنال بازیابی مطابقت ندارد.');
     }
+    assertBackupSessionLease(lease);
     if (workspace.businessLocalState) {
       // The commit-intent journal is durable before this replayable localStorage apply.
       // If the browser stops mid-write, recovery repeats the complete allowlisted set.
@@ -430,6 +434,13 @@ export async function applyOperationalRestoreJournalWorkspace(
     const committedAt = new Date().toISOString();
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(stores, 'readwrite');
+      const abortOnSessionChange = () => {
+        try { assertBackupSessionLease(lease); } catch { try { tx.abort(); } catch { /* transaction already inactive */ } }
+      };
+      if (typeof window !== 'undefined') window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      const cleanupSessionListener = () => {
+        if (typeof window !== 'undefined') window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      };
       const metaStore = tx.objectStore('meta');
       const journalStore = tx.objectStore(RESTORE_JOURNAL_STORE);
       let nextRevision = 1;
@@ -441,6 +452,7 @@ export async function applyOperationalRestoreJournalWorkspace(
       const queueWrites = () => {
         if (didQueueWrites || !journalReady || !metaReady) return;
         didQueueWrites = true;
+        try { assertBackupSessionLease(lease); } catch { tx.abort(); return; }
         const current = journalRequest.result as OperationalRestoreJournalRecord | undefined;
         if (!isValidOperationalRestoreJournalRecord(current) ||
             !['commit_requested', 'failed_recovery_required'].includes(current.state) ||
@@ -496,11 +508,13 @@ export async function applyOperationalRestoreJournalWorkspace(
       journalRequest.onsuccess = () => { journalReady = true; queueWrites(); };
       metaRequest.onsuccess = () => { metaReady = true; queueWrites(); };
       tx.oncomplete = () => {
+        cleanupSessionListener();
+        try { assertBackupSessionLease(lease); } catch (error) { reject(error); return; }
         resetOperationalDiffCache();
         resolve({ localRevision: nextRevision, recordCount });
       };
-      tx.onerror = () => reject(tx.error ?? new Error('تراکنش اعمال فضای کاری ناموفق بود.'));
-      tx.onabort = () => reject(tx.error ?? new Error('تراکنش اعمال فضای کاری لغو شد.'));
+      tx.onerror = () => { cleanupSessionListener(); reject(tx.error ?? new Error('تراکنش اعمال فضای کاری ناموفق بود.')); };
+      tx.onabort = () => { cleanupSessionListener(); reject(tx.error ?? new Error('تراکنش اعمال فضای کاری لغو شد.')); };
     });
   } finally {
     db.close();
@@ -2461,10 +2475,12 @@ export async function savePreUpdateSafetyBackup(
   ) {
     throw new Error('نسخه پشتیبان پیش از به‌روزرسانی باید پاکت AES-256-GCM معتبر داشته باشد.');
   }
+  const lease = captureBackupSessionLease();
   const verifiedEnvelope = await decryptAndVerifyBackupEnvelope(
     rec.envelopeJson,
-    requireBackupSessionPassphrase()
+    lease.passphrase
   );
+  assertBackupSessionLease(lease);
   if (!verifiedEnvelope.ok) {
     throw new Error('نسخه پشتیبان پیش از به‌روزرسانی از نظر رمزنگاری یا یکپارچگی معتبر نیست.');
   }
@@ -2472,10 +2488,21 @@ export async function savePreUpdateSafetyBackup(
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(['preUpdateBackups'], 'readwrite');
+      const abortOnSessionChange = () => {
+        try { assertBackupSessionLease(lease); } catch { try { tx.abort(); } catch { /* transaction already inactive */ } }
+      };
+      if (typeof window !== 'undefined') window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      const cleanupSessionListener = () => {
+        if (typeof window !== 'undefined') window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      };
+      try { assertBackupSessionLease(lease); } catch (error) { cleanupSessionListener(); tx.abort(); reject(error); return; }
       tx.objectStore('preUpdateBackups').put(rec);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('Pre-update backup write failed.'));
-      tx.onabort = () => reject(tx.error ?? new Error('Pre-update backup write aborted.'));
+      tx.oncomplete = () => {
+        cleanupSessionListener();
+        try { assertBackupSessionLease(lease); resolve(); } catch (error) { reject(error); }
+      };
+      tx.onerror = () => { cleanupSessionListener(); reject(tx.error ?? new Error('Pre-update backup write failed.')); };
+      tx.onabort = () => { cleanupSessionListener(); reject(tx.error ?? new Error('Pre-update backup write aborted.')); };
     });
     return true;
   } finally {
