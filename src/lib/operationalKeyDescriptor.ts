@@ -39,6 +39,12 @@ type DescriptorIdentity = Pick<
   'format' | 'version' | 'workspaceId' | 'keyId' | 'cipher' | 'kdf' | 'iterations' | 'saltB64' | 'createdAt'
 >;
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function encodeBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -165,9 +171,9 @@ async function wrapRawDataKey(
   );
   const iv = requireRandomBytes(WRAP_IV_BYTES);
   const wrapped = await globalThis.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: descriptorAad(identity), tagLength: 128 },
+    { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(descriptorAad(identity)), tagLength: 128 },
     kek,
-    rawDataKey
+    toArrayBuffer(rawDataKey)
   );
   const descriptor: OperationalKeyDescriptor = {
     ...identity,
@@ -192,12 +198,12 @@ async function unwrapRawDataKey(
   const raw = await globalThis.crypto.subtle.decrypt(
     {
       name: 'AES-GCM',
-      iv: decodeBase64(descriptor.wrapIvB64, WRAP_IV_BYTES, 'wrapping IV'),
-      additionalData: descriptorAad(descriptor),
+      iv: toArrayBuffer(decodeBase64(descriptor.wrapIvB64, WRAP_IV_BYTES, 'wrapping IV')),
+      additionalData: toArrayBuffer(descriptorAad(descriptor)),
       tagLength: 128,
     },
     kek,
-    decodeBase64(descriptor.wrappedKeyB64, WRAPPED_KEY_BYTES, 'wrapped data key')
+    toArrayBuffer(decodeBase64(descriptor.wrappedKeyB64, WRAPPED_KEY_BYTES, 'wrapped data key'))
   );
   const bytes = new Uint8Array(raw);
   if (bytes.byteLength !== DATA_KEY_BYTES) {
@@ -242,7 +248,7 @@ export async function deriveOperationalKeyFromDescriptor(
   try {
     return await globalThis.crypto.subtle.importKey(
       'raw',
-      raw,
+      toArrayBuffer(raw),
       { name: 'AES-GCM' },
       false,
       ['encrypt', 'decrypt']
