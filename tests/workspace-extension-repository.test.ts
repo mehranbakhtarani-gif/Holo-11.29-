@@ -18,7 +18,7 @@ assert.equal(validateWorkspaceExtensionRecord({ ...initial, workspaceId: 'other'
 
 // A successful commit increments generation exactly once and preserves explicit empty payloads.
 const committed = decideWorkspaceExtensionCommit({
-  current: initial, expectedGeneration: 0, payload: { items: [] }, now,
+  workspaceId: 'workspace-1', current: initial, expectedGeneration: 0, payload: { items: [] }, now,
 });
 assert.equal(committed.status, 'committed');
 if (committed.status === 'committed') {
@@ -28,17 +28,19 @@ if (committed.status === 'committed') {
 
 // Two tabs reading generation 0: only the first transaction can commit; the stale writer conflicts.
 const competingWriter = decideWorkspaceExtensionCommit({
-  current: committed.status === 'committed' ? committed.record : initial,
+  workspaceId: 'workspace-1', current: committed.status === 'committed' ? committed.record : initial,
   expectedGeneration: 0, payload: { items: ['stale'] }, now,
 });
 assert.deepEqual(competingWriter, {
   status: 'conflict', expectedGeneration: 0, actualGeneration: 1,
 });
 
-// An absent record is generation 0 but cannot be created without an explicit workspace identity.
-assert.throws(() => decideWorkspaceExtensionCommit({
-  current: null, expectedGeneration: 0, payload: { items: [] }, now,
-}), /workspaceId/);
+// First insert uses an explicit workspace identity and starts at generation one.
+const firstInsert = decideWorkspaceExtensionCommit({
+  workspaceId: 'workspace-new', current: null, expectedGeneration: 0, payload: { items: [] }, now,
+});
+assert.equal(firstInsert.status, 'committed');
+if (firstInsert.status === 'committed') assert.equal(firstInsert.record.generation, 1);
 
 const journal: WorkspaceExtensionMigrationJournal = {
   workspaceId: 'workspace-1', migrationId: 'migration-0001',
