@@ -2807,9 +2807,12 @@ export async function wipeAllLocalIndexedDbs(): Promise<{
 
   // First empty every objectStore in the primary operational DB so even blocked handles hold 0 records
   try {
-    const db = await openOperationalDb();
-    const tx = db.transaction([...OPERATIONAL_STORES], 'readwrite');
-    for (const storeName of OPERATIONAL_STORES) {
+    const db = await openOperationalDb(true);
+    const auxiliaryStores = ['restoreJournal', OPERATIONAL_MIGRATION_JOURNAL_STORE, 'encryptedOperationalRecords']
+      .filter((storeName) => db.objectStoreNames.contains(storeName));
+    const storesToClear = [...OPERATIONAL_STORES, ...auxiliaryStores];
+    const tx = db.transaction(storesToClear, 'readwrite');
+    for (const storeName of storesToClear) {
       tx.objectStore(storeName).clear();
     }
     await new Promise<void>((resolve, reject) => {
