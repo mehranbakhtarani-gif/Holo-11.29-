@@ -384,7 +384,9 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
           versionRef.current = Math.max(versionRef.current, committedVersion);
           if (outboxOperationId) {
-            await markSyncOutboxOperationStatus(outboxOperationId, 'synced');
+            try { await markSyncOutboxOperationStatus(outboxOperationId, 'synced'); } catch {
+              // The cloud commit is authoritative; a failed local acknowledgement is safely replayable by operation id.
+            }
           }
         } catch (err) {
           if (activeCloudUidRef.current !== cloudUid && err instanceof Error && err.message.includes('Workspace account changed')) return;
