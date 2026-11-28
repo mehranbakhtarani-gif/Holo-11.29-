@@ -265,12 +265,12 @@ runCase('8. Static code guards verify syncInbox wiring, O(1) IDB count(), and co
   assert.ok(opDbSrc.includes('countStoreByIndex'), 'operationalDb must use O(1) indexed counts');
 
   const dualHookSrc = fs.readFileSync(path.join(ROOT, 'src/hooks/useDualCloudSync.ts'), 'utf8');
-  assert.ok(dualHookSrc.includes('recordInboxOperation'), 'useDualCloudSync must wire syncInbox');
+  assert.ok(dualHookSrc.includes('operationalSyncPersistencePort.recordInbox'), 'useDualCloudSync must wire syncInbox through the persistence port');
   assert.ok(dualHookSrc.includes('hasFinancialDocConflict'), 'useDualCloudSync must halt on financial doc conflict');
   assert.ok(dualHookSrc.includes('holoo:remote-import-applied'), 'useDualCloudSync must coordinate anti-echo event');
 
   const meshHookSrc = fs.readFileSync(path.join(ROOT, 'src/hooks/useLocalFirstMeshSync.ts'), 'utf8');
-  assert.ok(meshHookSrc.includes('isInboxOperationProcessed'), 'useLocalFirstMeshSync must check syncInbox');
+  assert.ok(meshHookSrc.includes('operationalSyncPersistencePort.hasProcessedInbox'), 'useLocalFirstMeshSync must check syncInbox through the persistence port');
   assert.ok(meshHookSrc.includes('holoo:operating-mode-changed'), 'useLocalFirstMeshSync must respect 3-mode OperatingMode');
 
   const whViewSrc = fs.readFileSync(path.join(ROOT, 'src/components/WarehouseCrmOpsView.tsx'), 'utf8');
