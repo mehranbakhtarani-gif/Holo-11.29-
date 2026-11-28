@@ -119,27 +119,62 @@ export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): v
  * the in-memory DEK under the currently active backup-session lease.
  */
 export async function unlockOperationalDataSessionForWorkspace(workspaceId: string): Promise<void> {
+  const cleanWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : '';
+  if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) {
+    throw new Error('Operational key workspace identity is invalid.');
+  }
   if (isOperationalRestoreBarrierActive()) {
     throw new Error('Operational key unlock is blocked while workspace restore is active.');
   }
-  let descriptor = await loadOperationalKeyDescriptor(workspaceId);
-  if (isOperationalRestoreBarrierActive()) {
-    throw new Error('Workspace restore started while the operational key descriptor was loading.');
-  }
+
+  // Fence the entire asynchronous bootstrap, not just the final KDF. A workspace
+  // switch can happen while IndexedDB is loading/initializing the descriptor; a
+  // stale request must never supersede the newer workspace's in-memory key.
+  const backupLease = captureBackupSessionLease();
+  const requestedGeneration = ++generation;
+  activeKey = null;
+  activeWorkspaceId = null;
+
+  const assertRequestIsCurrent = () => {
+    assertBackupSessionLease(backupLease);
+    if (requestedGeneration !== generation) {
+      throw new Error('Operational key derivation was superseded by another session change.');
+    }
+    if (isOperationalRestoreBarrierActive()) {
+      throw new Error('Operational key unlock is blocked while workspace restore is active.');
+    }
+  };
+
+  assertRequestIsCurrent();
+  let descriptor = await loadOperationalKeyDescriptor(cleanWorkspaceId);
+  assertRequestIsCurrent();
+
   if (!descriptor) {
     try {
-      descriptor = await initializeOperationalKeyDescriptor(workspaceId);
+      descriptor = await initializeOperationalKeyDescriptor(cleanWorkspaceId);
     } catch (error) {
       // Another tab may have initialized the same workspace concurrently.
-      const concurrentlyCreated = await loadOperationalKeyDescriptor(workspaceId);
+      assertRequestIsCurrent();
+      const concurrentlyCreated = await loadOperationalKeyDescriptor(cleanWorkspaceId);
+      assertRequestIsCurrent();
       if (!concurrentlyCreated) throw error;
       descriptor = concurrentlyCreated;
     }
   }
-  if (isOperationalRestoreBarrierActive()) {
-    throw new Error('Operational key unlock is blocked while workspace restore is active.');
+
+  assertRequestIsCurrent();
+  if (!descriptor || descriptor.workspaceId !== cleanWorkspaceId) {
+    throw new Error('Operational key descriptor is invalid or belongs to another workspace.');
   }
-  await unlockOperationalDataSessionFromDescriptor(descriptor, workspaceId);
+
+  const key = await deriveOperationalKeyFromDescriptor(
+    backupLease.passphrase,
+    descriptor,
+    cleanWorkspaceId
+  );
+  assertRequestIsCurrent();
+  activeKey = key;
+  activeWorkspaceId = cleanWorkspaceId;
 }
 
 /**
