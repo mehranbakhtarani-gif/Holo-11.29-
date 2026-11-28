@@ -112,18 +112,20 @@ export async function deriveOperationalDataKey(
   // Web Crypto copies imported key material, but the caller-owned byte buffers remain
   // in JavaScript memory unless explicitly cleared after importKey resolves.
   const passphraseBytes = new TextEncoder().encode(passphrase);
-  const passphraseBuffer = toArrayBuffer(passphraseBytes);
+  let passphraseBuffer: ArrayBuffer | null = null;
   let material: CryptoKey;
   try {
+    passphraseBuffer = toArrayBuffer(passphraseBytes);
     material = await cryptoApi.subtle.importKey(
       'raw', passphraseBuffer, 'PBKDF2', false, ['deriveKey']
     );
   } finally {
     passphraseBytes.fill(0);
-    new Uint8Array(passphraseBuffer).fill(0);
+    if (passphraseBuffer) new Uint8Array(passphraseBuffer).fill(0);
   }
-  const saltBuffer = toArrayBuffer(salt);
+  let saltBuffer: ArrayBuffer | null = null;
   try {
+    saltBuffer = toArrayBuffer(salt);
     return await cryptoApi.subtle.deriveKey(
       { name: 'PBKDF2', salt: saltBuffer, iterations, hash: 'SHA-256' },
       material,
@@ -133,7 +135,7 @@ export async function deriveOperationalDataKey(
     );
   } finally {
     // Web Crypto does not clear the caller-owned PBKDF2 salt copy.
-    new Uint8Array(saltBuffer).fill(0);
+    if (saltBuffer) new Uint8Array(saltBuffer).fill(0);
   }
 }
 
@@ -161,13 +163,18 @@ export async function encryptOperationalRecord<T>(
     plaintext.fill(0);
     throw new Error('Operational record exceeds the maximum encrypted record size.');
   }
-  const plaintextBuffer = toArrayBuffer(plaintext);
-  const iv = requireWebCrypto().getRandomValues(new Uint8Array(IV_BYTES));
-  const aad = additionalData(context);
-  const ivBuffer = toArrayBuffer(iv);
-  const aadBuffer = toArrayBuffer(aad);
+  let plaintextBuffer: ArrayBuffer | null = null;
+  let iv: Uint8Array | null = null;
+  let aad: Uint8Array | null = null;
+  let ivBuffer: ArrayBuffer | null = null;
+  let aadBuffer: ArrayBuffer | null = null;
   let ciphertext: ArrayBuffer | null = null;
   try {
+    plaintextBuffer = toArrayBuffer(plaintext);
+    iv = requireWebCrypto().getRandomValues(new Uint8Array(IV_BYTES));
+    aad = additionalData(context);
+    ivBuffer = toArrayBuffer(iv);
+    aadBuffer = toArrayBuffer(aad);
     ciphertext = await requireWebCrypto().subtle.encrypt(
       { name: 'AES-GCM', iv: ivBuffer, additionalData: aadBuffer, tagLength: 128 },
       key,
@@ -184,11 +191,11 @@ export async function encryptOperationalRecord<T>(
   } finally {
     // Clear plaintext, nonce, AAD, and all copies passed to Web Crypto on every path.
     plaintext.fill(0);
-    new Uint8Array(plaintextBuffer).fill(0);
-    iv.fill(0);
-    aad.fill(0);
-    new Uint8Array(ivBuffer).fill(0);
-    new Uint8Array(aadBuffer).fill(0);
+    if (plaintextBuffer) new Uint8Array(plaintextBuffer).fill(0);
+    iv?.fill(0);
+    aad?.fill(0);
+    if (ivBuffer) new Uint8Array(ivBuffer).fill(0);
+    if (aadBuffer) new Uint8Array(aadBuffer).fill(0);
     if (ciphertext) new Uint8Array(ciphertext).fill(0);
     serialized = '';
   }
