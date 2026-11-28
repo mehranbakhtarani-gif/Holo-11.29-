@@ -1096,9 +1096,11 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [isSigningIn, showToast]);
 
   const logout = useCallback(async () => {
-    await signOutAccount();
+    // Lock local encryption capabilities before attempting network/auth teardown.
+    // A failed sign-out must never leave the backup vault unlocked.
     lockBackupVault();
     setBackupSessionUnlocked(false);
+    await signOutAccount();
     showToast('از حساب ابری خارج شدید. محیط نمونه محلی فعال است.');
   }, [showToast]);
 
