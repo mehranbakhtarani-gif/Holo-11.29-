@@ -14,20 +14,18 @@ async function run() {
     const salt = createOperationalDataSalt();
     assert.equal(salt.byteLength, 16);
     const originalDeriveKey = webcrypto.subtle.deriveKey.bind(webcrypto.subtle);
-    let observedKdfSalt: Uint8Array | null = null;
+    const observedKdfSalts: Uint8Array[] = [];
     Object.defineProperty(webcrypto.subtle, 'deriveKey', {
       configurable: true,
-      value: (algorithm: AlgorithmIdentifier | Pbkdf2Params | HkdfParams, baseKey: CryptoKey, derivedKeyType: AesKeyGenParams | HmacKeyGenParams, extractable: boolean, keyUsages: KeyUsage[]) => {
-        if (typeof algorithm === 'object' && 'name' in algorithm && algorithm.name === 'PBKDF2') {
-          observedKdfSalt = new Uint8Array((algorithm as Pbkdf2Params).salt as ArrayBuffer);
-        }
+      value: (algorithm: Pbkdf2Params, baseKey: CryptoKey, derivedKeyType: AesKeyGenParams, extractable: boolean, keyUsages: KeyUsage[]) => {
+        observedKdfSalts.push(new Uint8Array(algorithm.salt as ArrayBuffer));
         return originalDeriveKey(algorithm, baseKey, derivedKeyType, extractable, keyUsages);
       },
     });
     const key = await deriveOperationalDataKey('OperationalEncryption#1405', salt);
-    assert.ok(observedKdfSalt, 'PBKDF2 must receive an owned salt buffer');
+    assert.equal(observedKdfSalts.length, 1, 'PBKDF2 must receive an owned salt buffer');
     assert.ok(
-      observedKdfSalt!.every((byte) => byte === 0),
+      observedKdfSalts[0].every((byte) => byte === 0),
       'the temporary PBKDF2 salt buffer must be zeroed after derivation'
     );
     Object.defineProperty(webcrypto.subtle, 'deriveKey', {
