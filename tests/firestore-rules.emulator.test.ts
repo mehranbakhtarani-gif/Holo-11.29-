@@ -230,7 +230,13 @@ async function run() {
       updatedAt: serverTimestamp(),
     }, { merge: true }));
 
-    // A tracked transfer must commit product cost layers and its workspace ledger atomically.
+    // Restore the in-transit state, then verify receipt and product cost-layer changes commit atomically.
+    await assertSucceeds(setDoc(transferDoc, {
+      warehouseTransfers: [trackedTransfer],
+      _version: 3,
+      updatedByDevice: 'device_a',
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
     await assertSucceeds(runTransaction(ownerA, async (transaction) => {
       const [productSnap, extensionSnap] = await Promise.all([
         transaction.get(productDoc),
@@ -240,12 +246,12 @@ async function run() {
       assert.equal(extensionSnap.exists(), true);
       const currentExtension = extensionSnap.data();
       const currentTransfers = currentExtension.warehouseTransfers as Array<Record<string, unknown>>;
-      assert.equal(currentTransfers.some((item) => item.id === 'trf_001' && item.status === 'received'), true);
+      assert.equal(currentTransfers.some((item) => item.id === 'trf_001' && item.status === 'in_transit'), true);
       transaction.update(productDoc, {
         stock: 10,
         costLayers: [{ layerId: 'opening-1', remainingQty: 8, totalCostIrr: 8000 }],
         inventoryValueIrr: 10000,
-        _version: 3,
+        _version: 4,
         updatedByDevice: 'device_a',
         updatedAt: serverTimestamp(),
       });
@@ -253,7 +259,7 @@ async function run() {
         warehouseTransfers: currentTransfers.map((item) =>
           item.id === 'trf_001' ? { ...item, status: 'received' } : item
         ),
-        _version: 3,
+        _version: 4,
         updatedByDevice: 'device_a',
         updatedAt: serverTimestamp(),
       });
