@@ -3,7 +3,6 @@ import { webcrypto } from 'node:crypto';
 import { indexedDB } from 'fake-indexeddb';
 import { lockBackupSession, unlockBackupSession, getBackupSessionGeneration } from '../src/lib/backupSession';
 import { createOperationalMigrationJournalRecord } from '../src/lib/operationalMigrationJournal';
-import { createOperationalDataSalt } from '../src/lib/operationalRecordEncryption';
 import { writeEncryptedOperationalMigrationBatchAtomically } from '../src/lib/encryptedOperationalIndexedDb';
 
 const previous = {
