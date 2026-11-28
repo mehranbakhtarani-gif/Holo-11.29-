@@ -59,6 +59,18 @@ async function run() {
     const lease = session.captureOperationalDataKeyLease();
     assert.equal(lease.key.extractable, false);
     session.assertOperationalDataKeyLease(lease);
+    operationalDb.setOperationalRestoreBarrier(true);
+    assert.throws(
+      () => session.captureOperationalDataKeyLease(),
+      /blocked while workspace restore is active/,
+      'restore barrier must prevent new operational data-key leases'
+    );
+    assert.throws(
+      () => session.assertOperationalDataKeyLease(lease),
+      /blocked while workspace restore is active/,
+      'restore barrier must fence already captured operational data-key leases'
+    );
+    operationalDb.setOperationalRestoreBarrier(false);
 
     const sessionCodec = await import('../src/lib/operationalRecordSessionCodec');
     const recordContext = {
@@ -131,7 +143,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 26 assertions passed');
+    console.log('Operational encryption session: 28 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
