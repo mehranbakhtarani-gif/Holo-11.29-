@@ -296,8 +296,14 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
   options: EncryptedOperationalQueryOptions = {}
 ): Promise<{ items: T[]; scanned: number; hasMore: boolean; nextCursor: string | null }> {
   if (!db.objectStoreNames.contains(ENCRYPTED_SHADOW_STORE)) throw new Error('Encrypted operational shadow store does not exist.');
-  const maxScan = Math.max(1, Math.min(MAX_QUERY_SCAN, Math.trunc(options.maxScan ?? 2_000)));
-  const limit = Math.max(1, Math.min(MAX_QUERY_RESULTS, Math.trunc(options.limit ?? 100)));
+  if (options.maxScan !== undefined && (!Number.isSafeInteger(options.maxScan) || options.maxScan < 1)) {
+    throw new Error('Encrypted operational query maxScan must be a positive safe integer.');
+  }
+  if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1)) {
+    throw new Error('Encrypted operational query limit must be a positive safe integer.');
+  }
+  const maxScan = Math.min(MAX_QUERY_SCAN, options.maxScan ?? 2_000);
+  const limit = Math.min(MAX_QUERY_RESULTS, options.limit ?? 100);
   const lease = captureOperationalDataKeyLease();
   assertWorkspaceLease(lease, workspaceId);
   const migrationId = options.migrationId ?? DEFAULT_SHADOW_MIGRATION_ID;
