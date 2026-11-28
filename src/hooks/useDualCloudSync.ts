@@ -1,4 +1,3 @@
-import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive } from '../lib/operationalDb';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAccounting } from '../context/AccountingContext';
 import {
@@ -45,13 +44,7 @@ import {
   saveAndPruneFirebaseBackup,
   wipeAllFirebaseCloudData,
 } from '../lib/firebaseCloudBackup';
-import {
-  clearPendingSyncOutboxOperations,
-  enqueueSyncOutboxOperation,
-  isInboxOperationProcessed,
-  markSyncOutboxOperationStatus,
-  recordInboxOperation,
-} from '../lib/operationalDb';
+import { operationalSyncPersistencePort } from '../lib/repositoryAbstraction';
 import { getTodayShamsi, toPersianDigits } from '../lib/format';
 import { playSuccessChime, playWarningTone } from '../lib/audioFeedback';
 import {
@@ -106,9 +99,9 @@ function saveLastFirebaseBackupAt(stamp: string): void {
 }
 
 async function isRestoreRecoveryBlockingSync(): Promise<boolean> {
-  if (isOperationalRestoreBarrierActive()) return true;
+  if (operationalSyncPersistencePort.isRestoreBarrierActive()) return true;
   try {
-    return Boolean(await getActiveOperationalRestoreJournal());
+    return Boolean(await operationalSyncPersistencePort.getActiveRestoreJournal());
   } catch {
     // Corrupt/unreadable recovery journal must fail closed for every sync direction.
     return true;
@@ -559,7 +552,7 @@ export function useDualCloudSync() {
         if (!isSupabaseAuthenticated || !supabaseStatus.configured || !supabaseStatus.tableReady) {
           clearOfflineOutbox();
           setOutbox([]);
-          void clearPendingSyncOutboxOperations();
+          void operationalSyncPersistencePort.clearPendingOutbox();
         }
 
         if (!silent) {
@@ -637,7 +630,7 @@ export function useDualCloudSync() {
           lastFbSyncedHashRef.current = hash;
           notifyRemoteImportApplied('dual_cloud', hash);
           const rev = res.revision || 1;
-          void recordInboxOperation({
+          void operationalSyncPersistencePort.recordInbox({
             operationId: `fb_pull_${backupId || 'latest'}_r${rev}_${hash.slice(0, 12)}`,
             sourceDeviceId: 'firebase_cloud',
             payloadHash: hash,
@@ -650,7 +643,7 @@ export function useDualCloudSync() {
           }
           clearOfflineOutbox();
           setOutbox([]);
-          void clearPendingSyncOutboxOperations();
+          void operationalSyncPersistencePort.clearPendingOutbox();
           logActivity(
             'پشتیبان ابری Firebase',
             'دریافت و بازیابی نسخه ابری',
@@ -905,7 +898,7 @@ export function useDualCloudSync() {
           productCount: products.length,
         });
         setOutbox(updated);
-        void enqueueSyncOutboxOperation({
+        void operationalSyncPersistencePort.enqueueOutbox({
           operationId,
           target: 'supabase',
           workspaceId: supabaseWorkspaceId || 'default',
@@ -945,7 +938,7 @@ export function useDualCloudSync() {
       sbInFlightRef.current = true;
       setIsSupabaseSyncing(true);
       try {
-        void enqueueSyncOutboxOperation({
+        void operationalSyncPersistencePort.enqueueOutbox({
           operationId,
           target: 'supabase',
           workspaceId: supabaseWorkspaceId || 'default',
@@ -1025,7 +1018,7 @@ export function useDualCloudSync() {
             const note = `تداخل در ${toPersianDigits(summary.totalConflictingDocs)} سند حسابداری با «${conflictRecord.remoteDeviceLabel}» شناسایی شد (توقف خودکار برای تایید کاربر).`;
             setLastConflictNote(note);
             setPendingConflict(conflictRecord);
-            void markSyncOutboxOperationStatus(operationId, 'conflict');
+            void operationalSyncPersistencePort.markOutboxStatus(operationId, 'conflict');
             playWarningTone();
             logActivity('همگام‌سازی Supabase', 'توقف خودکار در تداخل اسناد مالی', note);
             showToast(
@@ -1069,8 +1062,8 @@ export function useDualCloudSync() {
         clearOfflineOutbox();
         setOutbox([]);
         pendingOperationRef.current = null;
-        void markSyncOutboxOperationStatus(operationId, 'synced');
-        void clearPendingSyncOutboxOperations();
+        void operationalSyncPersistencePort.markOutboxStatus(operationId, 'synced');
+        void operationalSyncPersistencePort.clearPendingOutbox();
 
         if (Array.isArray(res.data.retainedBackups)) {
           setSupabaseBackups(normalizeSupabaseBackups(res.data.retainedBackups));
@@ -1097,7 +1090,7 @@ export function useDualCloudSync() {
             lastSbSyncedHashRef.current = remoteHash;
             importBackupJson(res.data.remoteSnapshotJson);
             notifyRemoteImportApplied('dual_cloud', remoteHash);
-            void recordInboxOperation({
+            void operationalSyncPersistencePort.recordInbox({
               operationId: `sb_conflict_remote_r${res.data.serverRevision}_${remoteHash.slice(0, 12)}`,
               sourceDeviceId: res.data.remoteDeviceLabel || 'supabase_cloud',
               payloadHash: remoteHash,
@@ -1180,7 +1173,7 @@ export function useDualCloudSync() {
         const pullHash = fingerprintWorkspacePayload(res.snapshotJson);
         const rev = res.revision || 1;
         const inboxOpId = `sb_pull_${backupId || 'latest'}_r${rev}_${pullHash.slice(0, 12)}`;
-        if (silent && (await isInboxOperationProcessed(inboxOpId))) {
+        if (silent && (await operationalSyncPersistencePort.hasProcessedInbox(inboxOpId))) {
           return true;
         }
         suppressNextAutoSyncRef.current = true;
@@ -1188,7 +1181,7 @@ export function useDualCloudSync() {
         if (imported) {
           lastSbSyncedHashRef.current = pullHash;
           notifyRemoteImportApplied('dual_cloud', pullHash);
-          void recordInboxOperation({
+          void operationalSyncPersistencePort.recordInbox({
             operationId: inboxOpId,
             sourceDeviceId: res.lastDeviceLabel || 'supabase_cloud',
             payloadHash: pullHash,
@@ -1205,7 +1198,7 @@ export function useDualCloudSync() {
           saveLastSupabaseSyncAt(stamp);
           clearOfflineOutbox();
           setOutbox([]);
-          void clearPendingSyncOutboxOperations();
+          void operationalSyncPersistencePort.clearPendingOutbox();
           logActivity(
             'همگام‌سازی Supabase',
             backupId ? 'بازیابی از نسخه پشتیبان' : 'دریافت نسخه ابری',
@@ -1545,14 +1538,14 @@ export function useDualCloudSync() {
     if (!isSupabaseAuthenticated && !user) {
       clearOfflineOutbox();
       setOutbox([]);
-      void clearPendingSyncOutboxOperations();
+      void operationalSyncPersistencePort.clearPendingOutbox();
       showToast('همه تغییرات روی حافظه محلی IndexedDB ذخیره هستند؛ صف قدیمی پاکسازی شد.');
       return true;
     }
     if (drained) {
       clearOfflineOutbox();
       setOutbox([]);
-      void clearPendingSyncOutboxOperations();
+      void operationalSyncPersistencePort.clearPendingOutbox();
     }
     return drained;
   }, [
@@ -1594,7 +1587,7 @@ export function useDualCloudSync() {
           const resolvedHash = fingerprintWorkspacePayload(pendingConflict.remoteSnapshotJson);
           lastSbSyncedHashRef.current = resolvedHash;
           notifyRemoteImportApplied('dual_cloud', resolvedHash);
-          void recordInboxOperation({
+          void operationalSyncPersistencePort.recordInbox({
             operationId: `sb_resolve_remote_r${pendingConflict.remoteRevision}_${resolvedHash.slice(0, 12)}`,
             sourceDeviceId: pendingConflict.remoteDeviceLabel || 'supabase_cloud',
             payloadHash: resolvedHash,
@@ -1612,7 +1605,7 @@ export function useDualCloudSync() {
           clearOfflineOutbox();
           setOutbox([]);
           pendingOperationRef.current = null;
-          void clearPendingSyncOutboxOperations();
+          void operationalSyncPersistencePort.clearPendingOutbox();
           setPendingConflict(null);
 
           const note = `نسخه ابری شماره #${toPersianDigits(pendingConflict.remoteRevision)} از «${pendingConflict.remoteDeviceLabel}» بازگردانی شد${defaultSuffix}.`;
@@ -1669,7 +1662,7 @@ export function useDualCloudSync() {
         clearOfflineOutbox();
         setOutbox([]);
         pendingOperationRef.current = null;
-        void clearPendingSyncOutboxOperations();
+        void operationalSyncPersistencePort.clearPendingOutbox();
         setPendingConflict(null);
 
         const note = `آخرین تغییر محلی حفظ و به‌عنوان نسخه #${toPersianDigits(pushRes.data.serverRevision)} در ابر ثبت شد${defaultSuffix}.`;
@@ -1706,12 +1699,12 @@ export function useDualCloudSync() {
   }, []);
 
   const clearPendingOutbox = useCallback(() => {
-    if (isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همگام‌سازی تا پایان بازیابی متوقف است.'); return; }
+    if (operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('پاک‌سازی صف همگام‌سازی تا پایان بازیابی متوقف است.'); return; }
     clearOfflineOutbox();
     setOutbox([]);
     pendingOperationRef.current = null;
     autoDrainAttemptedRef.current = null;
-    void clearPendingSyncOutboxOperations();
+    void operationalSyncPersistencePort.clearPendingOutbox();
     showToast('صف انتظار همگام‌سازی پاکسازی شد (اطلاعات شما در پایگاه داده محلی محفوظ است).');
   }, [showToast]);
 
@@ -1753,7 +1746,7 @@ export function useDualCloudSync() {
             lastSbSyncedHashRef.current = null;
             clearOfflineOutbox();
             setOutbox([]);
-            void clearPendingSyncOutboxOperations();
+            void operationalSyncPersistencePort.clearPendingOutbox();
             details.push(
               `فضای ابری Supabase پاکسازی شد (${toPersianDigits(sbRes.deletedBackups || 0)} نسخه پشتیبان و اسنپ‌شات اصلی حذف شد).`
             );

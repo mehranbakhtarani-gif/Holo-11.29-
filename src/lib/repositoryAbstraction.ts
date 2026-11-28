@@ -30,8 +30,11 @@ import {
   commitInvoiceOperationalTx,
   commitSalesOrderDispatchOperationalTx,
   commitStockAdjustmentOperationalTx,
+  clearPendingSyncOutboxOperations,
   enqueueSyncOutboxOperation,
+  getActiveOperationalRestoreJournal,
   isInboxOperationProcessed,
+  isOperationalRestoreBarrierActive,
   listPendingSyncOutboxOperations,
   loadOperationalWorkspace,
   markSyncOutboxOperationStatus,
@@ -77,6 +80,19 @@ export const operationalTransactionPort = {
 };
 
 export type OperationalTransactionPort = typeof operationalTransactionPort;
+
+/** Durable sync-persistence facade; delegates to the existing target-aware IndexedDB operations. */
+export const operationalSyncPersistencePort = {
+  enqueueOutbox: enqueueSyncOutboxOperation,
+  listPendingOutbox: listPendingSyncOutboxOperations,
+  markOutboxStatus: markSyncOutboxOperationStatus,
+  clearPendingOutbox: clearPendingSyncOutboxOperations,
+  recordInbox: recordInboxOperation,
+  hasProcessedInbox: isInboxOperationProcessed,
+  getActiveRestoreJournal: getActiveOperationalRestoreJournal,
+  isRestoreBarrierActive: isOperationalRestoreBarrierActive,
+};
+export type OperationalSyncPersistencePort = typeof operationalSyncPersistencePort;
 
 export interface LocalRepositoryAdapter {
   readonly kind: 'indexeddb' | 'memory';

@@ -59,7 +59,7 @@ import {
   resolveEffectiveOperatingMode,
   type OperatingMode,
 } from '../lib/offlineFirstCore';
-import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, isInboxOperationProcessed, recordInboxOperation } from '../lib/operationalDb';
+import { operationalSyncPersistencePort } from '../lib/repositoryAbstraction';
 
 const ONBOARDING_DISMISSED_KEY = 'holoo_apex_mesh_onboarding_dismissed_v1';
 const REMOTE_IMPORT_SYNC_EVENT = 'holoo:remote-import-applied';
@@ -160,7 +160,7 @@ export function useLocalFirstMeshSync() {
     let mounted = true;
     const refreshBarrier = async () => {
       try {
-        const journal = await getActiveOperationalRestoreJournal();
+        const journal = await operationalSyncPersistencePort.getActiveRestoreJournal();
         if (mounted) setRestoreBarrierActive(Boolean(journal));
       } catch {
         if (mounted) setRestoreBarrierActive(true);
@@ -312,7 +312,7 @@ export function useLocalFirstMeshSync() {
   // ---- Helper: Mirror snapshot into selected local folder ----
   const writeSnapshotToLocalFolder = useCallback(
     async (taggedJson: string, payloadHash: string, enqueueOnPrompt = true): Promise<boolean> => {
-      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return false;
+      if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return false;
       const handle = dirHandleRef.current;
       if (!handle) return false;
       const result = await writeMirrorToSelectedFolder(handle, taggedJson);
@@ -405,8 +405,8 @@ export function useLocalFirstMeshSync() {
         relayEnvelopes,
         batchedOperationIds,
       }) => {
-        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return [];
-        const activeRestore = await getActiveOperationalRestoreJournal().catch(() => ({ restoreId: 'blocked' }));
+        if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return [];
+        const activeRestore = await operationalSyncPersistencePort.getActiveRestoreJournal().catch(() => ({ restoreId: 'blocked' }));
         if (activeRestore) return [];
         setIsP2PSyncing(true);
         try {
@@ -440,7 +440,7 @@ export function useLocalFirstMeshSync() {
             if (!env?.operationId) continue;
             ackedOpIdSet.add(env.operationId);
 
-            const alreadyProcessed = await isInboxOperationProcessed(env.operationId);
+            const alreadyProcessed = await operationalSyncPersistencePort.hasProcessedInbox(env.operationId);
             if (!alreadyProcessed && env.snapshotJson && env.snapshotJson.length > 2) {
               const relayMerge = mergeWorkspacesDeterministicLWW(
                 currentMergedJson,
@@ -548,7 +548,7 @@ export function useLocalFirstMeshSync() {
           }
 
           // Do not advance clocks or import peer state if recovery began during merge work.
-          if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return [];
+          if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return [];
 
           // 3) Advance vector clock deterministically
           const nextClock: Record<string, number> = { ...vectorClockRef.current };
@@ -563,7 +563,7 @@ export function useLocalFirstMeshSync() {
           saveVectorClock(nextClock);
 
           if (anyChanged) {
-            if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return [];
+            if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return [];
             // Anti-loop guard: suppress local mutation echo during remote import
             isRemoteUpdateRef.current = true;
             try {
@@ -579,7 +579,7 @@ export function useLocalFirstMeshSync() {
                   );
                 }
                 for (const opId of ackedOpIds) {
-                  void recordInboxOperation({
+                  void operationalSyncPersistencePort.recordInbox({
                     operationId: opId,
                     sourceDeviceId: fromPeerId,
                     payloadHash: mergedFp,
@@ -644,8 +644,8 @@ export function useLocalFirstMeshSync() {
         }
       },
       onPeerAckReceived: async ({ fromPeerId, receivedOperationIds }) => {
-        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
-        const activeRestore = await getActiveOperationalRestoreJournal().catch(() => ({ restoreId: 'blocked' }));
+        if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return;
+        const activeRestore = await operationalSyncPersistencePort.getActiveRestoreJournal().catch(() => ({ restoreId: 'blocked' }));
         if (activeRestore) return;
         for (const opId of receivedOperationIds) {
           await markDexieOutboxPeerDelivered(opId, fromPeerId);
@@ -677,7 +677,7 @@ export function useLocalFirstMeshSync() {
     connector.start();
 
     const handleVisibility = () => {
-      if (!isOnline || restoreBarrierActive || isOperationalRestoreBarrierActive() || !connectorRef.current) return;
+      if (!isOnline || restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive() || !connectorRef.current) return;
       if (document.visibilityState === 'visible' && navigator.onLine) {
         connectorRef.current.connectToAllPeers();
       } else if (document.visibilityState === 'hidden' && navigator.onLine) {
@@ -686,12 +686,12 @@ export function useLocalFirstMeshSync() {
       }
     };
     const handlePageHide = () => {
-      if (!restoreBarrierActive && !isOperationalRestoreBarrierActive() && isOnline && connectorRef.current && navigator.onLine) {
+      if (!restoreBarrierActive && !operationalSyncPersistencePort.isRestoreBarrierActive() && isOnline && connectorRef.current && navigator.onLine) {
         void connectorRef.current.flushBatchedUpdates(false);
       }
     };
     const handleOnline = () => {
-      if (!isOnline || restoreBarrierActive || isOperationalRestoreBarrierActive() || !connectorRef.current) return;
+      if (!isOnline || restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive() || !connectorRef.current) return;
       connectorRef.current.start();
       window.setTimeout(() => {
         if (isOnline) {
@@ -774,14 +774,14 @@ export function useLocalFirstMeshSync() {
   );
 
   useEffect(() => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return;
     const timer = window.setTimeout(() => {
-      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
+      if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return;
       void (async () => {
-        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
+        if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return;
         const built = buildTaggedSnapshot();
 
-        if (restoreBarrierActive || isOperationalRestoreBarrierActive()) return;
+        if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) return;
 
         // First boot: seed Dexie liveRecords silently without creating a bogus outbox mutation
         if (!didBootMirrorRef.current) {
@@ -792,7 +792,7 @@ export function useLocalFirstMeshSync() {
           return;
         }
 
-        if (restoreBarrierActive || isOperationalRestoreBarrierActive() || isRemoteUpdateRef.current) return;
+        if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive() || isRemoteUpdateRef.current) return;
         if (built.payloadHash === lastObservedFingerprintRef.current) return;
         lastObservedFingerprintRef.current = built.payloadHash;
 
@@ -864,7 +864,7 @@ export function useLocalFirstMeshSync() {
   // ==================== USER ACTIONS ====================
 
   const selectLocalFolder = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     setIsFolderBusy(true);
     try {
       const res = await pickLocalStorageDirectory();
@@ -882,7 +882,7 @@ export function useLocalFirstMeshSync() {
         return false;
       }
 
-      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) {
+      if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) {
         showToast('نوشتن در پوشه محلی تا پایان بازیابی پشتیبان متوقف است.');
         return false;
       }
@@ -926,7 +926,7 @@ export function useLocalFirstMeshSync() {
   }, [buildTaggedSnapshot, logActivity, refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const regrantFolderPermission = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     const handle = dirHandleRef.current;
     if (!handle) {
       return selectLocalFolder();
@@ -971,7 +971,7 @@ export function useLocalFirstMeshSync() {
   ]);
 
   const mirrorNowToFolder = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('ذخیره‌سازی محلی تا پایان بازیابی پشتیبان متوقف است.'); return false; }
     if (!dirHandleRef.current) {
       return selectLocalFolder();
     }
@@ -993,7 +993,7 @@ export function useLocalFirstMeshSync() {
   }, [selectLocalFolder, buildTaggedSnapshot, writeSnapshotToLocalFolder, restoreBarrierActive, showToast]);
 
   const restoreFromSelectedFolder = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('بازیابی از پوشه محلی تا پایان بازیابی پشتیبان دیگر متوقف است.'); return false; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('بازیابی از پوشه محلی تا پایان بازیابی پشتیبان دیگر متوقف است.'); return false; }
     let handle = dirHandleRef.current;
     if (!handle) {
       const picked = await pickLocalStorageDirectory();
@@ -1033,7 +1033,7 @@ export function useLocalFirstMeshSync() {
         readRes.snapshotJson,
         activeDeviceIdentity
       );
-      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) {
+      if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) {
         showToast('بازیابی از پوشه محلی به‌دلیل شروع بازیابی پشتیبان دیگر متوقف شد.');
         return false;
       }
@@ -1197,7 +1197,7 @@ export function useLocalFirstMeshSync() {
 
   const retryOutboxItem = useCallback(
     async (operationId: string) => {
-      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
+      if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
       const items = await listDexieOutboxItems();
       const target = items.find((i) => i.operationId === operationId);
       if (!target) return;
@@ -1247,7 +1247,7 @@ export function useLocalFirstMeshSync() {
   );
 
   const retryAllPendingOutbox = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('ارسال صف همتا تا پایان بازیابی پشتیبان متوقف است.'); return; }
     const items = await listDexieOutboxItems();
     const pendingFolder = items.some((i) => i.target === 'local_folder' && i.status !== 'synced');
     const pendingP2P = items.some((i) => i.target === 'p2p_mesh' && i.status !== 'synced');
@@ -1263,14 +1263,14 @@ export function useLocalFirstMeshSync() {
   }, [isOnline, regrantFolderPermission, refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const clearSyncedOutbox = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
     await clearSyncedDexieOutboxItems();
     await refreshOutboxAndLogs();
     showToast('آیتم‌های تحویل‌شده از صف آفلاین پاکسازی شدند.');
   }, [refreshOutboxAndLogs, restoreBarrierActive, showToast]);
 
   const clearAllOutbox = useCallback(async () => {
-    if (restoreBarrierActive || isOperationalRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
+    if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) { showToast('پاک‌سازی صف همتا تا پایان بازیابی متوقف است.'); return; }
     await clearAllDexieOutboxItems();
     await refreshOutboxAndLogs();
     showToast('تمام صف محلی sync_outbox پاکسازی شد.');
@@ -1287,7 +1287,7 @@ export function useLocalFirstMeshSync() {
       choice: SyncConflictResolutionChoice,
       rememberAsDefault: boolean
     ): Promise<boolean> => {
-      if (restoreBarrierActive || isOperationalRestoreBarrierActive()) {
+      if (restoreBarrierActive || operationalSyncPersistencePort.isRestoreBarrierActive()) {
         showToast('حل تعارض P2P تا پایان بازیابی پشتیبان متوقف است.');
         return false;
       }
