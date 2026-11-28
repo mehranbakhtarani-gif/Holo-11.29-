@@ -221,22 +221,33 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
     };
     try {
       assertWorkspaceLease(lease, workspaceId);
-      tx = db.transaction([ENCRYPTED_SHADOW_STORE, journalStoreName], 'readwrite');
+      tx = db.transaction([ENCRYPTED_SHADOW_STORE, journalStoreName, 'meta'], 'readwrite');
       if (typeof window !== 'undefined') {
         window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
         window.addEventListener('holoo:operational-restore-barrier-changed', abortOnSessionChange);
       }
       const shadowStore = tx.objectStore(ENCRYPTED_SHADOW_STORE);
       const journalStore = tx.objectStore(journalStoreName);
-      const journalRequest = journalStore.get(binding.migrationId);
-      journalRequest.onsuccess = () => {
+      const metaStore = tx.objectStore('meta');
+      let currentJournal: unknown;
+      let currentMeta: unknown;
+      let journalLoaded = false;
+      let metaLoaded = false;
+      let writesQueued = false;
+      const queueAtomicBatch = () => {
+        if (!journalLoaded || !metaLoaded || writesQueued || settled) return;
+        writesQueued = true;
         try {
           assertWorkspaceLease(lease, workspaceId);
-          const current = journalRequest.result as unknown;
-          if (!isValidOperationalMigrationJournalRecord(current) || JSON.stringify(current) !== JSON.stringify(expectedJournal)) {
+          if (!isValidOperationalMigrationJournalRecord(currentJournal) ||
+              JSON.stringify(currentJournal) !== JSON.stringify(expectedJournal)) {
             throw new Error('Operational migration journal changed; stale batch was rejected.');
           }
-          assertOperationalMigrationBinding(current, binding);
+          assertOperationalMigrationBinding(currentJournal, binding);
+          const sourceRevision = (currentMeta as { localRevision?: unknown } | undefined)?.localRevision;
+          if (!Number.isSafeInteger(sourceRevision) || sourceRevision !== binding.sourceRevision) {
+            throw new Error('Operational source revision changed during migration; encrypted batch was rejected.');
+          }
           for (const row of prepared) {
             assertWorkspaceLease(lease, workspaceId);
             const request = shadowStore.put(row);
@@ -249,7 +260,20 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
           journalStore.put(nextJournal);
         } catch (error) { fail(error); }
       };
+      const journalRequest = journalStore.get(binding.migrationId);
+      const metaRequest = metaStore.get('workspace_meta');
+      journalRequest.onsuccess = () => {
+        currentJournal = journalRequest.result as unknown;
+        journalLoaded = true;
+        queueAtomicBatch();
+      };
+      metaRequest.onsuccess = () => {
+        currentMeta = metaRequest.result as unknown;
+        metaLoaded = true;
+        queueAtomicBatch();
+      };
       journalRequest.onerror = () => fail(journalRequest.error ?? new Error('Migration journal compare-and-swap read failed.'));
+      metaRequest.onerror = () => fail(metaRequest.error ?? new Error('Operational source revision read failed.'));
       tx.oncomplete = () => {
         if (settled) return;
         try { assertWorkspaceLease(lease, workspaceId); settled = true; cleanup(); resolve({ written, journal: nextJournal }); }
