@@ -134,8 +134,8 @@ import {
   lockOperationalDataSession,
   unlockOperationalDataSessionForWorkspace,
   unlockOperationalDataSessionFromDescriptor,
+  rewrapOperationalWorkspaceKey,
 } from '../lib/operationalEncryptionSession';
-import { rewrapOperationalKeyDescriptorForWorkspace } from '../lib/operationalDb';
 
 interface AccountingContextValue {
   user: User | null;
@@ -7160,9 +7160,9 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       showToast('رمز جدید باید حداقل ۱۰ کاراکتر داشته باشد.', 'warning');
       return false;
     }
-    let descriptor: Awaited<ReturnType<typeof rewrapOperationalKeyDescriptorForWorkspace>>;
+    let descriptor: Awaited<ReturnType<typeof rewrapOperationalWorkspaceKey>>;
     try {
-      descriptor = await rewrapOperationalKeyDescriptorForWorkspace(workspaceId, cleanNextPassphrase);
+      descriptor = await rewrapOperationalWorkspaceKey(workspaceId, cleanNextPassphrase);
     } catch (error) {
       showToast(
         error instanceof Error ? error.message : 'تغییر رمز کلید عملیاتی ناموفق بود.',
