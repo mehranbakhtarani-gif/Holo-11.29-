@@ -160,7 +160,7 @@ async function run() {
       assert.equal(written, 2, 'encrypted multi-store shadow write must commit every prepared record');
       const rawVoucher = await new Promise<Record<string, unknown>>((resolve, reject) => {
         const tx = rawDb.transaction(['encryptedOperationalRecords'], 'readonly');
-        const req = tx.objectStore('encryptedOperationalRecords').get(['workspace-session-01', 'vouchers', 'enc-voucher-1']);
+        const req = tx.objectStore('encryptedOperationalRecords').get(['workspace-session-01', 'operational-shadow-current', 'vouchers', 'enc-voucher-1']);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
@@ -201,7 +201,7 @@ async function run() {
       );
       const absentDuplicate = await new Promise<unknown>((resolve, reject) => {
         const tx = rawDb.transaction(['encryptedOperationalRecords'], 'readonly');
-        const req = tx.objectStore('encryptedOperationalRecords').get(['workspace-session-01', 'vouchers', 'duplicate']);
+        const req = tx.objectStore('encryptedOperationalRecords').get(['workspace-session-01', 'operational-shadow-current', 'vouchers', 'duplicate']);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
