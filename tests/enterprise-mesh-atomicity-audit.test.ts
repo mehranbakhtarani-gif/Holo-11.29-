@@ -700,7 +700,8 @@ runTest('7. Standalone Android/PWA assets, manifest config, IDB v2 schema & Fire
   assert.ok(rules.includes("'integrityHash'"));
 
   const opDb = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
-  assert.ok(opDb.includes('OP_DB_VERSION = 5'));
+  assert.ok(opDb.includes('OP_DB_VERSION = 6'));
+  assert.ok(opDb.includes("operationalMigrationJournal"), 'v6 must add the durable migration journal store');
   assert.ok(opDb.includes('syncInbox'));
   assert.ok(opDb.includes('secureWorkspace'));
   assert.ok(opDb.includes('prepareEncryptedOperationalWorkspaceMigration'));
