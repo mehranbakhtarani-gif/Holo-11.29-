@@ -128,7 +128,7 @@ async function run() {
         'workspace-session-01',
         'ReplacementSession#1405'
       ),
-      /blocked while workspace restore is active/,
+      /مسدود است/,
       'restore barrier must prevent operational key rotation'
     );
     operationalDb.setOperationalRestoreBarrier(false);
