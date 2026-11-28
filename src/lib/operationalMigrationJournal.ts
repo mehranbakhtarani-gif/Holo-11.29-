@@ -66,8 +66,8 @@ const PHASE_TRANSITIONS: Record<OperationalMigrationPhase, readonly OperationalM
 };
 
 const STORE_TRANSITIONS: Record<OperationalMigrationStoreState, readonly OperationalMigrationStoreState[]> = {
-  pending: ['copying', 'failed'],
-  copying: ['copying', 'verified', 'failed'],
+  pending: ['copying', 'rolled_back', 'failed'],
+  copying: ['copying', 'verified', 'rolled_back', 'failed'],
   verified: ['committed', 'rolled_back'],
   committed: ['rolled_back'],
   rolled_back: [],
@@ -131,8 +131,8 @@ export function isValidOperationalMigrationJournalRecord(
       typeof raw.storeName !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(raw.storeName) ||
       names.has(raw.storeName) ||
       !ALLOWED_STORE_STATES.includes(String(raw.state)) ||
-      !(raw.cursor === null || typeof raw.cursor === 'string' ||
-        (typeof raw.cursor === 'number' && Number.isFinite(raw.cursor))) ||
+      !(raw.cursor === null || (typeof raw.cursor === 'string' && raw.cursor.length <= 180) ||
+        (typeof raw.cursor === 'number' && Number.isSafeInteger(raw.cursor))) ||
       !isNonNegativeSafeInteger(raw.batchSequence) ||
       !isNonNegativeSafeInteger(raw.sourceRecordCount) ||
       !isNonNegativeSafeInteger(raw.copiedRecordCount) ||
@@ -151,6 +151,10 @@ export function isValidOperationalMigrationJournalRecord(
     }
     names.add(raw.storeName);
   }
+  const stores = value.stores as OperationalMigrationStoreCheckpoint[];
+  if (value.phase === 'ready_to_cutover' && stores.some((store) => store.state !== 'verified' && store.state !== 'committed')) return false;
+  if (value.phase === 'cutover_committed' && stores.some((store) => store.state !== 'committed')) return false;
+  if (value.phase === 'rolled_back' && stores.some((store) => store.state !== 'rolled_back')) return false;
   return true;
 }
 
@@ -252,6 +256,9 @@ export function advanceOperationalMigrationStoreCheckpoint(
   const index = record.stores.findIndex((store) => store.storeName === storeName);
   if (index < 0) throw new Error('Operational migration store is not part of this run.');
   const current = record.stores[index];
+  if (record.phase === 'rolling_back' && patch.state !== 'rolled_back') {
+    throw new Error('Only rollback checkpoints may advance while the migration is rolling back.');
+  }
   if (!STORE_TRANSITIONS[current.state].includes(patch.state)) {
     throw new Error(`Illegal operational store transition: ${current.state} -> ${patch.state}.`);
   }
