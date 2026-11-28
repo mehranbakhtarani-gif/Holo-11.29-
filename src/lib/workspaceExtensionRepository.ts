@@ -69,6 +69,9 @@ export function decideWorkspaceExtensionCommit<T>(params: {
   if (!Number.isFinite(Date.parse(params.now))) {
     throw new Error('Workspace-extension commit timestamp is invalid.');
   }
+  if (actualGeneration >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('Workspace-extension generation is exhausted and cannot be incremented safely.');
+  }
   const workspaceId = params.workspaceId;
   if (!workspaceId.trim() || workspaceId.length > 180) {
     throw new Error('A valid workspaceId is required for an extension commit.');
@@ -104,7 +107,10 @@ export function advanceWorkspaceExtensionMigration(
     throw new Error('Workspace-extension migration journal cannot move backwards.');
   }
   if (!Number.isFinite(Date.parse(now))) throw new Error('Migration journal timestamp is invalid.');
-  if (!current.workspaceId || !current.migrationId || !/^[a-f0-9]{64}$/i.test(current.sourceFingerprint)) {
+  if (!Number.isFinite(Date.parse(current.updatedAt))) throw new Error('Existing migration journal timestamp is invalid.');
+  if (typeof current.workspaceId !== 'string' || !current.workspaceId.trim() || current.workspaceId.length > 180 ||
+      typeof current.migrationId !== 'string' || !current.migrationId.trim() || current.migrationId.length > 180 ||
+      !/^[a-f0-9]{64}$/i.test(current.sourceFingerprint)) {
     throw new Error('Workspace-extension migration journal identity is invalid.');
   }
   if (!Number.isSafeInteger(current.targetGeneration) || current.targetGeneration < 1) {
