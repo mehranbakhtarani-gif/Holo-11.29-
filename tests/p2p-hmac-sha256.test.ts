@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   MeshReplayGuard,
   computeMeshMessageMacHmacSha256,
@@ -81,7 +83,16 @@ async function main() {
     () => computeMeshMessageMacHmacSha256('   ', signed),
     /passphrase is required/
   );
-  console.log('P2P HMAC-SHA256 v3 tests: 5 assertions passed');
+  const meshSource = fs.readFileSync(path.resolve('src/lib/p2pMeshSync.ts'), 'utf8');
+  assert.match(meshSource, /if \(isValidMeshPeerId\(targetPeer\)\) this\.schedulePeerReconnect\(targetPeer\);/,
+    'peer-unavailable signaling errors must schedule a peer-specific retry');
+  assert.match(meshSource, /conn\.on\('close',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
+    'closed WebRTC data channels must schedule reconnection');
+  assert.match(meshSource, /conn\.on\('error',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
+    'failed WebRTC data channels must schedule reconnection');
+  assert.match(meshSource, /for \(const timer of this\.peerReconnectTimers\.values\(\)\) window\.clearTimeout\(timer\);/,
+    'stopping the mesh connector must clear all peer retry timers');
+  console.log('P2P HMAC-SHA256 and reconnect lifecycle tests: 9 assertions passed');
 }
 
 main().catch((error) => {
