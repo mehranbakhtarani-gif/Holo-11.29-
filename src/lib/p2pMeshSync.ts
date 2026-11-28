@@ -1441,8 +1441,8 @@ export class HolooPeerMeshManager {
     });
 
     conn.on('close', () => {
-      this.clearPeerReconnectTimer(remotePeerId);
       if (this.connections.get(remotePeerId) === conn) {
+        this.clearPeerReconnectTimer(remotePeerId);
         this.connections.delete(remotePeerId);
         this.updatePeerState(remotePeerId, { status: 'offline' });
         this.emitSyncEvent({
@@ -1457,8 +1457,8 @@ export class HolooPeerMeshManager {
     });
 
     conn.on('error', (err) => {
-      this.clearPeerReconnectTimer(remotePeerId);
       if (this.connections.get(remotePeerId) === conn) {
+        this.clearPeerReconnectTimer(remotePeerId);
         this.connections.delete(remotePeerId);
         this.updatePeerState(remotePeerId, {
           status: 'offline',
