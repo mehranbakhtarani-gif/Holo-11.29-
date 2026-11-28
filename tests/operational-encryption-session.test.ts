@@ -24,7 +24,11 @@ async function run() {
 
     const passphrase = 'OperationalSession#1405';
     unlockBackupSession(passphrase);
-    const descriptor = createOperationalKeyDescriptor('workspace-session-01', 'session-key-1405');
+    const descriptor = await createOperationalKeyDescriptor(
+      'workspace-session-01',
+      'session-key-1405',
+      'OperationalEncryption#1405'
+    );
     await assert.rejects(
       () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'another-workspace'),
       /invalid or belongs to another workspace/
