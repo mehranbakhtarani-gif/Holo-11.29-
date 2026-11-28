@@ -138,5 +138,26 @@ operationalDb.setOperationalRestoreBarrier(true);
 assert.equal(operationalSyncPersistencePort.isRestoreBarrierActive(), true);
 operationalDb.setOperationalRestoreBarrier(false);
 assert.equal(operationalSyncPersistencePort.isRestoreBarrierActive(), false);
+const restoreNow = new Date().toISOString();
+await operationalDb.createOperationalRestoreJournal({
+  restoreId: 'restore_sync_port_123456',
+  workspaceId: 'workspace-user-1',
+  packageDigest: 'c'.repeat(64),
+  workspaceEnvelopeJson: JSON.stringify({ format: 'holoo-apex-encrypted-backup' }),
+  workspacePlaintextSha256: 'd'.repeat(64),
+  workspaceSchemaVersion: 2,
+  workspaceRecordCount: 1,
+  attachmentManifestDigest: 'e'.repeat(64),
+  attachmentCount: 0,
+  packageSchemaVersion: 2,
+  state: 'staging',
+  createdAt: restoreNow,
+  updatedAt: restoreNow,
+});
+assert.equal(
+  (await operationalSyncPersistencePort.getActiveRestoreJournal())?.restoreId,
+  'restore_sync_port_123456',
+  'the typed port must surface an active durable restore journal'
+);
 
 console.log('Encrypted workspace extension outbox tests passed');
