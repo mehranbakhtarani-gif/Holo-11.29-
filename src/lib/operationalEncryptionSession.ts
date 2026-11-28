@@ -14,6 +14,7 @@ import {
   initializeOperationalKeyDescriptor,
   isOperationalRestoreBarrierActive,
   loadOperationalKeyDescriptor,
+  rewrapOperationalKeyDescriptorForWorkspace as rewrapOperationalKeyDescriptor,
 } from './operationalDb';
 import {
   deriveOperationalKeyFromDescriptor,
@@ -139,4 +140,22 @@ export async function unlockOperationalDataSessionForWorkspace(workspaceId: stri
     throw new Error('Operational key unlock is blocked while workspace restore is active.');
   }
   await unlockOperationalDataSessionFromDescriptor(descriptor, workspaceId);
+}
+
+/**
+ * Re-wrap the durable workspace DEK envelope using the current backup-session
+ * lease. The context layer depends only on this session boundary, not IndexedDB.
+ */
+export async function rewrapOperationalWorkspaceKey(
+  workspaceId: string,
+  nextPassphrase: string
+): Promise<OperationalKeyDescriptor> {
+  const lease = captureBackupSessionLease();
+  const requestedGeneration = generation;
+  const descriptor = await rewrapOperationalKeyDescriptor(workspaceId, nextPassphrase);
+  assertBackupSessionLease(lease);
+  if (requestedGeneration !== generation) {
+    throw new Error('Operational key rotation was superseded by another session change.');
+  }
+  return descriptor;
 }
