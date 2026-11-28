@@ -64,6 +64,23 @@ async function run() {
       recordValue,
       recordContext
     );
+    assert.equal(lease.workspaceId, 'workspace-session-01');
+    await assert.rejects(
+      () => sessionCodec.encryptOperationalRecordForActiveSession(recordValue, {
+        ...recordContext,
+        workspaceId: 'workspace-attacker',
+      }),
+      /workspace does not match/,
+      'an unlocked workspace key must not encrypt records under another workspace identity'
+    );
+    await assert.rejects(
+      () => sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, {
+        ...recordContext,
+        workspaceId: 'workspace-attacker',
+      }),
+      /workspace does not match/,
+      'an unlocked workspace key must not decrypt records under another workspace identity'
+    );
     assert.deepEqual(
       await sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, recordContext),
       recordValue
@@ -102,7 +119,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 21 assertions passed');
+    console.log('Operational encryption session: 24 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
