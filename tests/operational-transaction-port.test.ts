@@ -8,14 +8,14 @@ import {
   commitSalesOrderDispatchOperationalTx,
   commitStockAdjustmentOperationalTx,
 } from '../src/lib/operationalDb';
-import { operationalBackupMaintenancePort, operationalDiagnosticsPort, operationalEncryptionPreparationPort, operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort, operationalWorkspacePersistencePort } from '../src/lib/repositoryAbstraction';
+import { operationalBackupMaintenancePort, operationalDiagnosticsPort, operationalEncryptionPreparationPort, operationalHealthReportPort, operationalResetPort, operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort, operationalWorkspacePersistencePort } from '../src/lib/repositoryAbstraction';
 import {
   clearPendingSyncOutboxOperations, enqueueSyncOutboxOperation, getActiveOperationalRestoreJournal,
   isInboxOperationProcessed, isOperationalRestoreBarrierActive, listPendingSyncOutboxOperations,
   loadOperationalWorkspace,
   markSyncOutboxOperationStatus, recordInboxOperation,
   OP_DB_VERSION, savePreUpdateSafetyBackup, saveOperationalWorkspaceTx,
-  getOperationalDbStats, prepareEncryptedOperationalWorkspaceMigration,
+  getOperationalDbStats, getOperationalDbDetailedReport, prepareEncryptedOperationalWorkspaceMigration, wipeAllLocalIndexedDbs, clearHolooLocalStorageKeys,
 } from '../src/lib/operationalDb';
 
 // The port must remain a transparent delegation layer. Replacing an implementation
@@ -49,6 +49,11 @@ assert.equal(operationalDiagnosticsPort.getStats, getOperationalDbStats);
 assert.deepEqual(Object.keys(operationalDiagnosticsPort).sort(), ['getStats']);
 assert.equal(operationalEncryptionPreparationPort.prepareShadowSnapshot, prepareEncryptedOperationalWorkspaceMigration);
 assert.deepEqual(Object.keys(operationalEncryptionPreparationPort).sort(), ['prepareShadowSnapshot']);
+assert.equal(operationalHealthReportPort.getDetailedReport, getOperationalDbDetailedReport);
+assert.deepEqual(Object.keys(operationalHealthReportPort).sort(), ['getDetailedReport']);
+assert.equal(operationalResetPort.wipeAllLocalDatabases, wipeAllLocalIndexedDbs);
+assert.equal(operationalResetPort.clearLocalPreferences, clearHolooLocalStorageKeys);
+assert.deepEqual(Object.keys(operationalResetPort).sort(), ['clearLocalPreferences','wipeAllLocalDatabases'].sort());
 
 const settingsViewSource = fs.readFileSync(path.join(process.cwd(), 'src/components/SettingsView.tsx'), 'utf8');
 assert.match(settingsViewSource, /operationalRecoveryPort/);
@@ -61,6 +66,12 @@ assert.match(accountingSource, /operationalWorkspacePersistencePort/);
 assert.match(accountingSource, /operationalDiagnosticsPort/);
 assert.match(accountingSource, /operationalEncryptionPreparationPort/);
 assert.doesNotMatch(accountingSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
+const resetSource = fs.readFileSync(path.join(process.cwd(), 'src/components/SystemResetCenter.tsx'), 'utf8');
+assert.match(resetSource, /operationalResetPort/);
+assert.doesNotMatch(resetSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
+const healthSource = fs.readFileSync(path.join(process.cwd(), 'src/components/OfflineSyncHealthDashboard.tsx'), 'utf8');
+assert.match(healthSource, /operationalHealthReportPort/);
+assert.doesNotMatch(healthSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
 assert.doesNotMatch(accountingSource, /\b(loadOperationalWorkspace|saveOperationalWorkspaceTx|isOperationalRestoreBarrierActive)\b/);
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8');
 assert.match(appSource, /import\('\.\/lib\/repositoryAbstraction'\)/);
