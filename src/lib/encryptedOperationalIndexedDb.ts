@@ -90,12 +90,6 @@ function toShadowRows(storeName: OperationalEncryptedStore, workspaceId: string,
   });
 }
 
-function workspaceStoreKeyRange(workspaceId: string, migrationId: string, storeName: OperationalEncryptedStore): IDBKeyRange {
-  const keyRange = typeof window !== 'undefined' ? window.IDBKeyRange : globalThis.IDBKeyRange;
-  if (!keyRange) throw new Error('IndexedDB key-range support is unavailable.');
-  return keyRange.only([workspaceId, migrationId, storeName]);
-}
-
 /** Write ciphertext only to the isolated shadow store; source business stores remain untouched. */
 export async function writeEncryptedOperationalStoresAtomically(
   db: IDBDatabase,
