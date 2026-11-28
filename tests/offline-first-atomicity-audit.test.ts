@@ -358,7 +358,9 @@ async function runTests() {
   assert.match(preUpdateBackupContract, /holoo-apex-encrypted-backup/);
   assert.match(preUpdateBackupContract, /AES-256-GCM/);
   assert.match(preUpdateBackupContract, /decryptAndVerifyBackupEnvelope/);
-  assert.match(preUpdateBackupContract, /requireBackupSessionPassphrase/);
+  assert.match(preUpdateBackupContract, /captureBackupSessionLease/);
+  assert.match(preUpdateBackupContract, /assertBackupSessionLease/);
+  assert.match(preUpdateBackupContract, /lease\.passphrase/);
   const pwaUpdateBackupStart = appSrc.indexOf('onCreatePreUpdateBackup={async () =>');
   const pwaUpdateBackupEnd = appSrc.indexOf('        }}', pwaUpdateBackupStart);
   const pwaUpdateBackup = appSrc.slice(pwaUpdateBackupStart, pwaUpdateBackupEnd);
