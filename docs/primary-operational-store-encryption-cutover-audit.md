@@ -592,3 +592,22 @@ The branch CI run for the mesh-randomness change passed TypeScript, rules lint, 
 Newly entered mesh pairing secrets are now required to be at least 10 characters and cannot equal the known legacy default. The UI enforces the same threshold and the P2P regression test guards both the hook and persistence helper. Existing 4–9 character secrets are still loaded for compatibility with already-paired devices; they remain weak until users coordinate a shared-key rotation. Raw localStorage storage remains an unresolved credential-at-rest issue.
 
 Cloud backup retention now prunes only when the query result is server-authoritative (`snapshot.metadata.fromCache === false`). If an offline cache fallback is used, backup metadata can still be shown but no documents are deleted based on a potentially incomplete cache. This prevents an offline/incomplete query from triggering destructive retention cleanup.
+
+### Operational per-record encryption codec groundwork — 2026-11-28
+
+A standalone `src/lib/operationalRecordEncryption.ts` codec now provides:
+- Non-extractable AES-256-GCM data keys derived with PBKDF2-SHA-256 (600,000 iterations) and a random 128-bit salt.
+- Fresh 96-bit random IV per record.
+- Authenticated additional data binding each ciphertext to its workspace ID, object-store name, primary record ID, and envelope version. Copying ciphertext to another workspace/store/key therefore fails authentication.
+- Strict envelope, salt, IV, ciphertext-size, and KDF-work-factor validation.
+- A focused regression suite covering round-trip, wrong key, tampering, context substitution, fresh IVs, non-extractable key properties, and invalid parameters. The test is included in the normal CI test chain.
+
+**This is cryptographic groundwork, not an operational encryption cutover.** The codec is intentionally not imported by `operationalDb.ts` and is not used by production readers or writers. The existing primary entity stores and transaction commands still read/write plaintext. Do not claim encryption-at-rest is complete.
+
+Remaining Stage 3 blockers after this groundwork:
+1. Introduce a versioned key envelope and async unlock/bootstrap flow that derives the non-extractable data key once per session; do not repeatedly derive a key per record.
+2. Convert every primary reader, writer, index/query path, and all atomic financial transaction commands to a coherent encrypted-record representation. Preserve searchable indexes without exposing sensitive financial fields.
+3. Migrate existing plaintext rows in bounded, restartable batches with a durable journal, verified ciphertext, dual-read rules, and no deletion of source rows until a complete verified cutover.
+4. Ensure lock/session-generation changes abort all in-flight reads/writes before commit, including every multi-store transaction.
+5. Prove crash recovery, multi-tab versionchange behavior, quota handling, rollback, restore, and backup interoperability with failure-injection tests.
+6. Only then increment the operational database schema and switch the authoritative reader/writer. No schema bump, production cutover, plaintext deletion, merge, or deployment was performed in this change.
