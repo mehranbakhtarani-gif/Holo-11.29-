@@ -42,6 +42,8 @@ export interface EncryptedOperationalQueryOptions {
   limit?: number;
   /** Optional in-memory predicate; never persisted as a plaintext IndexedDB index. */
   predicate?: (record: Record<string, unknown>) => boolean;
+  /** Migration run identifier; omitted for the non-migration encrypted shadow snapshot. */
+  migrationId?: string;
 }
 
 const MAX_BATCH_RECORDS = 10_000;
@@ -61,21 +63,24 @@ function assertWorkspaceLease(lease: OperationalDataKeyLease, workspaceId: strin
  * lease, quota, or IndexedDB error rejects the whole operation.
  */
 const ENCRYPTED_SHADOW_STORE = 'encryptedOperationalRecords';
+const DEFAULT_SHADOW_MIGRATION_ID = 'operational-shadow-current';
 
 interface EncryptedOperationalShadowRow {
   workspaceId: string;
+  migrationId: string;
   storeName: OperationalEncryptedStore;
   recordId: string;
   encryptedRecord: EncryptedOperationalRow['encryptedRecord'];
 }
 
-function toShadowRows(storeName: OperationalEncryptedStore, workspaceId: string, rows: readonly EncryptedOperationalRow[]): EncryptedOperationalShadowRow[] {
+function toShadowRows(storeName: OperationalEncryptedStore, workspaceId: string, migrationId: string, rows: readonly EncryptedOperationalRow[]): EncryptedOperationalShadowRow[] {
   return rows.map((row) => {
     if (!isEncryptedOperationalRow(storeName, row, workspaceId)) {
       throw new Error('Prepared encrypted operational row failed shadow-store validation.');
     }
     return {
       workspaceId,
+      migrationId,
       storeName,
       recordId: getOperationalRecordPrimaryKey(storeName, row),
       encryptedRecord: row.encryptedRecord,
@@ -83,10 +88,10 @@ function toShadowRows(storeName: OperationalEncryptedStore, workspaceId: string,
   });
 }
 
-function workspaceStoreKeyRange(workspaceId: string, storeName: OperationalEncryptedStore): IDBKeyRange {
+function workspaceStoreKeyRange(workspaceId: string, migrationId: string, storeName: OperationalEncryptedStore): IDBKeyRange {
   const keyRange = typeof window !== 'undefined' ? window.IDBKeyRange : globalThis.IDBKeyRange;
   if (!keyRange) throw new Error('IndexedDB key-range support is unavailable.');
-  return keyRange.only([workspaceId, storeName]);
+  return keyRange.only([workspaceId, migrationId, storeName]);
 }
 
 /** Write ciphertext only to the isolated shadow store; source business stores remain untouched. */
@@ -110,7 +115,7 @@ export async function writeEncryptedOperationalStoresAtomically(
   for (const write of writes) {
     assertWorkspaceLease(lease, workspaceId);
     const rows = await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId);
-    prepared.push(...toShadowRows(write.store, workspaceId, rows));
+    prepared.push(...toShadowRows(write.store, workspaceId, DEFAULT_SHADOW_MIGRATION_ID, rows));
     assertWorkspaceLease(lease, workspaceId);
   }
 
@@ -172,7 +177,9 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
   const total = writes.reduce((sum, write) => sum + write.records.length, 0);
   if (total > MAX_BATCH_RECORDS) throw new Error('Encrypted migration batch exceeds the bounded record count.');
   const storeNames = [...new Set(writes.map((write) => write.store))];
-  if (storeNames.length !== writes.length) throw new Error('Migration batch contains duplicate logical stores.');
+  if (writes.length !== 1 || storeNames.length !== 1 || storeNames[0] !== checkpoint.storeName) {
+    throw new Error('Each atomic migration checkpoint must cover exactly one matching logical store batch.');
+  }
   if (!storeNames.includes(checkpoint.storeName as OperationalEncryptedStore)) {
     throw new Error('Migration checkpoint store does not match a store in the encrypted batch.');
   }
@@ -186,7 +193,7 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
   for (const write of writes) {
     assertWorkspaceLease(lease, workspaceId);
     const rows = await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId);
-    prepared.push(...toShadowRows(write.store, workspaceId, rows));
+    prepared.push(...toShadowRows(write.store, workspaceId, binding.migrationId, rows));
     assertWorkspaceLease(lease, workspaceId);
   }
   const nextJournal = advanceOperationalMigrationStoreCheckpoint(expectedJournal, checkpoint.storeName, checkpoint, binding);
@@ -273,8 +280,13 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
 
   const cursorResult = await new Promise<{ rows: EncryptedOperationalShadowRow[]; hasMore: boolean }>((resolve, reject) => {
     const tx = db.transaction([ENCRYPTED_SHADOW_STORE], 'readonly');
-    const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceStore');
-    const request = index.openCursor(workspaceStoreKeyRange(workspaceId, storeName));
+    const migrationId = options.migrationId ?? DEFAULT_SHADOW_MIGRATION_ID;
+    if (typeof migrationId !== 'string' || !/^[a-zA-Z0-9_-]{12,100}$/.test(migrationId)) {
+      reject(new Error('Encrypted shadow migration id is invalid.'));
+      return;
+    }
+    const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceMigrationStore');
+    const request = index.openCursor(workspaceStoreKeyRange(workspaceId, migrationId, storeName));
     const result: EncryptedOperationalShadowRow[] = [];
     let hasMore = false;
     request.onsuccess = () => {
@@ -296,7 +308,7 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
     assertWorkspaceLease(lease, workspaceId);
     const keyField = storeName === 'localProfiles' ? 'workspaceId' : 'id';
     const syntheticRow = { [keyField]: row.recordId, encryptedRecord: row.encryptedRecord };
-    if (row.workspaceId !== workspaceId || row.storeName !== storeName ||
+    if (row.workspaceId !== workspaceId || row.migrationId !== migrationId || row.storeName !== storeName ||
         !isEncryptedOperationalRow(storeName, syntheticRow, workspaceId)) {
       throw new Error('Malformed or cross-workspace encrypted shadow row encountered.');
     }
