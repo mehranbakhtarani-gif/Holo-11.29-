@@ -666,3 +666,40 @@ The opt-in adapter primitives now exist in `src/lib/encryptedOperationalRecordAd
 8. `meta.profile`, `syncInbox` identifiers, `preUpdateBackups` and local preference snapshots require explicit classification and retention decisions. They are not covered by the entity-store adapter allowlist.
 
 No schema version bump, primary-store overwrite, plaintext deletion, migration execution, merge or deployment was performed. This separation is intentional: the repository remains on the existing readable schema until the complete dual-read, migration, verification and rollback path is implemented and tested end-to-end.
+
+### Durable primary-store migration journal design gate — 2026-11-28
+
+The existing `restoreJournal` is not a safe container for encryption migration progress. Its key path, record validator, active-restore barrier, and recovery state machine are restore-specific. Reusing it for per-store encryption progress would make restore startup validation ambiguous and could cause one workflow to reject or misinterpret the other's records. The existing `secureWorkspace` row is keyed only by `workspaceId` and stores one encrypted snapshot; overloading it with mutable per-store progress would also couple the journal lifecycle to snapshot replacement and make independent checkpoints difficult to commit.
+
+A dedicated migration journal store is therefore the preferred persistence boundary, but introducing it requires a deliberate IndexedDB schema upgrade (currently `OP_DB_VERSION = 5`). That upgrade must be additive, preserve all existing key paths and indexes, handle blocked/versionchange events across tabs, and be tested against both fresh and already-open v5 databases. No schema upgrade is authorized by this audit entry.
+
+#### Required journal model
+
+- One migration run is bound to exactly one normalized `workspaceId`, immutable `migrationId`, source schema version, target encrypted format version, and captured backup-session generation.
+- One parent run record owns a deterministic list of eligible stores and an explicit global phase: `preparing`, `copying`, `verifying`, `ready_to_cutover`, `cutover_committed`, `rolling_back`, `rolled_back`, or `failed_recovery_required`.
+- Each store has its own state: `pending`, `copying`, `verified`, `committed`, `rolled_back`, or `failed`; a cursor/checkpoint, monotonically increasing batch sequence, source record count/revision, copied count, and source/target digest are recorded.
+- Every checkpoint is bound to the same workspace, migration ID, source revision and session generation. A stale session or workspace switch must reject the checkpoint rather than advance progress.
+- Journal records contain no business payloads, passphrases, DEKs, or plaintext record values. Digests and primary-key cursors still reveal metadata and require a documented leakage review.
+- A store is not `verified` until the source set is stable at the captured revision, every eligible source row has a valid target envelope with matching workspace/store/primary-key AAD, counts match, and a deterministic digest over canonical ordered records matches.
+- Checkpoint advancement and the corresponding encrypted target batch must commit atomically in one IndexedDB transaction. If that cannot be guaranteed for the selected storage layout, the implementation must use an idempotent replay protocol that can prove whether a batch was committed before advancing its cursor.
+- A migration restart resumes from the last durable checkpoint. Replaying a batch must be idempotent; it must never create duplicate logical rows or skip an unverified source row.
+- The plaintext source remains authoritative throughout preparation and verification. A failed or interrupted preparation leaves source rows untouched and does not make encrypted shadow data authoritative.
+- Cutover is a separate explicit transaction/protocol after every store, query/index strategy, sync path, and reader/writer is ready. It must record a durable commit intent before changing authority and provide deterministic forward recovery.
+- Rollback retains the original source rows and a verified encrypted copy until the rollback window closes. It must restore the prior reader/writer mode, verify source revision/count/digest, and refuse destructive cleanup if any invariant is uncertain.
+- Cleanup of plaintext rows, old indexes, or rollback material is a separately authorized final operation, never part of migration preparation or an automatic retry.
+
+#### Mandatory fault-injection matrix before implementation acceptance
+
+1. Termination before a batch, during encryption, after target writes but before checkpoint, and after checkpoint commit.
+2. Browser restart at every parent/store state transition, including `failed_recovery_required`.
+3. Quota exhaustion and transaction abort during both target batch and journal checkpoint.
+4. Two tabs attempting the same migration, two tabs opening v5/v6 during upgrade, and versionchange blocked by a stale connection.
+5. Source mutation between initial scan, final batch, and verification; any revision/digest drift must invalidate the run.
+6. Backup-session lock/replacement, workspace switch, and restore-barrier activation during every asynchronous phase.
+7. Corrupt, missing, duplicated, out-of-order, or cross-workspace journal records and ciphertext wrappers; all must fail closed.
+8. Rollback after partial cutover, after restart, and with sync/outbox work queued; no mixed-authority workspace may be hydrated.
+9. Restore from a backup created before migration and from one created after migration preparation; both must preserve a single, unambiguous source of truth.
+10. Query behavior for every existing secondary index must be specified and tested before those indexes are retired or replaced.
+
+This is a design gate, not an implementation claim. Until the dedicated journal, dual-read authority protocol, all production-path adapters, and the fault-injection matrix exist and pass CI, stage 3 remains incomplete. No database version bump, primary-store mutation, migration execution, plaintext deletion, merge, or deployment is performed by this change.
+
