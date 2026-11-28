@@ -93,11 +93,17 @@ export function isOperationalDataSessionUnlocked(): boolean {
 }
 
 export function captureOperationalDataKeyLease(): OperationalDataKeyLease {
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Operational data access is blocked while workspace restore is active.');
+  }
   if (!activeKey) throw new Error('Operational data key is locked.');
   return { key: activeKey, generation, workspaceId: activeWorkspaceId };
 }
 
 export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): void {
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Operational data access is blocked while workspace restore is active.');
+  }
   if (
     !activeKey || lease.generation !== generation || lease.key !== activeKey ||
     lease.workspaceId !== activeWorkspaceId
