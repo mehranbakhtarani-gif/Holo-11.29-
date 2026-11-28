@@ -41,9 +41,13 @@ import {
   recordInboxOperation,
   savePreUpdateSafetyBackup,
   getOperationalDbStats,
+  getOperationalDbDetailedReport,
+  wipeAllLocalIndexedDbs,
+  clearHolooLocalStorageKeys,
   prepareEncryptedOperationalWorkspaceMigration,
   OP_DB_VERSION,
   type OperationalDbStats,
+  type OperationalDbDetailedReport,
   type EncryptedOperationalWorkspaceMeta,
   type OperationalRestoreJournalRecord,
   saveOperationalWorkspaceTx,
@@ -129,6 +133,7 @@ export const operationalDiagnosticsPort = {
   getStats: getOperationalDbStats,
 };
 export type OperationalDiagnosticsPort = typeof operationalDiagnosticsPort;
+export type { OperationalDbDetailedReport };
 
 /**
  * Prepares and verifies an encrypted shadow snapshot only. This does not switch
@@ -138,6 +143,19 @@ export const operationalEncryptionPreparationPort = {
   prepareShadowSnapshot: prepareEncryptedOperationalWorkspaceMigration,
 };
 export type OperationalEncryptionPreparationPort = typeof operationalEncryptionPreparationPort;
+
+/** Detailed read-only health report for the operational IndexedDB dashboard. */
+export const operationalHealthReportPort = {
+  getDetailedReport: getOperationalDbDetailedReport,
+};
+export type OperationalHealthReportPort = typeof operationalHealthReportPort;
+
+/** Explicit local-device reset operations; behavior remains in the IndexedDB adapter. */
+export const operationalResetPort = {
+  wipeAllLocalDatabases: wipeAllLocalIndexedDbs,
+  clearLocalPreferences: clearHolooLocalStorageKeys,
+};
+export type OperationalResetPort = typeof operationalResetPort;
 export type { OperationalDbStats, EncryptedOperationalWorkspaceMeta, OperationalRestoreJournalRecord };
 
 export interface LocalRepositoryAdapter {
