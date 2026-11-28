@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  assertBackupSessionLease,
+  captureBackupSessionLease,
   isBackupSessionUnlocked,
   lockBackupSession,
   requireBackupSessionPassphrase,
@@ -33,14 +35,21 @@ async function run() {
 
   try {
     lockBackupSession();
+    assert.throws(() => assertBackupSessionLease(replacementLease), /نشست رمزگذاری/,
+      'locking must invalidate in-flight work before it can commit');
     assert.equal(isBackupSessionUnlocked(), false);
     assert.throws(() => requireBackupSessionPassphrase(), /قفل پشتیبان/);
 
     unlockBackupSession('SessionOnly#1405');
+    const activeLease = captureBackupSessionLease();
+    assert.equal(activeLease.passphrase, 'SessionOnly#1405');
     assert.equal(isBackupSessionUnlocked(), true);
     assert.equal(requireBackupSessionPassphrase(), 'SessionOnly#1405');
 
     unlockBackupSession('Replacement#1405');
+    assert.throws(() => assertBackupSessionLease(activeLease), /نشست رمزگذاری/,
+      'replacing an unlocked session must invalidate in-flight work');
+    const replacementLease = captureBackupSessionLease();
     assert.equal(requireBackupSessionPassphrase(), 'Replacement#1405',
       'unlocking again must replace the active in-memory passphrase');
 
@@ -62,7 +71,7 @@ async function run() {
       'backup vault must lock before sign-out can fail'
     );
 
-    console.log('Backup session lifecycle: 10 assertions passed');
+    console.log('Backup session lifecycle and async lease invalidation: 13 assertions passed');
   } finally {
     lockBackupSession();
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
