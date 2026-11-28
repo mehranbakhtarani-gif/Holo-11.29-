@@ -182,31 +182,42 @@ export async function persistOperationalMigrationStoreCheckpoint(
   const db = await openOperationalMigrationDbConnection();
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction(['operationalMigrationJournal'], 'readwrite');
+      const tx = db.transaction(['operationalMigrationJournal', 'meta'], 'readwrite');
       const store = tx.objectStore('operationalMigrationJournal');
+      const metaStore = tx.objectStore('meta');
       let updated: OperationalMigrationJournalRecord | null = null;
-      const request = store.get(binding.migrationId);
-      request.onsuccess = () => {
+      let currentJournal: unknown;
+      let currentMeta: unknown;
+      let journalLoaded = false;
+      let metaLoaded = false;
+      let persisted = false;
+      const applyCheckpoint = () => {
+        if (!journalLoaded || !metaLoaded || persisted) return;
+        persisted = true;
         try {
           assertBackupSessionLease(lease);
-          const current = assertValidJournal(request.result);
+          const current = assertValidJournal(currentJournal);
           assertOperationalMigrationBinding(current, binding);
+          const sourceRevision = (currentMeta as { localRevision?: unknown } | undefined)?.localRevision;
+          if (!Number.isSafeInteger(sourceRevision) || sourceRevision !== binding.sourceRevision) {
+            throw new Error('Operational source revision changed before migration verification checkpoint.');
+          }
           if (current.phase === 'copying') {
             throw new Error('Copying checkpoints must be committed atomically with encrypted shadow rows.');
           }
-          updated = advanceOperationalMigrationStoreCheckpoint(
-            current,
-            storeName,
-            patch,
-            binding
-          );
+          updated = advanceOperationalMigrationStoreCheckpoint(current, storeName, patch, binding);
           store.put(updated);
         } catch (error) {
           try { tx.abort(); } catch { /* transaction may already be inactive */ }
           reject(error);
         }
       };
+      const request = store.get(binding.migrationId);
+      const metaRequest = metaStore.get('workspace_meta');
+      request.onsuccess = () => { currentJournal = request.result; journalLoaded = true; applyCheckpoint(); };
+      metaRequest.onsuccess = () => { currentMeta = metaRequest.result; metaLoaded = true; applyCheckpoint(); };
       request.onerror = () => reject(request.error ?? new Error('Operational migration checkpoint lookup failed.'));
+      metaRequest.onerror = () => reject(metaRequest.error ?? new Error('Operational source revision checkpoint read failed.'));
       tx.oncomplete = () => {
         try { assertBackupSessionLease(lease); } catch (error) { reject(error); return; }
         updated ? resolve(updated) : reject(new Error('Operational migration store checkpoint was not persisted.'));
