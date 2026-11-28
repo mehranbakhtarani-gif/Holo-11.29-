@@ -93,9 +93,35 @@ async function run() {
           storeName: 'accounts',
         }
       );
-      assert.equal(first.written, 1);
+      assert.equal(first.written, 2);
       assert.equal(first.journal.stores[0].batchSequence, 1);
-      assert.equal(first.journal.stores[0].copiedRecordCount, 1);
+      assert.equal(first.journal.stores[0].copiedRecordCount, 2);
+      await assert.rejects(
+        () => writeEncryptedOperationalMigrationBatchAtomically(
+          db,
+          workspaceId,
+          [{ store: 'accounts', records: [{ id: 'account-atomic-invalid', name: 'Must not commit' }] }],
+          first.journal,
+          binding,
+          {
+            state: 'copying',
+            cursor: 'account-atomic-invalid',
+            batchSequence: 2,
+            sourceRecordCount: 2,
+            copiedRecordCount: 2,
+            sourceDigest,
+            targetDigest: null,
+            storeName: 'accounts',
+          }
+        ),
+        /checkpoint count or cursor/i,
+        'checkpoint metadata must account for every row encrypted in its transaction'
+      );
+      assert.equal(
+        await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-atomic-invalid']),
+        undefined,
+        'a forged copied-row count must not commit ciphertext'
+      );
       const storedFirst = await readRow(
         db,
         'encryptedOperationalRecords',
