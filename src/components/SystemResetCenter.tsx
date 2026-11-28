@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useAccounting } from '../context/AccountingContext';
 import type { DualCloudSyncController } from '../hooks/useDualCloudSync';
-import { clearHolooLocalStorageKeys, wipeAllLocalIndexedDbs } from '../lib/operationalDb';
+import { operationalResetPort } from '../lib/repositoryAbstraction';
 import { toPersianDigits } from '../lib/format';
 
 const snappySpring = {
@@ -188,7 +188,7 @@ export const SystemResetCenter: React.FC<SystemResetCenterProps> = ({
 
       // 3. Local IndexedDB Databases Wipe
       if (wipeLocalIndexedDb) {
-        const dbRes = await wipeAllLocalIndexedDbs();
+        const dbRes = await operationalResetPort.wipeAllLocalDatabases();
         succeeded.push(
           `بانک‌های اطلاعاتی محلی IndexedDB پاکسازی شدند (${toPersianDigits(dbRes.deletedDbs.length)} دیتابیس حذف شد).`
         );
@@ -202,7 +202,7 @@ export const SystemResetCenter: React.FC<SystemResetCenterProps> = ({
 
       // 4. LocalStorage & Sync Preferences Wipe
       if (wipeLocalStorage) {
-        const removedCount = clearHolooLocalStorageKeys({ preserveTheme: true });
+        const removedCount = operationalResetPort.clearLocalPreferences({ preserveTheme: true });
         succeeded.push(
           `حافظه محلی مرورگر (LocalStorage، صف آفلاین و کش‌ها) پاکسازی شد (${toPersianDigits(removedCount)} کلید حذف شد).`
         );
