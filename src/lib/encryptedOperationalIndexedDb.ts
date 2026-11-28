@@ -277,14 +277,13 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
   const limit = Math.max(1, Math.min(MAX_QUERY_RESULTS, Math.trunc(options.limit ?? 100)));
   const lease = captureOperationalDataKeyLease();
   assertWorkspaceLease(lease, workspaceId);
+  const migrationId = options.migrationId ?? DEFAULT_SHADOW_MIGRATION_ID;
+  if (typeof migrationId !== 'string' || !/^[a-zA-Z0-9_-]{12,100}$/.test(migrationId)) {
+    throw new Error('Encrypted shadow migration id is invalid.');
+  }
 
   const cursorResult = await new Promise<{ rows: EncryptedOperationalShadowRow[]; hasMore: boolean }>((resolve, reject) => {
     const tx = db.transaction([ENCRYPTED_SHADOW_STORE], 'readonly');
-    const migrationId = options.migrationId ?? DEFAULT_SHADOW_MIGRATION_ID;
-    if (typeof migrationId !== 'string' || !/^[a-zA-Z0-9_-]{12,100}$/.test(migrationId)) {
-      reject(new Error('Encrypted shadow migration id is invalid.'));
-      return;
-    }
     const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceMigrationStore');
     const request = index.openCursor(workspaceStoreKeyRange(workspaceId, migrationId, storeName));
     const result: EncryptedOperationalShadowRow[] = [];
