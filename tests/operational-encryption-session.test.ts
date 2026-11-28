@@ -27,7 +27,7 @@ async function run() {
     const descriptor = await createOperationalKeyDescriptor(
       'workspace-session-01',
       'session-key-1405',
-      'OperationalEncryption#1405'
+      passphrase
     );
     await assert.rejects(
       () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'another-workspace'),
