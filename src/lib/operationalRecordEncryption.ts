@@ -121,13 +121,19 @@ export async function deriveOperationalDataKey(
     passphraseBytes.fill(0);
     new Uint8Array(passphraseBuffer).fill(0);
   }
-  return cryptoApi.subtle.deriveKey(
-    { name: 'PBKDF2', salt: toArrayBuffer(salt), iterations, hash: 'SHA-256' },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
+  const saltBuffer = toArrayBuffer(salt);
+  try {
+    return await cryptoApi.subtle.deriveKey(
+      { name: 'PBKDF2', salt: saltBuffer, iterations, hash: 'SHA-256' },
+      material,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  } finally {
+    // Web Crypto does not clear the caller-owned PBKDF2 salt copy.
+    new Uint8Array(saltBuffer).fill(0);
+  }
 }
 
 export function createOperationalDataSalt(): Uint8Array {
