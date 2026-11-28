@@ -221,6 +221,9 @@ export function transitionOperationalMigrationPhase(
   if (!PHASE_TRANSITIONS[record.phase].includes(nextPhase)) {
     throw new Error(`Illegal operational migration phase transition: ${record.phase} -> ${nextPhase}.`);
   }
+  if (nextPhase === 'verifying' && record.stores.some((store) => store.state !== 'copying' && store.state !== 'verified')) {
+    throw new Error('Every operational store must finish copying before verification can begin.');
+  }
   if (nextPhase === 'ready_to_cutover' && record.stores.some((store) => store.state !== 'verified' && store.state !== 'committed')) {
     throw new Error('Every operational store must be verified before cutover can be prepared.');
   }
@@ -256,8 +259,15 @@ export function advanceOperationalMigrationStoreCheckpoint(
   const index = record.stores.findIndex((store) => store.storeName === storeName);
   if (index < 0) throw new Error('Operational migration store is not part of this run.');
   const current = record.stores[index];
-  if (record.phase === 'rolling_back' && patch.state !== 'rolled_back') {
-    throw new Error('Only rollback checkpoints may advance while the migration is rolling back.');
+  const allowedStatesByPhase: Partial<Record<OperationalMigrationPhase, readonly OperationalMigrationStoreState[]>> = {
+    copying: ['copying', 'failed'],
+    verifying: ['verified', 'failed'],
+    ready_to_cutover: ['committed', 'failed'],
+    rolling_back: ['rolled_back', 'failed'],
+  };
+  const phaseAllowedStates = allowedStatesByPhase[record.phase];
+  if (!phaseAllowedStates || !phaseAllowedStates.includes(patch.state)) {
+    throw new Error(`Operational store checkpoint state ${patch.state} is not allowed during phase ${record.phase}.`);
   }
   if (!STORE_TRANSITIONS[current.state].includes(patch.state)) {
     throw new Error(`Illegal operational store transition: ${current.state} -> ${patch.state}.`);
