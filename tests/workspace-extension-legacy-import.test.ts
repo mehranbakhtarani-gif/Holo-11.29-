@@ -12,7 +12,8 @@ class MemoryStorage implements LegacyStorageReader {
 }
 const isArray = (value: unknown): value is unknown[] => Array.isArray(value);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
+    !Object.keys(value).some((key) => ['__proto__', 'constructor', 'prototype'].includes(key)));
 
 assert.deepEqual(readLegacyJson(new MemoryStorage(), 'missing', isArray), { status: 'absent' });
 assert.deepEqual(readLegacyJson(new MemoryStorage({ key: '[]' }), 'key', isArray),
