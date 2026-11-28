@@ -1394,6 +1394,34 @@ export function parseOperationalWorkspaceSnapshot(snapshotJson: string): Operati
  * The revision comparison and secureWorkspace put share one IndexedDB transaction,
  * preventing a stale asynchronous encryption result from replacing a newer snapshot.
  */
+function businessLocalStateSnapshotsMatch(
+  expected: BusinessLocalStateSnapshot | undefined,
+  actual: BusinessLocalStateSnapshot
+): boolean {
+  if (!expected) return Object.keys(actual.stores).length === 0;
+  try {
+    validateBusinessLocalStateSnapshot(expected);
+    validateBusinessLocalStateSnapshot(actual);
+  } catch {
+    return false;
+  }
+  const expectedKeys = Object.keys(expected.stores).sort();
+  const actualKeys = Object.keys(actual.stores).sort();
+  return expectedKeys.length === actualKeys.length &&
+    expectedKeys.every((key, index) =>
+      key === actualKeys[index] && expected.stores[key] === actual.stores[key]
+    );
+}
+
+function assertBusinessLocalStateSnapshotFresh(
+  expected: BusinessLocalStateSnapshot | undefined
+): void {
+  const current = captureBusinessLocalStateSnapshot();
+  if (!businessLocalStateSnapshotsMatch(expected, current)) {
+    throw new Error('داده‌های محلی افزونه‌ها پس از تهیه snapshot تغییر کرده‌اند؛ نسخه رمزگذاری‌شده قدیمی است.');
+  }
+}
+
 export async function writeEncryptedOperationalWorkspaceSnapshot(
   workspaceId: string,
   workspace: OperationalWorkspaceData,
@@ -1414,6 +1442,7 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
   }
   const snapshotJson = JSON.stringify(workspace);
   const validatedWorkspace = parseOperationalWorkspaceSnapshot(snapshotJson);
+  assertBusinessLocalStateSnapshotFresh(validatedWorkspace.businessLocalState);
   if (validatedWorkspace.profile.uid.trim() !== cleanWorkspaceId) {
     throw new Error('شناسه فضای کاری با شناسه پروفایل داخل داده‌ها مطابقت ندارد.');
   }
@@ -1463,6 +1492,16 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
         if (isOperationalRestoreBarrierActive()) {
           try { tx.abort(); } catch { /* transaction may already be inactive */ }
           if (!settled) { settled = true; reject(new Error('ذخیره نسخه عملیاتی رمزگذاری‌شده تا پایان بازیابی متوقف است.')); }
+          return;
+        }
+        try {
+          // localStorage and IndexedDB cannot share a transaction. Re-check the
+          // captured allowlist synchronously in the final IDB request callback so
+          // same-tab extension writes during async encryption cannot publish stale data.
+          assertBusinessLocalStateSnapshotFresh(validatedWorkspace.businessLocalState);
+        } catch (error) {
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+          if (!settled) { settled = true; reject(error); }
           return;
         }
         const current = metaReq.result as { localRevision?: number } | undefined;
@@ -1584,6 +1623,9 @@ export async function loadPreparedEncryptedOperationalWorkspace(
   if (workspace.profile.uid.trim() !== cleanWorkspaceId) {
     throw new Error('شناسه پروفایل نسخه رمزگذاری‌شده با فضای کاری درخواستی مطابقت ندارد.');
   }
+  // A matching IndexedDB revision is insufficient: business extensions are
+  // still stored in localStorage and can change without advancing that revision.
+  assertBusinessLocalStateSnapshotFresh(workspace.businessLocalState);
   const actualRecordCount = countOperationalWorkspaceRecords(workspace);
   if (actualRecordCount !== record.recordCount) {
     throw new Error('تعداد رکوردهای فضای کاری با فراداده نسخه رمزگذاری‌شده مطابقت ندارد.');
