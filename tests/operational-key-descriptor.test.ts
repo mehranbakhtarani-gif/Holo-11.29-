@@ -28,6 +28,7 @@ async function run() {
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, keyId: 'bad' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, cipher: 'AES-CBC' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: 'not-base64' }), false);
+    assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: `${descriptor.saltB64.slice(0, -3)}B==` }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, createdAt: 'invalid' }), false);
 
     const restored = JSON.parse(JSON.stringify(descriptor));
