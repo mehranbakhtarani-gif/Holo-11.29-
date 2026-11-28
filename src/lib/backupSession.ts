@@ -9,10 +9,12 @@ export function unlockBackupSession(passphrase: string): void {
   if (clean.length < 6) throw new Error('رمز پشتیبان باید حداقل ۶ کاراکتر باشد.');
   if (!globalThis.crypto?.subtle) throw new Error('Web Crypto در این محیط در دسترس نیست.');
   activePassphrase = clean;
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('holoo:backup-session-changed'));
 }
 
 export function lockBackupSession(): void {
   activePassphrase = null;
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('holoo:backup-session-changed'));
 }
 
 export function isBackupSessionUnlocked(): boolean {
