@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
+import { indexedDB } from 'fake-indexeddb';
 import {
   createEncryptedWorkspaceExtensionOutboxOperation,
   decryptWorkspaceExtensionOutboxOperation,
@@ -81,6 +82,33 @@ await assert.rejects(
   }),
   /invalid/i,
   'prototype-sensitive payloads must be rejected before encryption'
+);
+
+
+Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: { indexedDB },
+});
+const operationalDb = await import('../src/lib/operationalDb');
+await operationalDb.enqueueSyncOutboxOperation(operation);
+await operationalDb.enqueueSyncOutboxOperation({
+  operationId: 'supabase_pending_1',
+  target: 'supabase',
+  workspaceId: 'workspace-user-1',
+  deviceId: 'device-1',
+  clientRevision: 12,
+  payloadHash: 'a'.repeat(64),
+  createdAt: '2026-11-28T08:00:01.000Z',
+  retryCount: 0,
+  status: 'pending',
+});
+await operationalDb.clearPendingSyncOutboxOperations();
+const pendingAfterCloudCleanup = await operationalDb.listPendingSyncOutboxOperations();
+assert.deepEqual(
+  pendingAfterCloudCleanup.map((item) => item.operationId),
+  [operation.operationId],
+  'generic cloud cleanup must preserve encrypted Firebase extension mutations'
 );
 
 console.log('Encrypted workspace extension outbox tests passed');
