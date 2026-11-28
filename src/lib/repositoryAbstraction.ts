@@ -40,7 +40,11 @@ import {
   markSyncOutboxOperationStatus,
   recordInboxOperation,
   savePreUpdateSafetyBackup,
+  getOperationalDbStats,
+  prepareEncryptedOperationalWorkspaceMigration,
   OP_DB_VERSION,
+  type OperationalDbStats,
+  type EncryptedOperationalWorkspaceMeta,
   type OperationalRestoreJournalRecord,
   saveOperationalWorkspaceTx,
   type OperationalWorkspaceData,
@@ -119,7 +123,22 @@ export const operationalBackupMaintenancePort = {
   savePreUpdateSafetyBackup,
 };
 export type OperationalBackupMaintenancePort = typeof operationalBackupMaintenancePort;
-export type { OperationalRestoreJournalRecord };
+
+/** Read-only diagnostics boundary for the operational IndexedDB health summary. */
+export const operationalDiagnosticsPort = {
+  getStats: getOperationalDbStats,
+};
+export type OperationalDiagnosticsPort = typeof operationalDiagnosticsPort;
+
+/**
+ * Prepares and verifies an encrypted shadow snapshot only. This does not switch
+ * primary readers/writers or perform an encryption-at-rest cutover.
+ */
+export const operationalEncryptionPreparationPort = {
+  prepareShadowSnapshot: prepareEncryptedOperationalWorkspaceMigration,
+};
+export type OperationalEncryptionPreparationPort = typeof operationalEncryptionPreparationPort;
+export type { OperationalDbStats, EncryptedOperationalWorkspaceMeta, OperationalRestoreJournalRecord };
 
 export interface LocalRepositoryAdapter {
   readonly kind: 'indexeddb' | 'memory';
