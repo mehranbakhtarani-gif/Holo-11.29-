@@ -32,7 +32,17 @@ import {
   OperationType,
 } from '../lib/firebase';
 import { useAccounting } from './AccountingContext';
-import { isOperationalRestoreBarrierActive } from '../lib/operationalDb';
+import {
+  enqueueSyncOutboxOperation,
+  isOperationalRestoreBarrierActive,
+  listPendingSyncOutboxOperations,
+  markSyncOutboxOperationStatus,
+} from '../lib/operationalDb';
+import { isBackupSessionUnlocked, requireBackupSessionPassphrase } from '../lib/backupSession';
+import {
+  createEncryptedWorkspaceExtensionOutboxOperation,
+  decryptWorkspaceExtensionOutboxOperation,
+} from '../lib/workspaceExtensionOutbox';
 import {
   BankLoan,
   BomFormula,
@@ -183,7 +193,7 @@ const WorkspaceExtensionsContext = createContext<WorkspaceExtensionsContextValue
 export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products, updateProduct, isPrivilegedOperator } = useAccounting();
+  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products, updateProduct, isPrivilegedOperator, showToast } = useAccounting();
 
   const [state, setState] = useState<WorkspaceExtensionsState>(() => loadInitialExtensions());
   const [onlineDevices, setOnlineDevices] = useState<DevicePresenceRecord[]>([]);
@@ -195,6 +205,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   const versionRef = useRef(1);
   const cloudWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const extensionOutboxReplayRef = useRef(false);
   const activeCloudUidRef = useRef<string | null>(isCloudMode ? user?.uid ?? null : null);
   const pendingCloudMutationsRef = useRef(0);
   activeCloudUidRef.current = isCloudMode ? user?.uid ?? null : null;
@@ -274,7 +285,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   const pushToCloud = useCallback(
     async (
       next: WorkspaceExtensionsState,
-      previous: WorkspaceExtensionsState = next
+      previous: WorkspaceExtensionsState = next,
+      outboxOperationId?: string
     ) => {
       if (isOperationalRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
       const cloudUid = user.uid;
@@ -371,9 +383,35 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
           });
 
           versionRef.current = Math.max(versionRef.current, committedVersion);
+          if (outboxOperationId) {
+            await markSyncOutboxOperationStatus(outboxOperationId, 'synced');
+          }
         } catch (err) {
           if (activeCloudUidRef.current !== cloudUid && err instanceof Error && err.message.includes('Workspace account changed')) return;
-          if (!isFirestoreOfflineError(err)) {
+          if (isFirestoreOfflineError(err)) {
+            try {
+              if (!isBackupSessionUnlocked()) {
+                throw new Error('برای نگهداری امن تغییرات آفلاین، ابتدا قفل رمزگذاری پشتیبان را باز کنید.');
+              }
+              const operation = await createEncryptedWorkspaceExtensionOutboxOperation({
+                workspaceId: cloudUid,
+                deviceId,
+                clientRevision: versionRef.current,
+                previous: previous as unknown as Record<string, unknown>,
+                next: next as unknown as Record<string, unknown>,
+                passphrase: requireBackupSessionPassphrase(),
+              });
+              await enqueueSyncOutboxOperation(operation);
+              showToast('اتصال ابری قطع است؛ تغییرات افزونه با رمزگذاری در صف پایدار ذخیره شد و پس از اتصال دوباره ارسال می‌شود.');
+            } catch (queueError) {
+              showToast(queueError instanceof Error
+                ? queueError.message
+                : 'ذخیره امن تغییرات آفلاین ناموفق بود؛ قفل رمزگذاری پشتیبان را بررسی کنید.');
+            }
+          } else {
+            if (outboxOperationId) {
+              try { await markSyncOutboxOperationStatus(outboxOperationId, 'conflict'); } catch { /* preserve the original cloud error */ }
+            }
             try {
               handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${cloudUid}`);
             } catch {
@@ -390,8 +428,67 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       cloudWriteQueueRef.current = queuedWrite;
       await queuedWrite;
     },
-    [isCloudMode, user?.uid, deviceLabel]
+    [isCloudMode, user?.uid, deviceId, deviceLabel, showToast]
   );
+
+  // Replay encrypted extension mutations after connectivity and the backup key are available.
+  useEffect(() => {
+    if (!isCloudMode || !user?.uid) return;
+    let cancelled = false;
+
+    const replayEncryptedExtensionOutbox = async () => {
+      if (
+        cancelled ||
+        extensionOutboxReplayRef.current ||
+        !isBackupSessionUnlocked() ||
+        isOperationalRestoreBarrierActive() ||
+        (typeof navigator !== 'undefined' && !navigator.onLine)
+      ) return;
+
+      extensionOutboxReplayRef.current = true;
+      try {
+        const pending = await listPendingSyncOutboxOperations();
+        for (const operation of pending) {
+          if (cancelled || isOperationalRestoreBarrierActive()) break;
+          if (
+            operation.target !== 'firebase' ||
+            operation.workspaceId !== user.uid ||
+            !operation.operationId.startsWith('workspace_ext_') ||
+            !operation.encryptedPayload
+          ) continue;
+
+          const payload = await decryptWorkspaceExtensionOutboxOperation(
+            operation,
+            user.uid,
+            requireBackupSessionPassphrase()
+          );
+          if (!payload) {
+            await markSyncOutboxOperationStatus(operation.operationId, 'conflict');
+            showToast('یک تغییر آفلاین رمزگذاری‌شده قابل تأیید نیست؛ برای جلوگیری از اعمال داده خراب، در صف تعارض نگه داشته شد.');
+            continue;
+          }
+          await pushToCloud(
+            payload.next as WorkspaceExtensionsState,
+            payload.previous as WorkspaceExtensionsState,
+            operation.operationId
+          );
+        }
+      } catch {
+        // Keep pending records intact; the next online/unlock event retries them.
+      } finally {
+        extensionOutboxReplayRef.current = false;
+      }
+    };
+
+    void replayEncryptedExtensionOutbox();
+    window.addEventListener('online', replayEncryptedExtensionOutbox);
+    window.addEventListener('holoo:backup-session-changed', replayEncryptedExtensionOutbox);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', replayEncryptedExtensionOutbox);
+      window.removeEventListener('holoo:backup-session-changed', replayEncryptedExtensionOutbox);
+    };
+  }, [isCloudMode, user?.uid, pushToCloud, showToast]);
 
   // Live Firestore listener for /workspaceExtensions/{uid}
   useEffect(() => {
