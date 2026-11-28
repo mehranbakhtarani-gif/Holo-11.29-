@@ -112,15 +112,28 @@ async function run() {
       /metadata or identity is invalid/
     );
 
+    // Re-wrap the same DEK under a new passphrase using a durable compare-and-swap.
+    const rotatedDescriptor = await operationalDb.rewrapOperationalKeyDescriptorForWorkspace(
+      'workspace-session-01',
+      'ReplacementSession#1405'
+    );
+    assert.equal(rotatedDescriptor.keyId, descriptor.keyId);
+    assert.notEqual(rotatedDescriptor.saltB64, descriptor.saltB64);
+    assert.notEqual(rotatedDescriptor.wrappedKeyB64, descriptor.wrappedKeyB64);
+    assert.deepEqual(
+      await operationalDb.loadOperationalKeyDescriptor('workspace-session-01'),
+      rotatedDescriptor
+    );
     // Replacing the backup vault secret invalidates the old operational key too.
     unlockBackupSession('ReplacementSession#1405');
     assert.throws(() => session.assertOperationalDataKeyLease(lease), /expired/);
-    await session.unlockOperationalDataSession(createOperationalDataSalt());
     await assert.rejects(
-      () => sessionCodec.encryptOperationalRecordForActiveSession(recordValue, recordContext),
-      /workspace does not match/,
-      'legacy workspace-agnostic key unlock must not authorize workspace record operations'
+      () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01'),
+      /operation|decrypt|authentication/i,
+      'the previous passphrase must no longer unwrap the rotated descriptor'
     );
+    await session.unlockOperationalDataSessionFromDescriptor(rotatedDescriptor, 'workspace-session-01');
+    assert.equal(session.isOperationalDataSessionUnlocked(), true);
     const replacementLease = session.captureOperationalDataKeyLease();
     session.assertOperationalDataKeyLease(replacementLease);
 
@@ -143,7 +156,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 28 assertions passed');
+    console.log('Operational encryption session: 32 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
