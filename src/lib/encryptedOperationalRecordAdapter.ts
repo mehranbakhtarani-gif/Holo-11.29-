@@ -112,11 +112,16 @@ export async function prepareEncryptedOperationalRecordBatch(
   const lease = captureOperationalDataKeyLease();
   assertLeaseForWorkspace(lease, workspaceId);
   const prepared: EncryptedOperationalRow[] = [];
+  const seenRecordIds = new Set<string>();
   const keyField = PRIMARY_KEY_FIELDS[store];
 
   for (const record of records) {
     assertLeaseForWorkspace(lease, workspaceId);
     const recordId = getOperationalRecordPrimaryKey(store, record);
+    if (seenRecordIds.has(recordId)) {
+      throw new Error(`Operational ${store} batch contains duplicate primary key ${recordId}.`);
+    }
+    seenRecordIds.add(recordId);
     const envelope = await encryptOperationalRecord(record, {
       workspaceId,
       store,
