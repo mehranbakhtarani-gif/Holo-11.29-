@@ -196,9 +196,10 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
   if (!previousCheckpoint) throw new Error('Migration checkpoint store is absent from the expected journal.');
   const preparedRecordIds = prepared.map((row) => row.recordId);
   const previousCursor = previousCheckpoint.cursor;
+  const previousCursorString = typeof previousCursor === 'string' ? previousCursor : null;
   if (typeof previousCursor === 'number' ||
-      (typeof previousCursor === 'string' && preparedRecordIds.some((recordId, index) =>
-        recordId <= previousCursor || (index > 0 && recordId <= preparedRecordIds[index - 1])
+      (previousCursorString !== null && preparedRecordIds.some((recordId, index) =>
+        recordId <= previousCursorString || (index > 0 && recordId <= preparedRecordIds[index - 1])
       )) ||
       (previousCursor === null && preparedRecordIds.some((recordId, index) =>
         index > 0 && recordId <= preparedRecordIds[index - 1]
