@@ -23,10 +23,7 @@ import { useAccounting } from '../context/AccountingContext';
 import { useOnlineStatus } from '../hooks/usePWAInstall';
 import type { DualCloudSyncController } from '../hooks/useDualCloudSync';
 import type { LocalFirstMeshController } from '../hooks/useLocalFirstMeshSync';
-import {
-  getOperationalDbDetailedReport,
-  type OperationalDbDetailedReport,
-} from '../lib/operationalDb';
+import { operationalHealthReportPort, type OperationalDbDetailedReport } from '../lib/repositoryAbstraction';
 import {
   requestPersistentDeviceStorage,
   type StoragePersistenceInfo,
@@ -133,7 +130,7 @@ export const OfflineSyncHealthDashboard: React.FC<OfflineSyncHealthDashboardProp
     setProbingIdb(true);
     try {
       const [detailed, storage] = await Promise.all([
-        getOperationalDbDetailedReport(),
+        operationalHealthReportPort.getDetailedReport(),
         (async (): Promise<StoragePersistenceInfo> => {
           if (localMesh?.storagePersistence) {
             return localMesh.storagePersistence;
