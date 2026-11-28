@@ -1410,7 +1410,10 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
     throw new Error('شماره بازبینی مبنا برای ذخیره رمزگذاری‌شده معتبر نیست.');
   }
   const snapshotJson = JSON.stringify(workspace);
-  parseOperationalWorkspaceSnapshot(snapshotJson);
+  const validatedWorkspace = parseOperationalWorkspaceSnapshot(snapshotJson);
+  if (validatedWorkspace.profile.uid.trim() !== cleanWorkspaceId) {
+    throw new Error('شناسه فضای کاری با شناسه پروفایل داخل داده‌ها مطابقت ندارد.');
+  }
   const sessionLease = captureBackupSessionLease();
   const passphrase = sessionLease.passphrase;
   const envelope = await encryptBackupEnvelope(snapshotJson, passphrase);
@@ -1572,6 +1575,9 @@ export async function loadPreparedEncryptedOperationalWorkspace(
     throw new Error('اثر انگشت نسخه عملیاتی رمزگذاری‌شده با فراداده آن مطابقت ندارد.');
   }
   const workspace = parseOperationalWorkspaceSnapshot(result.snapshotJson);
+  if (workspace.profile.uid.trim() !== cleanWorkspaceId) {
+    throw new Error('شناسه پروفایل نسخه رمزگذاری‌شده با فضای کاری درخواستی مطابقت ندارد.');
+  }
   const actualRecordCount = countOperationalWorkspaceRecords(workspace);
   if (actualRecordCount !== record.recordCount) {
     throw new Error('تعداد رکوردهای فضای کاری با فراداده نسخه رمزگذاری‌شده مطابقت ندارد.');

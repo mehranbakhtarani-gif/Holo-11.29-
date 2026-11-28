@@ -151,6 +151,11 @@ async function run() {
   assert.ok(loadedSource, 'the operational workspace must hydrate from IndexedDB');
   unlockBackupSession(passphrase);
   try {
+    await assert.rejects(
+      () => writeEncryptedOperationalWorkspaceSnapshot('another-workspace', loadedSource, saved!.localRevision),
+      /شناسه فضای کاری با شناسه پروفایل/,
+      'an encrypted snapshot must not be written under a different workspace identity'
+    );
     const writtenMeta = await writeEncryptedOperationalWorkspaceSnapshot(
       'workspace-1', loadedSource, saved!.localRevision
     );
