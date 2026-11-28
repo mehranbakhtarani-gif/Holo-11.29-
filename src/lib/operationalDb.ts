@@ -363,8 +363,8 @@ export async function applyOperationalRestoreJournalWorkspace(
   const lease = captureBackupSessionLease();
   const passphrase = lease.passphrase;
   const db = await openOperationalDb(true);
-  assertBackupSessionLease(lease);
   try {
+    assertBackupSessionLease(lease);
     const journal = await new Promise<OperationalRestoreJournalRecord>((resolve, reject) => {
       const tx = db.transaction([RESTORE_JOURNAL_STORE], 'readonly');
       const request = tx.objectStore(RESTORE_JOURNAL_STORE).get(restoreId);
