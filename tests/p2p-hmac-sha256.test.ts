@@ -88,8 +88,8 @@ async function main() {
     'peer-unavailable signaling errors must clean up stale pending connections before retrying');
   assert.match(meshSource, /conn\.on\('close',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
     'closed WebRTC data channels must schedule reconnection');
-  assert.match(meshSource, /conn\.on\('error',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
-    'failed WebRTC data channels must schedule reconnection');
+  assert.match(meshSource, /conn\.on\('error',[\s\S]*?conn\.close\(\);[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
+    'failed WebRTC data channels must be closed and schedule reconnection');
   assert.match(meshSource, /private watchPeerConnection\([\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);[\s\S]*?}, 20_000\);/,
     'a stalled PeerJS attempt with no lifecycle event must time out and retry');
   assert.match(meshSource, /if \(existing\) \{[\s\S]*?if \(existing\.open\) void this\.sendHello\(existing\);[\s\S]*?continue;/,
