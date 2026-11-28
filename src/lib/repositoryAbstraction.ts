@@ -25,6 +25,11 @@ import {
   type OperatingMode,
 } from './offlineFirstCore';
 import {
+  commitChequeStatusOperationalTx,
+  commitDepreciationOperationalTx,
+  commitInvoiceOperationalTx,
+  commitSalesOrderDispatchOperationalTx,
+  commitStockAdjustmentOperationalTx,
   enqueueSyncOutboxOperation,
   isInboxOperationProcessed,
   listPendingSyncOutboxOperations,
@@ -53,6 +58,25 @@ export interface DurableSyncOperation {
   status: 'pending' | 'synced' | 'conflict_requires_review';
   lastError?: string;
 }
+
+/**
+ * Atomic business-command port.
+ *
+ * This is intentionally a behavior-preserving seam: each command still delegates to
+ * its existing single IndexedDB transaction implementation. UI and sync orchestration
+ * should depend on this port rather than importing operationalDb transaction functions.
+ * The encrypted adapter can replace this implementation only after it preserves each
+ * command's complete transaction and revision-check semantics.
+ */
+export const operationalTransactionPort = {
+  commitInvoice: commitInvoiceOperationalTx,
+  dispatchSalesOrder: commitSalesOrderDispatchOperationalTx,
+  transitionChequeStatus: commitChequeStatusOperationalTx,
+  commitDepreciation: commitDepreciationOperationalTx,
+  adjustStock: commitStockAdjustmentOperationalTx,
+};
+
+export type OperationalTransactionPort = typeof operationalTransactionPort;
 
 export interface LocalRepositoryAdapter {
   readonly kind: 'indexeddb' | 'memory';
