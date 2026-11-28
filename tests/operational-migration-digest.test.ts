@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { computeOperationalMigrationDigest } from '../src/lib/operationalMigrationDigest';
+import { computeOperationalMigrationDigest, verifyOperationalMigrationStoreDigests } from '../src/lib/operationalMigrationDigest';
 
 async function run() {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -16,6 +16,24 @@ async function run() {
     ]);
     assert.equal(first, reordered, 'digest must ignore cursor and object property order');
     assert.match(first, /^[a-f0-9]{64}$/);
+    const verified = await verifyOperationalMigrationStoreDigests('accounts', [
+      { id: 'a', title: 'Cash', balance: 10 },
+      { id: 'b', title: 'Bank', balance: 20 },
+    ], [
+      { title: 'Bank', balance: 20, id: 'b' },
+      { balance: 10, title: 'Cash', id: 'a' },
+    ]);
+    assert.equal(verified.verified, true);
+    assert.equal(verified.sourceRecordCount, 2);
+    assert.equal(verified.sourceDigest, verified.targetDigest);
+    await assert.rejects(
+      () => verifyOperationalMigrationStoreDigests('accounts', [{ id: 'a', value: 1 }], []),
+      /record counts differ/
+    );
+    await assert.rejects(
+      () => verifyOperationalMigrationStoreDigests('accounts', [{ id: 'a', value: 1 }], [{ id: 'a', value: 2 }]),
+      /digests differ/
+    );
     assert.notEqual(first, await computeOperationalMigrationDigest('products', [
       { id: 'a', title: 'Cash', balance: 10 },
       { id: 'b', title: 'Bank', balance: 20 },
