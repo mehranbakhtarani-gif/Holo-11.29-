@@ -7,7 +7,7 @@
 
 import type { FinancialCollectionKind } from './offlineFirstCore';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
-import { requireBackupSessionPassphrase } from './backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease, requireBackupSessionPassphrase } from './backupSession';
 import { importAllBankReconciliationSessions } from './bankReconciliationEngine';
 import {
   captureBusinessLocalStateSnapshot,
@@ -1397,13 +1397,17 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
   }
   const snapshotJson = JSON.stringify(workspace);
   parseOperationalWorkspaceSnapshot(snapshotJson);
-  const passphrase = requireBackupSessionPassphrase();
+  const sessionLease = captureBackupSessionLease();
+  const passphrase = sessionLease.passphrase;
   const envelope = await encryptBackupEnvelope(snapshotJson, passphrase);
+  assertBackupSessionLease(sessionLease);
   const verification = await decryptAndVerifyBackupEnvelope(JSON.stringify(envelope), passphrase);
+  assertBackupSessionLease(sessionLease);
   if (!verification.ok || verification.snapshotJson !== snapshotJson || verification.sha256 !== envelope.plaintextSha256) {
     throw new Error(verification.error || 'اعتبارسنجی نسخه رمزگذاری‌شده فضای کاری ناموفق بود.');
   }
 
+  assertBackupSessionLease(sessionLease);
   if (isOperationalRestoreBarrierActive()) {
     throw new Error('ذخیره نسخه عملیاتی رمزگذاری‌شده تا پایان بازیابی متوقف است.');
   }
@@ -1429,6 +1433,13 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
       const tx = db.transaction(['meta', 'secureWorkspace'], 'readwrite');
       const metaReq = tx.objectStore('meta').get('workspace_meta');
       metaReq.onsuccess = () => {
+        try {
+          assertBackupSessionLease(sessionLease);
+        } catch (error) {
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+          if (!settled) { settled = true; reject(error); }
+          return;
+        }
         if (isOperationalRestoreBarrierActive()) {
           try { tx.abort(); } catch { /* transaction may already be inactive */ }
           if (!settled) { settled = true; reject(new Error('ذخیره نسخه عملیاتی رمزگذاری‌شده تا پایان بازیابی متوقف است.')); }
