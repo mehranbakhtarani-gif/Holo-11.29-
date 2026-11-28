@@ -585,3 +585,10 @@ Real multi-device PeerJS/WebRTC behavior (including restrictive NAT/mobile netwo
 ### Audit status
 
 The branch CI run for the mesh-randomness change passed TypeScript, rules lint, the complete test suite, Firestore Emulator security tests, and production build. The later audit-actor rule/writer/test changes are being validated by a fresh CI run. No merge or deployment was performed. The permanent-voucher server-side validation, pairing-secret migration, primary-store encryption cutover, and physical-device WebRTC tests remain explicit release gates.
+
+
+### Additional P2P and cloud-backup hardening
+
+Newly entered mesh pairing secrets are now required to be at least 10 characters and cannot equal the known legacy default. The UI enforces the same threshold and the P2P regression test guards both the hook and persistence helper. Existing 4–9 character secrets are still loaded for compatibility with already-paired devices; they remain weak until users coordinate a shared-key rotation. Raw localStorage storage remains an unresolved credential-at-rest issue.
+
+Cloud backup retention now prunes only when the query result is server-authoritative (`snapshot.metadata.fromCache === false`). If an offline cache fallback is used, backup metadata can still be shown but no documents are deleted based on a potentially incomplete cache. This prevents an offline/incomplete query from triggering destructive retention cleanup.
