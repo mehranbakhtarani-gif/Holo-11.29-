@@ -1147,7 +1147,24 @@ export class HolooPeerMeshManager {
           // Normal when one of the other 2 devices is currently asleep/offline
           const targetMatch = errMsg.match(/holoo-mesh-[a-z0-9-]+/i);
           const targetPeer = targetMatch ? targetMatch[0] : 'peer';
-          if (isValidMeshPeerId(targetPeer)) this.schedulePeerReconnect(targetPeer);
+          if (isValidMeshPeerId(targetPeer)) {
+            // PeerJS reports expired/unavailable offers on the Peer, not necessarily on DataConnection.
+            // Remove the stale, not-yet-open attempt so retries do not accumulate orphaned connections.
+            const pendingConnection = this.connections.get(targetPeer);
+            if (pendingConnection && !pendingConnection.open) {
+              this.connections.delete(targetPeer);
+              try {
+                pendingConnection.close();
+              } catch {
+                // ignore cleanup failures; the peer-specific retry remains scheduled
+              }
+              this.updatePeerState(targetPeer, {
+                status: 'offline',
+                lastError: 'دستگاه همتا در دسترس نیست',
+              });
+            }
+            this.schedulePeerReconnect(targetPeer);
+          }
           this.emitSyncEvent({
             peerId: targetPeer,
             eventType: 'peer_error',
