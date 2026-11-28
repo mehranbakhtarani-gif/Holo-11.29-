@@ -16,6 +16,21 @@ async function run() {
   const previousCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
   try {
+    const subtle = webcrypto.subtle;
+    const originalEncrypt = subtle.encrypt.bind(subtle);
+    const encryptionBuffers: Uint8Array[] = [];
+    Object.defineProperty(subtle, 'encrypt', {
+      configurable: true,
+      value: (algorithm: AlgorithmIdentifier | RsaOaepParams | AesCtrParams | AesCbcParams | AesGcmParams, key: CryptoKey, data: BufferSource) => {
+        if (typeof algorithm === 'object' && 'name' in algorithm && algorithm.name === 'AES-GCM') {
+          const params = algorithm as AesGcmParams;
+          if (params.iv instanceof ArrayBuffer) encryptionBuffers.push(new Uint8Array(params.iv));
+          if (params.additionalData instanceof ArrayBuffer) encryptionBuffers.push(new Uint8Array(params.additionalData));
+          if (data instanceof ArrayBuffer) encryptionBuffers.push(new Uint8Array(data));
+        }
+        return originalEncrypt(algorithm, key, data);
+      },
+    });
     const oldPassphrase = 'OperationalEncryption#1405';
     const newPassphrase = 'OperationalEncryption#1406';
     const descriptor = await createOperationalKeyDescriptor(
@@ -23,6 +38,15 @@ async function run() {
       'operational-key-1405',
       oldPassphrase
     );
+    assert.ok(encryptionBuffers.length >= 3, 'DEK wrapping must pass only owned buffers to Web Crypto');
+    assert.ok(
+      encryptionBuffers.every((buffer) => buffer.every((byte) => byte === 0)),
+      'DEK wrapping IV, AAD, and raw-key copies must be zeroed after encryption'
+    );
+    Object.defineProperty(subtle, 'encrypt', {
+      configurable: true,
+      value: originalEncrypt,
+    });
     assert.equal(descriptor.version, OPERATIONAL_KEY_DESCRIPTOR_VERSION);
     assert.equal(descriptor.version, 2);
     assert.equal(descriptor.workspaceId, 'workspace-finance-01');
@@ -47,11 +71,34 @@ async function run() {
 
     const restored = JSON.parse(JSON.stringify(descriptor));
     assert.equal(isOperationalKeyDescriptor(restored), true);
+    const originalDecrypt = subtle.decrypt.bind(subtle);
+    const decryptionBuffers: Uint8Array[] = [];
+    Object.defineProperty(subtle, 'decrypt', {
+      configurable: true,
+      value: (algorithm: AlgorithmIdentifier | RsaOaepParams | AesCtrParams | AesCbcParams | AesGcmParams, key: CryptoKey, data: BufferSource) => {
+        if (typeof algorithm === 'object' && 'name' in algorithm && algorithm.name === 'AES-GCM') {
+          const params = algorithm as AesGcmParams;
+          if (params.iv instanceof ArrayBuffer) decryptionBuffers.push(new Uint8Array(params.iv));
+          if (params.additionalData instanceof ArrayBuffer) decryptionBuffers.push(new Uint8Array(params.additionalData));
+          if (data instanceof ArrayBuffer) decryptionBuffers.push(new Uint8Array(data));
+        }
+        return originalDecrypt(algorithm, key, data);
+      },
+    });
     const key = await deriveOperationalKeyFromDescriptor(
       oldPassphrase,
       restored,
       'workspace-finance-01'
     );
+    assert.ok(decryptionBuffers.length >= 3, 'DEK unwrapping must use owned buffers');
+    assert.ok(
+      decryptionBuffers.every((buffer) => buffer.every((byte) => byte === 0)),
+      'DEK unwrapping IV, AAD, and wrapped-key copies must be zeroed after decryption'
+    );
+    Object.defineProperty(subtle, 'decrypt', {
+      configurable: true,
+      value: originalDecrypt,
+    });
     assert.equal(key.type, 'secret');
     assert.equal(key.extractable, false);
     assert.deepEqual(key.usages, ['encrypt', 'decrypt']);
@@ -118,7 +165,7 @@ async function run() {
       /at least 10/
     );
 
-    console.log('Operational key descriptor: 38 assertions passed');
+    console.log('Operational key descriptor: 40 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
