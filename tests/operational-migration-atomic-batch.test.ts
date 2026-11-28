@@ -160,7 +160,7 @@ async function run() {
         () => writeEncryptedOperationalMigrationBatchAtomically(
           abortingDb,
           workspaceId,
-          [{ store: 'accounts', records: [{ id: 'account-atomic-2', name: 'Must roll back' }] }],
+          [{ store: 'accounts', records: [{ id: 'account-atomic-3', name: 'Must roll back' }] }],
           first.journal,
           binding,
           {
