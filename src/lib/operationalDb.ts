@@ -610,6 +610,7 @@ function isIndexedDbAvailable(): boolean {
 
 function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    let blocked = false;
     if (!isIndexedDbAvailable()) {
       reject(new Error('IndexedDB unavailable'));
       return;
@@ -674,6 +675,14 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
     };
     req.onsuccess = () => {
       const db = req.result;
+      // A later schema upgrade in another tab must not be held open by this connection.
+      // If an earlier blocked event already rejected this request, close the late result
+      // rather than leaking a connection that can block every subsequent upgrade.
+      if (blocked) {
+        db.close();
+        return;
+      }
+      db.onversionchange = () => db.close();
       if (allowRestoreRecovery || !db.objectStoreNames.contains(RESTORE_JOURNAL_STORE)) {
         resolve(db);
         return;
@@ -716,9 +725,13 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
         reject(journalTx.error ?? new Error('تراکنش بررسی مانع بازیابی لغو شد.'));
       };
     };
-    req.onerror = () => reject(req.error ?? new Error('Failed to open operational IndexedDB'));
-    req.onblocked = () =>
+    req.onerror = () => {
+      if (!blocked) reject(req.error ?? new Error('Failed to open operational IndexedDB'));
+    };
+    req.onblocked = () => {
+      blocked = true;
       reject(new Error('Operational IndexedDB is blocked by another open tab/connection'));
+    };
   });
 }
 
