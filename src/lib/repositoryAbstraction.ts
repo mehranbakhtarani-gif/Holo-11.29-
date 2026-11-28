@@ -55,6 +55,14 @@ import {
   type SyncInboxRecord,
   type SyncOutboxOperation,
 } from './operationalDb';
+import {
+  advanceWorkspaceExtensionMigration,
+  decideWorkspaceExtensionCommit,
+  validateWorkspaceExtensionRecord,
+  type WorkspaceExtensionCommitResult,
+  type WorkspaceExtensionMigrationJournal,
+  type WorkspaceExtensionRecord,
+} from './workspaceExtensionRepository';
 
 export interface DurableSyncOperation {
   operationId: string;
@@ -156,6 +164,23 @@ export const operationalResetPort = {
   clearLocalPreferences: clearHolooLocalStorageKeys,
 };
 export type OperationalResetPort = typeof operationalResetPort;
+
+/**
+ * Pure extension persistence contract. A future IndexedDB adapter must persist
+ * payload, generation, and migration journal atomically in one transaction.
+ * This contract is not wired to production readers or writers yet.
+ */
+export const workspaceExtensionRepositoryContract = {
+  decideCommit: decideWorkspaceExtensionCommit,
+  advanceMigration: advanceWorkspaceExtensionMigration,
+  validateRecord: validateWorkspaceExtensionRecord,
+};
+export type WorkspaceExtensionRepositoryContract = typeof workspaceExtensionRepositoryContract;
+export type {
+  WorkspaceExtensionCommitResult,
+  WorkspaceExtensionMigrationJournal,
+  WorkspaceExtensionRecord,
+};
 export type { OperationalDbStats, EncryptedOperationalWorkspaceMeta, OperationalRestoreJournalRecord };
 
 export interface LocalRepositoryAdapter {
