@@ -281,3 +281,27 @@ The intended contract is:
 - Keep the current freshness guard and encrypted shadow non-authoritative until this migration, the repository encryption work, and real-device recovery gates are complete.
 
 This is an architecture decision and source-level audit only. No schema bump, data migration, localStorage authority change, encrypted cutover, merge, or deployment was performed.
+
+
+## Legacy extension-key consumer inventory — 2026-11-28
+
+A branch-pinned source inspection of the four extension compatibility keys found the following direct access paths:
+
+| Key | Current direct access | Classification |
+|---|---|---|
+| `holoo_apex96_workspace_extensions_v2` | `WorkspaceExtensionsContext.loadInitialExtensions` reads it; `persistLocalMirror` writes it and attempts rollback on failure. | Current aggregate bootstrap input and compatibility mirror. |
+| `holoo_apex96_reserved_invoices_v1` | `WorkspaceExtensionsContext.persistLocalMirror` writes it; `smartIntelligence.loadReservedInvoices` reads it as a fallback when the aggregate omits the field. | Compatibility mirror plus legacy bootstrap fallback. |
+| `holoo_apex96_favorite_menus` | `WorkspaceExtensionsContext.persistLocalMirror` writes it; `smartIntelligence.loadFavoriteMenus` reads it as a fallback. | Compatibility mirror plus legacy bootstrap fallback. |
+| `holoo_apex96_product_meta_v1` | `WorkspaceExtensionsContext.persistLocalMirror` writes it; `smartIntelligence.loadProductApexMetaMap` reads it as a fallback. | Compatibility mirror plus legacy bootstrap fallback. |
+
+The three legacy loaders and corresponding save helpers are defined in `src/lib/smartIntelligence.ts`. On the inspected branch, only the three load helpers are imported by `WorkspaceExtensionsContext.tsx`, and each is used only as fallback when the aggregate record does not provide that field. The three exported save helpers have no call sites in the inspected context. The dashboard view-mode key in the same module is separate UI preference state and is not part of the four-key business snapshot allowlist.
+
+### Migration implications
+
+- The aggregate key remains the primary local bootstrap source today; the other three keys are fallback/mirror paths. Migration must explicitly preserve fallback precedence for profiles whose aggregate is absent, malformed, or missing individual fields.
+- Once the IndexedDB aggregate is authoritative, migration should read the legacy aggregate and the three fallback keys once under a migration journal, validate and merge deterministically, then commit the normalized aggregate and migration marker in one IndexedDB transaction.
+- A malformed aggregate must not silently mask valid fallback values for individual fields. Conversely, a valid aggregate field must not be overwritten by an older mirror. The precedence and conflict diagnostics need tests and an explicit policy.
+- After successful migration, legacy readers should become migration-only (or be removed after the supported downgrade window); legacy writers should be removed rather than retained as a second authority. If compatibility mirrors remain temporarily, write them only after the IndexedDB commit and treat failures as repairable mirror drift.
+- This is a source-level inventory of the four named keys, not proof that every dynamically constructed key or indirect access in the entire repository has been found. Before retiring localStorage, perform a repository-wide search for `localStorage`, the exact key strings, and the exported smartIntelligence helper names, then review every result on the target branch.
+
+No code, data, IndexedDB schema, or runtime behavior was changed by this inventory.
