@@ -95,11 +95,12 @@ async function run() {
       const storedFirst = await readRow(
         db,
         'encryptedOperationalRecords',
-        [workspaceId, 'accounts', 'account-atomic-1']
+        [workspaceId, binding.migrationId, 'accounts', 'account-atomic-1']
       ) as Record<string, unknown>;
       assert.equal(typeof storedFirst.encryptedRecord, 'object');
       assert.equal(storedFirst.workspaceId, workspaceId);
       assert.equal(storedFirst.storeName, 'accounts');
+      assert.equal(storedFirst.migrationId, binding.migrationId);
       assert.equal(storedFirst.recordId, 'account-atomic-1');
       assert.deepEqual(
         await readRow(db, 'accounts', 'account-atomic-1'),
@@ -141,7 +142,7 @@ async function run() {
         ),
         /abort|Abort|transaction/i
       );
-      assert.equal(await readRow(db, 'encryptedOperationalRecords', [workspaceId, 'accounts', 'account-atomic-2']), undefined);
+      assert.equal(await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-atomic-2']), undefined);
       const durable = await persistence.readOperationalMigrationJournal(binding.migrationId);
       assert.deepEqual(durable, first.journal, 'aborted target writes must not advance the durable checkpoint');
       console.log('Encrypted migration batch: target ciphertext and checkpoint commit atomically; aborted transaction rolls back both');
