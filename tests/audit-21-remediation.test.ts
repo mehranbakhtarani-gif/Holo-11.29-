@@ -47,6 +47,12 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
+  await test('AUD: cloud backup retention never prunes from an offline cache snapshot', () => {
+    const source = fs.readFileSync(path.resolve('src/lib/firebaseCloudBackup.ts'), 'utf8');
+    assert.match(source, /authoritativeForPrune = !snap\\.metadata\\.fromCache/);
+    assert.match(source, /authoritativeForPrune && toPrune\\.length > 0/);
+  });
+
   console.log('Running 21-point full project audit remediation verification...');
 
   // 1. AUD-003 & AUD-014: SHA-256 tamper-evident voucher seal decoupled from voucherNumber
