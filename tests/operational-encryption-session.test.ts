@@ -24,10 +24,17 @@ async function run() {
 
     const passphrase = 'OperationalSession#1405';
     unlockBackupSession(passphrase);
-    const descriptor = await createOperationalKeyDescriptor(
-      'workspace-session-01',
-      'session-key-1405',
-      passphrase
+    const operationalDb = await import('../src/lib/operationalDb');
+    const descriptor = await operationalDb.initializeOperationalKeyDescriptor('workspace-session-01');
+    const persistedDescriptor = await operationalDb.loadOperationalKeyDescriptor('workspace-session-01');
+    assert.deepEqual(persistedDescriptor, descriptor);
+    await assert.rejects(
+      () => operationalDb.initializeOperationalKeyDescriptor('workspace-session-01'),
+      /already registered|از قبل ثبت شده/
+    );
+    assert.deepEqual(
+      await operationalDb.loadOperationalKeyDescriptor('workspace-session-01'),
+      descriptor
     );
     await assert.rejects(
       () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'another-workspace'),
@@ -66,7 +73,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 13 assertions passed');
+    console.log('Operational encryption session: 16 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
