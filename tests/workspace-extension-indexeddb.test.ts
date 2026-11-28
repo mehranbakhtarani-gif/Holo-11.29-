@@ -24,6 +24,26 @@ try {
   });
   assert.equal(migrated.status, 'committed');
   assert.equal((await repo.read('w1'))?.generation, 2);
+  const stagedJournal = await repo.readMigrationJournal('w1', 'm1');
+  assert.equal(stagedJournal?.state, 'staging');
+  const verifiedJournal = await repo.advanceMigration({
+    workspaceId: 'w1', migrationId: 'm1', sourceFingerprint: 'a'.repeat(64),
+    targetGeneration: 2, nextState: 'verified', now,
+  });
+  assert.equal(verifiedJournal.state, 'verified');
+  const committedJournal = await repo.advanceMigration({
+    workspaceId: 'w1', migrationId: 'm1', sourceFingerprint: 'a'.repeat(64),
+    targetGeneration: 2, nextState: 'committed', now,
+  });
+  assert.equal(committedJournal.state, 'committed');
+  await assert.rejects(repo.advanceMigration({
+    workspaceId: 'w1', migrationId: 'm1', sourceFingerprint: 'a'.repeat(64),
+    targetGeneration: 2, nextState: 'staging', now,
+  }), /backwards/i);
+  await assert.rejects(repo.advanceMigration({
+    workspaceId: 'w1', migrationId: 'm1', sourceFingerprint: 'a'.repeat(64),
+    targetGeneration: 1, nextState: 'committed', now,
+  }), /target generation/i);
 
   const concurrent = await Promise.all([
     repo.commit({ workspaceId: 'w1', expectedGeneration: 2, payload: { values: ['A'] }, now }),
