@@ -7,7 +7,7 @@
 
 import type { FinancialCollectionKind } from './offlineFirstCore';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
-import { assertBackupSessionLease, captureBackupSessionLease, requireBackupSessionPassphrase } from './backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease } from './backupSession';
 import { importAllBankReconciliationSessions } from './bankReconciliationEngine';
 import {
   captureBusinessLocalStateSnapshot,
@@ -1559,10 +1559,12 @@ export async function loadPreparedEncryptedOperationalWorkspace(
     throw new Error('نسخه رمزگذاری‌شده آماده‌شده قدیمی است و با داده عملیاتی فعلی تطابق ندارد.');
   }
 
+  const lease = captureBackupSessionLease();
   const result = await decryptAndVerifyBackupEnvelope(
     record.envelopeJson,
-    requireBackupSessionPassphrase()
+    lease.passphrase
   );
+  assertBackupSessionLease(lease);
   if (!result.ok || !result.snapshotJson) {
     throw new Error(result.error || 'رمزگشایی فضای کاری مهاجرت‌شده ناموفق بود.');
   }
