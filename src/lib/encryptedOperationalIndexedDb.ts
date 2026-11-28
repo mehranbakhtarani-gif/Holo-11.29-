@@ -210,5 +210,5 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
       if (items.length >= limit) break;
     }
   }
-  return { items, scanned, hasMore: cursorResult.hasMore };
+  return { items, scanned, hasMore: cursorResult.hasMore || scanned < cursorResult.rows.length };
 }
