@@ -86,13 +86,13 @@ export async function writeEncryptedOperationalStoresAtomically(
   }
 
   return new Promise<number>((resolve, reject) => {
-    let tx: IDBTransaction;
+    let tx: IDBTransaction | undefined;
     let settled = false;
     let written = 0;
     const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
-      try { tx.abort(); } catch { /* transaction may already be inactive */ }
+      try { tx?.abort(); } catch { /* transaction may already be inactive */ }
       reject(error instanceof Error ? error : new Error(String(error)));
     };
     try {
@@ -138,7 +138,7 @@ export async function writeEncryptedOperationalStoresAtomically(
         }
       };
     } catch (error) {
-      if (typeof tx !== 'undefined') {
+      if (tx) {
         try { tx.abort(); } catch { /* no active transaction */ }
       }
       if (!settled) {
@@ -197,7 +197,7 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
       throw new Error('Plaintext or malformed row encountered in encrypted operational store.');
     }
     const keyField = storeName === 'localProfiles' ? 'workspaceId' : 'id';
-    const recordId = (row as Record<string, string>)[keyField];
+    const recordId = (row as unknown as Record<string, string>)[keyField];
     const decoded = await decryptOperationalRecord<T>(
       (row as EncryptedOperationalRow).encryptedRecord,
       { workspaceId, store: storeName, recordId },
