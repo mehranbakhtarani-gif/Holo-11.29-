@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { indexedDB } from 'fake-indexeddb';
 import { createOperationalDataSalt } from '../src/lib/operationalRecordEncryption';
+import { createOperationalKeyDescriptor } from '../src/lib/operationalKeyDescriptor';
 import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
 
 const previous = {
@@ -23,7 +24,13 @@ async function run() {
 
     const passphrase = 'OperationalSession#1405';
     unlockBackupSession(passphrase);
-    await session.unlockOperationalDataSession(createOperationalDataSalt());
+    const descriptor = createOperationalKeyDescriptor('workspace-session-01', 'session-key-1405');
+    await assert.rejects(
+      () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'another-workspace'),
+      /invalid or belongs to another workspace/
+    );
+    assert.equal(session.isOperationalDataSessionUnlocked(), false);
+    await session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01');
     assert.equal(session.isOperationalDataSessionUnlocked(), true);
     const lease = session.captureOperationalDataKeyLease();
     assert.equal(lease.key.extractable, false);
