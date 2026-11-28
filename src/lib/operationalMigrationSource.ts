@@ -50,6 +50,10 @@ export async function readOperationalMigrationSourceBatch(
   if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 1_000) {
     throw new Error('Operational migration source batch limit must be between 1 and 1000.');
   }
+  if (storeName === 'localProfiles' && afterCursor !== null) {
+    throw new Error('Local profile migration source is a single workspace-scoped record and does not accept a continuation cursor.');
+  }
+  const range = storeName === 'localProfiles' ? undefined : sourceKeyRange(afterCursor);
 
   const lease = captureOperationalDataKeyLease();
   assertOperationalDataKeyLease(lease);
@@ -124,7 +128,6 @@ export async function readOperationalMigrationSourceBatch(
         };
         countRequest.onerror = () => fail(countRequest.error ?? new Error('Operational source record count failed.'));
 
-        const range = sourceKeyRange(afterCursor);
         const cursorRequest = range ? sourceStore.openCursor(range) : sourceStore.openCursor();
         cursorRequest.onsuccess = () => {
           try { assertSourceLease(); } catch (error) { fail(error); try { tx.abort(); } catch { /* inactive */ } return; }
