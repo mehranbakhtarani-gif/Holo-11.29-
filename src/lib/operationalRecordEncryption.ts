@@ -156,9 +156,13 @@ export async function encryptOperationalRecord<T>(
   }
   const plaintextBuffer = toArrayBuffer(plaintext);
   const iv = requireWebCrypto().getRandomValues(new Uint8Array(IV_BYTES));
+  const aad = additionalData(context);
+  const ivBuffer = toArrayBuffer(iv);
+  const aadBuffer = toArrayBuffer(aad);
+  let ciphertext: ArrayBuffer | null = null;
   try {
-    const ciphertext = await requireWebCrypto().subtle.encrypt(
-      { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(additionalData(context)), tagLength: 128 },
+    ciphertext = await requireWebCrypto().subtle.encrypt(
+      { name: 'AES-GCM', iv: ivBuffer, additionalData: aadBuffer, tagLength: 128 },
       key,
       plaintextBuffer
     );
@@ -171,9 +175,14 @@ export async function encryptOperationalRecord<T>(
       ciphertextB64: toBase64(new Uint8Array(ciphertext)),
     };
   } finally {
-    // Clear both the encoder output and the copy passed to Web Crypto on every path.
+    // Clear plaintext, nonce, AAD, and all copies passed to Web Crypto on every path.
     plaintext.fill(0);
     new Uint8Array(plaintextBuffer).fill(0);
+    iv.fill(0);
+    aad.fill(0);
+    new Uint8Array(ivBuffer).fill(0);
+    new Uint8Array(aadBuffer).fill(0);
+    if (ciphertext) new Uint8Array(ciphertext).fill(0);
     serialized = '';
   }
 }
