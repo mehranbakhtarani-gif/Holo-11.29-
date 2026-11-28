@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { indexedDB } from 'fake-indexeddb';
+import { IDBKeyRange, indexedDB } from 'fake-indexeddb';
 import { createOperationalDataSalt } from '../src/lib/operationalRecordEncryption';
 import { queryEncryptedOperationalStore, writeEncryptedOperationalStoresAtomically } from '../src/lib/encryptedOperationalIndexedDb';
 import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
@@ -13,8 +13,9 @@ const previous = {
 
 async function run() {
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
-  const fakeWindow = new EventTarget() as EventTarget & { indexedDB: IDBFactory };
+  const fakeWindow = new EventTarget() as EventTarget & { indexedDB: IDBFactory; IDBKeyRange: typeof IDBKeyRange };
   fakeWindow.indexedDB = indexedDB;
+  fakeWindow.IDBKeyRange = IDBKeyRange;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
   Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
   try {
@@ -133,29 +134,48 @@ async function run() {
 
     // Exercise the opt-in encrypted IndexedDB adapter against the real v5 keyPaths.
     const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('holoo_apex_operational_db_v1', 6);
+      const request = indexedDB.open('holoo_apex_operational_db_v1', 7);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
     try {
+      const originalVoucher = { id: 'enc-voucher-1', voucherNumber: 101, date: '1405/01/01', status: 'draft' };
+      const originalProduct = { id: 'enc-product-1', sku: 'SECRET-SKU-1', stock: 12 };
+      await new Promise<void>((resolve, reject) => {
+        const tx = rawDb.transaction(['vouchers', 'products'], 'readwrite');
+        tx.objectStore('vouchers').put(originalVoucher);
+        tx.objectStore('products').put(originalProduct);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
       const written = await writeEncryptedOperationalStoresAtomically(
         rawDb,
         'workspace-session-01',
         [
-          { store: 'vouchers', records: [{ id: 'enc-voucher-1', voucherNumber: 101, date: '1405/01/01', status: 'draft' }] },
-          { store: 'products', records: [{ id: 'enc-product-1', sku: 'SECRET-SKU-1', stock: 12 }] },
+          { store: 'vouchers', records: [originalVoucher] },
+          { store: 'products', records: [originalProduct] },
         ]
       );
-      assert.equal(written, 2, 'encrypted multi-store write must commit every prepared record');
+      assert.equal(written, 2, 'encrypted multi-store shadow write must commit every prepared record');
       const rawVoucher = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const tx = rawDb.transaction(['encryptedOperationalRecords'], 'readonly');
+        const req = tx.objectStore('encryptedOperationalRecords').get(['workspace-session-01', 'vouchers', 'enc-voucher-1']);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      assert.deepEqual(Object.keys(rawVoucher).sort(), ['encryptedRecord', 'recordId', 'storeName', 'workspaceId']);
+      assert.equal(rawVoucher.recordId, 'enc-voucher-1');
+      assert.equal(rawVoucher.storeName, 'vouchers');
+      assert.equal(rawVoucher.workspaceId, 'workspace-session-01');
+      assert.equal('date' in rawVoucher, false, 'business date must not leak into the shadow row wrapper');
+      const preservedVoucher = await new Promise<Record<string, unknown>>((resolve, reject) => {
         const tx = rawDb.transaction(['vouchers'], 'readonly');
         const req = tx.objectStore('vouchers').get('enc-voucher-1');
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
-      assert.deepEqual(Object.keys(rawVoucher).sort(), ['encryptedRecord', 'id']);
-      assert.equal(rawVoucher.id, 'enc-voucher-1');
-      assert.equal('date' in rawVoucher, false, 'business date must not leak into the encrypted row wrapper');
+      assert.deepEqual(preservedVoucher, originalVoucher, 'plaintext source voucher must remain unchanged during shadow preparation');
       const filtered = await queryEncryptedOperationalStore(
         rawDb,
         'vouchers',
@@ -180,12 +200,12 @@ async function run() {
         'duplicate primary keys must be rejected before opening a write transaction'
       );
       const absentDuplicate = await new Promise<unknown>((resolve, reject) => {
-        const tx = rawDb.transaction(['vouchers'], 'readonly');
-        const req = tx.objectStore('vouchers').get('duplicate');
+        const tx = rawDb.transaction(['encryptedOperationalRecords'], 'readonly');
+        const req = tx.objectStore('encryptedOperationalRecords').get(['workspace-session-01', 'vouchers', 'duplicate']);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
-      assert.equal(absentDuplicate, undefined, 'a rejected batch must not write partial records');
+      assert.equal(absentDuplicate, undefined, 'a rejected batch must not write partial shadow records');
     } finally {
       rawDb.close();
     }
