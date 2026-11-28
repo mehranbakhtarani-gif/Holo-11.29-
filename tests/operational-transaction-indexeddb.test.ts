@@ -138,7 +138,7 @@ async function run() {
         } as never,
         invoice: { id: 'invoice-must-rollback' } as never,
       }, { dbOverride: failureDb }),
-      undefined,
+      (error: unknown) => error instanceof DOMException && error.name === 'ConstraintError',
       'a unique-index ConstraintError must reject the atomic invoice transaction'
     );
     assert.equal(await readRecord(failureDb, 'products', 'product-must-rollback'), undefined);
