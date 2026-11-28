@@ -7,6 +7,7 @@ import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession
 const previous = {
   crypto: Object.getOwnPropertyDescriptor(globalThis, 'crypto'),
   window: Object.getOwnPropertyDescriptor(globalThis, 'window'),
+  broadcastChannel: Object.getOwnPropertyDescriptor(globalThis, 'BroadcastChannel'),
 };
 
 async function run() {
@@ -14,6 +15,7 @@ async function run() {
   const fakeWindow = new EventTarget() as EventTarget & { indexedDB: IDBFactory };
   fakeWindow.indexedDB = indexedDB;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
+  Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
   try {
     const session = await import('../src/lib/operationalEncryptionSession');
     session.lockOperationalDataSession();
@@ -84,6 +86,8 @@ async function run() {
     else Reflect.deleteProperty(globalThis, 'crypto');
     if (previous.window) Object.defineProperty(globalThis, 'window', previous.window);
     else Reflect.deleteProperty(globalThis, 'window');
+    if (previous.broadcastChannel) Object.defineProperty(globalThis, 'BroadcastChannel', previous.broadcastChannel);
+    else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
   }
 }
 
