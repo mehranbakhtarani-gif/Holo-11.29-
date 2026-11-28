@@ -9,7 +9,6 @@ import {
   assertBackupSessionLease,
   assertBackupSessionGeneration,
   captureBackupSessionLease,
-  getBackupSessionGeneration,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
 import {
@@ -25,6 +24,7 @@ import {
 
 let activeKey: CryptoKey | null = null;
 let activeWorkspaceId: string | null = null;
+let activeBackupSessionGeneration: number | null = null;
 let generation = 0;
 
 export interface OperationalDataKeyLease {
@@ -38,6 +38,7 @@ function invalidateOperationalDataKey(): void {
   generation += 1;
   activeKey = null;
   activeWorkspaceId = null;
+  activeBackupSessionGeneration = null;
 }
 
 if (typeof window !== 'undefined') {
@@ -56,6 +57,7 @@ export async function unlockOperationalDataSession(salt: Uint8Array): Promise<vo
   }
   activeKey = key;
   activeWorkspaceId = null;
+  activeBackupSessionGeneration = backupLease.generation;
 }
 
 /**
@@ -86,6 +88,7 @@ export async function unlockOperationalDataSessionFromDescriptor(
   }
   activeKey = key;
   activeWorkspaceId = expectedWorkspaceId;
+  activeBackupSessionGeneration = backupLease.generation;
 }
 
 export function lockOperationalDataSession(): void {
@@ -100,12 +103,14 @@ export function captureOperationalDataKeyLease(): OperationalDataKeyLease {
   if (isOperationalRestoreBarrierActive()) {
     throw new Error('Operational data access is blocked while workspace restore is active.');
   }
-  if (!activeKey) throw new Error('Operational data key is locked.');
+  if (!activeKey || activeBackupSessionGeneration === null) {
+    throw new Error('Operational data key is locked.');
+  }
   return {
     key: activeKey,
     generation,
     workspaceId: activeWorkspaceId,
-    backupSessionGeneration: getBackupSessionGeneration(),
+    backupSessionGeneration: activeBackupSessionGeneration,
   };
 }
 
@@ -120,7 +125,8 @@ export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): v
   }
   if (
     !activeKey || lease.generation !== generation || lease.key !== activeKey ||
-    lease.workspaceId !== activeWorkspaceId
+    lease.workspaceId !== activeWorkspaceId ||
+    lease.backupSessionGeneration !== activeBackupSessionGeneration
   ) {
     throw new Error('Operational data-key lease expired; discard the pending operation.');
   }
@@ -188,6 +194,7 @@ export async function unlockOperationalDataSessionForWorkspace(workspaceId: stri
   assertRequestIsCurrent();
   activeKey = key;
   activeWorkspaceId = cleanWorkspaceId;
+  activeBackupSessionGeneration = backupLease.generation;
 }
 
 /**
