@@ -41,6 +41,19 @@ async function run() {
       false,
       'a stale workspace bootstrap must not reopen a key after cleanup'
     );
+    const restoreBlockedBootstrap = session.unlockOperationalDataSessionForWorkspace('workspace-session-01');
+    operationalDb.setOperationalRestoreBarrier(true);
+    await assert.rejects(
+      restoreBlockedBootstrap,
+      /Operational key unlock is blocked while workspace restore is active/,
+      'a restore barrier raised during descriptor loading must abort workspace key bootstrap'
+    );
+    assert.equal(
+      session.isOperationalDataSessionUnlocked(),
+      false,
+      'a restore-blocked bootstrap must never publish an operational key'
+    );
+    operationalDb.setOperationalRestoreBarrier(false);
     operationalDb.setOperationalRestoreBarrier(true);
     await assert.rejects(
       () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01'),
@@ -194,7 +207,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 37 assertions passed');
+    console.log('Operational encryption session: 39 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
