@@ -130,7 +130,12 @@ import {
 } from '../lib/holoMigrationEngine';
 import { emitVoucherNotificationEvent } from '../lib/nativeNotifications';
 import { unlockBackupSession as unlockBackupVault, lockBackupSession as lockBackupVault, isBackupSessionUnlocked } from '../lib/backupSession';
-import { lockOperationalDataSession, unlockOperationalDataSessionForWorkspace } from '../lib/operationalEncryptionSession';
+import {
+  lockOperationalDataSession,
+  unlockOperationalDataSessionForWorkspace,
+  unlockOperationalDataSessionFromDescriptor,
+} from '../lib/operationalEncryptionSession';
+import { rewrapOperationalKeyDescriptorForWorkspace } from '../lib/operationalDb';
 
 interface AccountingContextValue {
   user: User | null;
@@ -149,6 +154,7 @@ interface AccountingContextValue {
   encryptedOperationalWorkspaceMeta: EncryptedOperationalWorkspaceMeta | null;
   prepareEncryptedOperationalWorkspaceMigration: () => Promise<boolean>;
   unlockBackupSession: (passphrase: string) => boolean;
+  rotateBackupSessionPassphrase: (nextPassphrase: string) => Promise<boolean>;
   lockBackupSession: () => void;
   triggerLocalBackupNow: (alsoDownload?: boolean) => Promise<void>;
   restoreFromLocalSnapshot: (snapshotId: string, allowLegacyPlaintext?: boolean) => Promise<boolean>;
@@ -7143,6 +7149,39 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [showToast]);
 
+  const rotateBackupSessionPassphrase = useCallback(async (nextPassphrase: string): Promise<boolean> => {
+    if (!backupSessionUnlocked) {
+      showToast('برای تغییر رمز، ابتدا قفل پشتیبان را باز کنید.', 'warning');
+      return false;
+    }
+    const workspaceId = String(profile.uid || DEMO_OWNER).trim();
+    let descriptor;
+    try {
+      descriptor = await rewrapOperationalKeyDescriptorForWorkspace(workspaceId, nextPassphrase);
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'تغییر رمز کلید عملیاتی ناموفق بود.',
+        'error'
+      );
+      return false;
+    }
+    // The durable descriptor is now wrapped with nextPassphrase. Replace the
+    // in-memory vault secret only after the compare-and-swap write has committed.
+    try {
+      unlockBackupVault(nextPassphrase);
+      setBackupSessionUnlocked(true);
+      await unlockOperationalDataSessionFromDescriptor(descriptor, workspaceId);
+      showToast('رمز پشتیبان و کلید عملیاتی با موفقیت تغییر کرد.');
+    } catch (error) {
+      showToast(
+        'رمز جدید ذخیره شد، اما بازگشایی مجدد کلید عملیاتی کامل نشد. قفل را ببندید و با رمز جدید باز کنید. ' +
+          (error instanceof Error ? error.message : ''),
+        'warning'
+      );
+    }
+    return true;
+  }, [backupSessionUnlocked, profile.uid, showToast]);
+
   const lockBackupSession = useCallback(() => {
     lockBackupVault();
     setBackupSessionUnlocked(false);
@@ -7264,6 +7303,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         encryptedOperationalWorkspaceMeta,
         prepareEncryptedOperationalWorkspaceMigration,
         unlockBackupSession,
+        rotateBackupSessionPassphrase,
         lockBackupSession,
         triggerLocalBackupNow,
         restoreFromLocalSnapshot,
