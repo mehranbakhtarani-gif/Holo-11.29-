@@ -192,6 +192,17 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
     prepared.push(...toShadowRows(write.store, workspaceId, binding.migrationId, rows));
     assertWorkspaceLease(lease, workspaceId);
   }
+  const previousCheckpoint = expectedJournal.stores.find((entry) => entry.storeName === checkpoint.storeName);
+  if (!previousCheckpoint) throw new Error('Migration checkpoint store is absent from the expected journal.');
+  const expectedCopiedRecordCount = previousCheckpoint.copiedRecordCount + prepared.length;
+  const expectedCursor = prepared.length > 0
+    ? prepared[prepared.length - 1].recordId
+    : previousCheckpoint.cursor;
+  if (checkpoint.copiedRecordCount !== expectedCopiedRecordCount ||
+      checkpoint.cursor !== expectedCursor ||
+      checkpoint.copiedRecordCount > checkpoint.sourceRecordCount) {
+    throw new Error('Migration checkpoint count or cursor does not match the encrypted rows in this atomic batch.');
+  }
   const nextJournal = advanceOperationalMigrationStoreCheckpoint(expectedJournal, checkpoint.storeName, checkpoint, binding);
   if (!isValidOperationalMigrationJournalRecord(nextJournal)) throw new Error('Prepared migration checkpoint failed validation.');
 
