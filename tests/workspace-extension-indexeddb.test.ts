@@ -35,20 +35,28 @@ try {
   repo.close();
 }
 
-let abortNext = false;
+let abortAfterWrites = false;
 const abortName = name + '-abort';
 const abortRepo = await createWorkspaceExtensionIndexedDbRepository<{ ok: boolean }>({
   factory: indexedDB,
   databaseName: abortName,
-  onTransactionCreated: (tx) => { if (abortNext) { abortNext = false; tx.abort(); } },
+  onWritesQueued: (tx) => { if (abortAfterWrites) { abortAfterWrites = false; tx.abort(); } },
 });
 try {
-  abortNext = true;
+  abortAfterWrites = true;
+  const abortJournal = {
+    workspaceId: 'w-abort', migrationId: 'm-abort', sourceFingerprint: 'b'.repeat(64),
+    targetGeneration: 1, state: 'not_started' as const, updatedAt: now,
+  };
   await assert.rejects(
-    abortRepo.commit({ workspaceId: 'w-abort', expectedGeneration: 0, payload: { ok: true }, now }),
+    abortRepo.commit({
+      workspaceId: 'w-abort', expectedGeneration: 0, payload: { ok: true }, now,
+      migration: { journal: abortJournal, nextState: 'staging' },
+    }),
     /abort/i,
   );
   assert.equal(await abortRepo.read('w-abort'), null);
+  assert.equal(await abortRepo.readMigrationJournal('w-abort', 'm-abort'), null);
 } finally {
   abortRepo.close();
 }
