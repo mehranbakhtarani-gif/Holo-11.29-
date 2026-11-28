@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { indexedDB } from 'fake-indexeddb';
 import {
   commitChequeStatusOperationalTx,
+  commitDepreciationOperationalTx,
   commitInvoiceOperationalTx,
+  commitSalesOrderDispatchOperationalTx,
+  commitStockAdjustmentOperationalTx,
 } from '../src/lib/operationalDb';
 
 let databaseSequence = 0;
@@ -156,6 +159,130 @@ async function run() {
     assert.equal(await countRecords(chequeDb, 'vouchers'), 1);
   } finally {
     chequeDb.close();
+  }
+
+
+  const dispatchDb = await createDatabase([
+    { name: 'meta', keyPath: 'key' },
+    { name: 'salesOrders', keyPath: 'id' },
+  ]);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = dispatchDb.transaction(['meta', 'salesOrders'], 'readwrite');
+      tx.objectStore('meta').put({ key: 'workspace_meta', localRevision: 20 });
+      tx.objectStore('salesOrders').put({
+        id: 'order-1', ownerId: 'owner-1', orderNumber: 'SO-1', date: '2026-01-01',
+        partyId: 'party-1', partyName: 'Buyer', warehouse: 'Main', status: 'ordered',
+        items: [], _version: 3,
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Sales order seed aborted'));
+    });
+    const dispatched = await commitSalesOrderDispatchOperationalTx({
+      orderId: 'order-1', ownerId: 'owner-1', dispatchNumber: 'DN-1',
+      dispatchDate: '2026-01-02', driverName: 'Driver', plateNumber: '11A111',
+      items: [], updatedByDevice: 'indexeddb-test',
+    }, { dbOverride: dispatchDb });
+    assert.equal(dispatched.status, 'dispatched');
+    assert.equal(dispatched._version, 4);
+    assert.equal((await readRecord<{ localRevision: number }>(dispatchDb, 'meta', 'workspace_meta'))?.localRevision, 21);
+
+    await assert.rejects(
+      () => commitSalesOrderDispatchOperationalTx({
+        orderId: 'order-1', ownerId: 'owner-1', dispatchNumber: 'DN-2',
+        dispatchDate: '2026-01-03', driverName: 'Driver', plateNumber: '11A111',
+        items: [], updatedByDevice: 'indexeddb-test',
+      }, { dbOverride: dispatchDb }),
+      /قبلاً حواله شده|وضعیت قابل ارسال نیست/,
+      'a repeated dispatch must reject a non-ordered sales order'
+    );
+    assert.equal((await readRecord<{ status: string; _version: number }>(dispatchDb, 'salesOrders', 'order-1'))?.status, 'dispatched');
+    assert.equal((await readRecord<{ localRevision: number }>(dispatchDb, 'meta', 'workspace_meta'))?.localRevision, 21);
+  } finally {
+    dispatchDb.close();
+  }
+
+  const depreciationDb = await createDatabase([
+    { name: 'meta', keyPath: 'key' },
+    { name: 'assets', keyPath: 'id' },
+    { name: 'vouchers', keyPath: 'id' },
+  ]);
+  try {
+    const asset = {
+      id: 'asset-1', ownerId: 'owner-1', assetCode: 'FA-1', title: 'Equipment',
+      purchaseDate: '2024-01-01', purchaseCost: 10_000, salvageValue: 1_000,
+      usefulLifeYears: 5, accumulatedDepreciation: 1_000,
+    };
+    await new Promise<void>((resolve, reject) => {
+      const tx = depreciationDb.transaction(['meta', 'assets'], 'readwrite');
+      tx.objectStore('meta').put({ key: 'workspace_meta', localRevision: 30 });
+      tx.objectStore('assets').put(asset);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Asset seed aborted'));
+    });
+    const depreciationVoucher = {
+      id: 'depreciation-voucher-1', ownerId: 'owner-1', voucherNumber: 101,
+      status: 'permanent', voucherType: 'depreciation', referenceId: 'period-2026-01',
+      totalDebit: 500, totalCredit: 500,
+      lines: [{ debit: 500, credit: 0 }, { debit: 0, credit: 500 }],
+    };
+    const assetUpdate = {
+      id: 'asset-1', expectedAccumulatedDepreciation: 1_000,
+      expectedPurchaseCost: 10_000, expectedSalvageValue: 1_000,
+      expectedUsefulLifeYears: 5, expectedPurchaseDate: '2024-01-01',
+      depreciationAmount: 500, accumulatedDepreciation: 1_500,
+    };
+    assert.equal(await commitDepreciationOperationalTx({
+      assetUpdates: [assetUpdate], voucher: depreciationVoucher as never,
+    }, { dbOverride: depreciationDb }), true);
+    assert.equal((await readRecord<{ accumulatedDepreciation: number }>(depreciationDb, 'assets', 'asset-1'))?.accumulatedDepreciation, 1_500);
+    assert.deepEqual(await readRecord(depreciationDb, 'vouchers', 'depreciation-voucher-1'), depreciationVoucher);
+    assert.equal((await readRecord<{ localRevision: number }>(depreciationDb, 'meta', 'workspace_meta'))?.localRevision, 31);
+
+    await assert.rejects(
+      () => commitDepreciationOperationalTx({
+        assetUpdates: [{ ...assetUpdate, expectedAccumulatedDepreciation: 1_000, accumulatedDepreciation: 1_500 }],
+        voucher: { ...depreciationVoucher, id: 'stale-depreciation-voucher' } as never,
+      }, { dbOverride: depreciationDb }),
+      /تغییر کرده|مانده استهلاک/,
+      'stale asset state must abort depreciation voucher and revision writes'
+    );
+    assert.equal(await readRecord(depreciationDb, 'vouchers', 'stale-depreciation-voucher'), undefined);
+    assert.equal((await readRecord<{ localRevision: number }>(depreciationDb, 'meta', 'workspace_meta'))?.localRevision, 31);
+    assert.equal((await readRecord<{ accumulatedDepreciation: number }>(depreciationDb, 'assets', 'asset-1'))?.accumulatedDepreciation, 1_500);
+  } finally {
+    depreciationDb.close();
+  }
+
+  const stockDb = await createDatabase([
+    { name: 'meta', keyPath: 'key' },
+    { name: 'products', keyPath: 'id' },
+    { name: 'vouchers', keyPath: 'id' },
+  ]);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = stockDb.transaction('meta', 'readwrite');
+      tx.objectStore('meta').put({ key: 'workspace_meta', localRevision: 40 });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Stock meta seed aborted'));
+    });
+    const adjustedProduct = { id: 'stock-product-1', stock: 12 };
+    const stockVoucher = {
+      id: 'stock-adjustment-voucher-1',
+      lines: [{ debit: 300, credit: 0 }, { debit: 0, credit: 300 }],
+    };
+    assert.equal(await commitStockAdjustmentOperationalTx({
+      updatedProducts: [adjustedProduct as never],
+      voucher: stockVoucher as never,
+    }, { dbOverride: stockDb }), true);
+    assert.deepEqual(await readRecord(stockDb, 'products', 'stock-product-1'), adjustedProduct);
+    assert.deepEqual(await readRecord(stockDb, 'vouchers', 'stock-adjustment-voucher-1'), stockVoucher);
+    assert.equal((await readRecord<{ localRevision: number }>(stockDb, 'meta', 'workspace_meta'))?.localRevision, 41);
+  } finally {
+    stockDb.close();
   }
 
   console.log('Operational IndexedDB transaction integration tests passed');
