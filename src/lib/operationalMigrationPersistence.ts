@@ -46,12 +46,32 @@ function openMigrationDb(): Promise<IDBDatabase> {
             : name === 'syncOutbox' || name === 'syncInbox' ? 'operationId'
             : name === 'localProfiles' || name === 'secureWorkspace' ? 'workspaceId' : 'id';
           const store = db.createObjectStore(name, { keyPath });
+          const addIndex = (indexName: string, indexKeyPath: string) =>
+            store.createIndex(indexName, indexKeyPath, { unique: false });
           if (name === 'syncOutbox') {
-            store.createIndex('status', 'status', { unique: false });
-            store.createIndex('createdAt', 'createdAt', { unique: false });
-            store.createIndex('nextRetryAt', 'nextRetryAt', { unique: false });
+            addIndex('status', 'status');
+            addIndex('createdAt', 'createdAt');
+            addIndex('nextRetryAt', 'nextRetryAt');
           } else if (name === 'syncInbox') {
-            store.createIndex('receivedAt', 'receivedAt', { unique: false });
+            addIndex('receivedAt', 'receivedAt');
+          } else if (name === 'vouchers') {
+            addIndex('date', 'date');
+            addIndex('status', 'status');
+            addIndex('voucherNumber', 'voucherNumber');
+          } else if (name === 'invoices') {
+            addIndex('date', 'date');
+            addIndex('partyId', 'partyId');
+            addIndex('status', 'status');
+          } else if (name === 'products') {
+            addIndex('warehouse', 'warehouse');
+            addIndex('sku', 'sku');
+          } else if (name === 'cheques') {
+            addIndex('dueDate', 'dueDate');
+            addIndex('status', 'status');
+          } else if (name === 'preUpdateBackups') {
+            addIndex('createdAt', 'createdAt');
+          } else if (name === 'taxReports') {
+            addIndex('period', 'period');
           }
         }
       }
