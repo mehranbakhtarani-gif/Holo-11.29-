@@ -34,6 +34,7 @@ import {
 import {
   buildRelayEnvelopesFromOutbox,
   getOtherMeshPeerIds,
+  LEGACY_INSECURE_MESH_PASSPHRASE,
   loadMeshPassphrase,
   loadSelectedMeshPeerId,
   loadVectorClock,
