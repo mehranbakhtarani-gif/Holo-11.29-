@@ -177,7 +177,18 @@ async function run() {
       /قدیمی است|تطابق ندارد/,
       'a prepared snapshot must be rejected after the plaintext operational revision advances'
     );
-    assert.equal((await getPreparedEncryptedOperationalWorkspaceMeta('workspace-1'))?.sourceRevision, saved!.localRevision);
+    await assert.rejects(
+      () => writeEncryptedOperationalWorkspaceSnapshot(
+        'workspace-1', loadedSource, saved!.localRevision
+      ),
+      /تغییر کرده‌اند/,
+      'a stale encryption result must not overwrite the prepared snapshot after the source revision advances'
+    );
+    assert.equal(
+      (await getPreparedEncryptedOperationalWorkspaceMeta('workspace-1'))?.sourceRevision,
+      saved!.localRevision,
+      'a rejected stale write must preserve the last prepared encrypted snapshot'
+    );
   } finally {
     lockBackupSession();
   }
