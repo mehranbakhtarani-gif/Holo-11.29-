@@ -2946,6 +2946,10 @@ export async function rewrapOperationalKeyDescriptorForWorkspace(
   if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) {
     throw new Error('شناسه فضای کاری برای تغییر رمز کلید عملیاتی معتبر نیست.');
   }
+  const cleanNextPassphrase = typeof nextPassphrase === 'string' ? nextPassphrase.trim() : '';
+  if (cleanNextPassphrase.length < 10) {
+    throw new Error('رمز جدید کلید عملیاتی باید حداقل ۱۰ کاراکتر داشته باشد.');
+  }
   if (isOperationalRestoreBarrierActive()) {
     throw new Error('تغییر رمز کلید عملیاتی تا پایان بازیابی مسدود است.');
   }
@@ -2956,7 +2960,7 @@ export async function rewrapOperationalKeyDescriptorForWorkspace(
   const updated = await rewrapOperationalKeyDescriptor(
     current,
     sessionLease.passphrase,
-    nextPassphrase
+    cleanNextPassphrase
   );
   assertBackupSessionLease(sessionLease);
   if (isOperationalRestoreBarrierActive()) {
