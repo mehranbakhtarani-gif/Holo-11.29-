@@ -139,4 +139,45 @@ assert.equal(isValidOperationalMigrationJournalRecord(current), true);
 assert.throws(() => transitionOperationalMigrationPhase(
   current, 'copying', now
 ), /Illegal operational migration phase transition/);
+
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...current,
+  phase: 'cutover_committed',
+  stores: current.stores.map((store) => ({ ...store, state: 'verified' })),
+}), false, 'a cutover terminal phase must not validate while any store is uncommitted');
+
+// Rollback can close both a partially copied store and a store never started.
+const rollbackBinding = {
+  workspaceId: 'workspace-rollback',
+  migrationId: 'migration_rollback_001',
+  sourceRevision: 9,
+  backupSessionGeneration: 3,
+};
+let rollback = createOperationalMigrationJournalRecord({
+  ...rollbackBinding,
+  sourceSchemaVersion: 5,
+  targetFormatVersion: 2,
+  storeNames: ['accounts', 'vouchers'],
+  now,
+});
+rollback = transitionOperationalMigrationPhase(rollback, 'copying', now);
+rollback = advanceOperationalMigrationStoreCheckpoint(rollback, 'accounts', {
+  state: 'copying', cursor: 'account-1', batchSequence: 1,
+  sourceRecordCount: 1, copiedRecordCount: 0,
+  sourceDigest, targetDigest: null,
+}, rollbackBinding, now);
+rollback = transitionOperationalMigrationPhase(rollback, 'rolling_back', now);
+rollback = advanceOperationalMigrationStoreCheckpoint(rollback, 'accounts', {
+  state: 'rolled_back', cursor: 'account-1', batchSequence: 2,
+  sourceRecordCount: 1, copiedRecordCount: 0,
+  sourceDigest, targetDigest: null,
+}, rollbackBinding, now);
+rollback = advanceOperationalMigrationStoreCheckpoint(rollback, 'vouchers', {
+  state: 'rolled_back', cursor: null, batchSequence: 1,
+  sourceRecordCount: 0, copiedRecordCount: 0,
+  sourceDigest: null, targetDigest: null,
+}, rollbackBinding, now);
+rollback = transitionOperationalMigrationPhase(rollback, 'rolled_back', now);
+assert.equal(rollback.phase, 'rolled_back');
+assert.equal(isValidOperationalMigrationJournalRecord(rollback), true);
 console.log('Operational migration journal state machine: validation and transition coverage passed');
