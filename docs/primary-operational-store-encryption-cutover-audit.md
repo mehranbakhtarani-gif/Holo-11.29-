@@ -169,3 +169,31 @@ The first repository-command seam has now been introduced:
 - The atomicity audit now expects the port call for the three invoice lifecycle paths. The full CI run must pass before treating this seam as validated.
 
 Remaining before an encrypted adapter is eligible for implementation: route the remaining operational DB access through a typed repository boundary; add IndexedDB transaction-store-set/abort tests for each command; specify encrypted record envelopes, key unlock/rotation/recovery and schema/index strategy; and implement a parallel generation with resumable migration and rollback. The authoritative operational stores are still plaintext. No cutover or database-version migration has been activated.
+
+
+## Direct operational DB consumer inventory — 2026-11-28
+
+A follow-up source scan after introducing `operationalTransactionPort` confirms that the repository boundary is still intentionally partial. The remaining direct imports are not all interchangeable CRUD calls; they cover distinct lifecycle and safety responsibilities:
+
+| Consumer | Direct operational DB responsibilities | Boundary treatment |
+|---|---|---|
+| `src/App.tsx` | Lazy-loaded operational DB bootstrap path | Move behind a bootstrap/runtime facade only after startup ordering and failure behavior are covered by tests |
+| `src/hooks/useDualCloudSync.ts` | Restore-journal barrier checks; durable outbox enqueue/status and inbox idempotency | Introduce a sync-persistence port preserving atomic outbox/inbox semantics and restore barrier checks |
+| `src/hooks/useLocalFirstMeshSync.ts` | Restore-journal checks plus inbox deduplication/recording | Share the same sync-persistence port; keep replay idempotency inside the persistence transaction |
+| `src/components/SettingsView.tsx` | Restore journal inspection/resume, workspace read and encrypted snapshot/migration UI | Use a recovery/backup service boundary; do not mix recovery orchestration into the ordinary entity repository |
+| `src/components/OfflineFirstControlPanel.tsx` | Operational DB version and pre-update safety backup | Use a backup/maintenance service boundary with explicit backup completion/failure results |
+| `src/components/OfflineSyncHealthDashboard.tsx` | Operational DB diagnostics/reporting | Use a read-only diagnostics interface; diagnostics must not expose decrypted business payloads |
+| `src/components/SystemResetCenter.tsx` | Destructive local IndexedDB wipe and local-storage cleanup | Keep as a privileged maintenance command with confirmation, scope reporting, and recovery guard |
+
+The inventory also identifies a separation-of-concerns requirement: a single broad repository interface should not become a dumping ground for bootstrap, sync, recovery, diagnostics, backup, and destructive maintenance. The safer design is a small set of typed ports (business transactions, sync persistence, recovery/backup, diagnostics, maintenance) sharing one encrypted storage implementation underneath.
+
+### Revised implementation sequence
+
+1. Keep the five financial command delegations behavior-preserving and require green CI for the current branch head.
+2. Extract sync outbox/inbox and restore-barrier operations behind a typed sync-persistence port; test duplicate replay, malformed payload rejection, pending status transitions, and restore blocking.
+3. Extract recovery/backup operations behind a dedicated service; test interrupted restore at every journal transition and verify that ordinary writes remain blocked until recovery resolves.
+4. Add read-only diagnostics and privileged maintenance interfaces without allowing either to bypass the restore barrier or expose plaintext records.
+5. Specify and test the encrypted storage format, key derivation/unlock lifecycle, key rotation, schema/index strategy, and multi-store atomic commit semantics before implementing the encrypted adapter.
+6. Implement a parallel encrypted generation with resumable, checksummed migration and tested rollback; switch authority only after full validation and explicit migration gating.
+
+No additional production persistence behavior was changed by this inventory. It records observed call sites and constrains the next refactor. The active primary operational stores remain plaintext; the encrypted snapshot remains a shadow/checkpoint, not the authoritative database.
