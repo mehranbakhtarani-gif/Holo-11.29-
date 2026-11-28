@@ -314,6 +314,7 @@ async function runTests() {
   const accountingCtxSrc = fs.readFileSync(path.join(root, 'src/context/AccountingContext.tsx'), 'utf8');
   const operationalDbSrc = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
   const localBackupSrc = fs.readFileSync(path.join(root, 'src/lib/localBackup.ts'), 'utf8');
+  const cloudBackupSrc = fs.readFileSync(path.join(root, 'src/lib/firebaseCloudBackup.ts'), 'utf8');
   const appSrc = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
   const offlinePanelSrc = fs.readFileSync(path.join(root, 'src/components/OfflineFirstControlPanel.tsx'), 'utf8');
   const settingsViewSrc = fs.readFileSync(path.join(root, 'src/components/SettingsView.tsx'), 'utf8');
@@ -355,6 +356,10 @@ async function runTests() {
   const preUpdateBackupContract = operationalDbSrc.slice(preUpdateBackupStart, preUpdateBackupEnd);
   assert.match(preUpdateBackupContract, /envelopeJson: string/);
   assert.doesNotMatch(preUpdateBackupContract, /snapshotJson/);
+  assert.match(localBackupSrc, /export async function saveLocalSnapshot[\\s\\S]*captureBackupSessionLease[\\s\\S]*lease\\.passphrase[\\s\\S]*assertBackupSessionLease/);
+  assert.match(localBackupSrc, /export async function downloadEncryptedBackupFileToDevice[\\s\\S]*captureBackupSessionLease[\\s\\S]*lease\\.passphrase[\\s\\S]*assertBackupSessionLease/);
+  assert.match(cloudBackupSrc, /captureBackupSessionLease[\\s\\S]*encryptBackupEnvelope\\(params\.snapshotJson, lease\.passphrase\\)[\\s\\S]*assertBackupSessionLease/);
+  assert.match(settingsViewSrc, /const lease = captureBackupSessionLease\\(\\)[\\s\\S]*encryptBackupEnvelope\\(workspaceJson, lease\.passphrase\\)[\\s\\S]*assertBackupSessionLease\\(lease\\)[\\s\\S]*exportEncryptedDocumentAttachmentBundle[\\s\\S]*assertBackupSessionLease\\(lease\\)/);
   assert.match(preUpdateBackupContract, /holoo-apex-encrypted-backup/);
   assert.match(preUpdateBackupContract, /AES-256-GCM/);
   assert.match(preUpdateBackupContract, /decryptAndVerifyBackupEnvelope/);
