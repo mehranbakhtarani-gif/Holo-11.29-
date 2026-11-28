@@ -90,4 +90,28 @@ assert.deepEqual(Object.keys(operationalTransactionPort).sort(), [
   'transitionChequeStatus',
 ].sort());
 
+// UI and orchestration layers must cross the repository port instead of importing IndexedDB internals.
+function collectTypeScriptFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return collectTypeScriptFiles(entryPath);
+    return entry.isFile() && /\\.tsx?$/.test(entry.name) ? [entryPath] : [];
+  });
+}
+const applicationLayerFiles = [
+  path.join(process.cwd(), 'src/App.tsx'),
+  ...['src/components', 'src/hooks', 'src/context'].flatMap((directory) =>
+    collectTypeScriptFiles(path.join(process.cwd(), directory))
+  ),
+];
+const operationalDbImportPattern = /(?:from\\s*|import\\s*\\()\\s*['"][^'"]*operationalDb(?:\\.[^'"]*)?['"]/;
+for (const filePath of applicationLayerFiles) {
+  const source = fs.readFileSync(filePath, 'utf8');
+  assert.doesNotMatch(
+    source,
+    operationalDbImportPattern,
+    `Application layer must use repositoryAbstraction instead of importing operationalDb directly: ${path.relative(process.cwd(), filePath)}`
+  );
+}
+
 console.log('Operational transaction and sync persistence port contracts passed');
