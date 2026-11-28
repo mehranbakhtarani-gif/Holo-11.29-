@@ -34,10 +34,7 @@ import {
   type LocalOfflineCredentialRecord,
   type OperatingMode,
 } from '../lib/offlineFirstCore';
-import {
-  OP_DB_VERSION,
-  savePreUpdateSafetyBackup,
-} from '../lib/operationalDb';
+import { operationalBackupMaintenancePort } from '../lib/repositoryAbstraction';
 import {
   safeApplySwUpdateWithBackup,
   subscribeOfflineSwState,
@@ -294,10 +291,10 @@ export const OfflineFirstControlPanel: React.FC<{
           lease.passphrase
         );
         assertBackupSessionLease(lease);
-        return savePreUpdateSafetyBackup({
+        return operationalBackupMaintenancePort.savePreUpdateSafetyBackup({
           id: `pre_update_${Date.now()}`,
           reason: 'pwa_update',
-          schemaVersion: OP_DB_VERSION,
+          schemaVersion: operationalBackupMaintenancePort.databaseVersion,
           sha256: envelope.plaintextSha256,
           envelopeJson: JSON.stringify(envelope),
           createdAt: new Date().toISOString(),
@@ -553,7 +550,7 @@ export const OfflineFirstControlPanel: React.FC<{
               )}
               <span>·</span>
               <span>
-                نسخه IndexedDB: v{toPersianDigits(OP_DB_VERSION)}
+                نسخه IndexedDB: v{toPersianDigits(operationalBackupMaintenancePort.databaseVersion)}
               </span>
             </div>
           </div>
