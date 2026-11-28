@@ -29,6 +29,13 @@ async function run() {
     const descriptor = await operationalDb.initializeOperationalKeyDescriptor('workspace-session-01');
     const persistedDescriptor = await operationalDb.loadOperationalKeyDescriptor('workspace-session-01');
     assert.deepEqual(persistedDescriptor, descriptor);
+    operationalDb.setOperationalRestoreBarrier(true);
+    await assert.rejects(
+      () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01'),
+      /blocked while workspace restore is active/,
+      'restore barrier must prevent operational key unlock'
+    );
+    operationalDb.setOperationalRestoreBarrier(false);
     await assert.rejects(
       () => operationalDb.initializeOperationalKeyDescriptor('workspace-session-01'),
       /already registered|از قبل ثبت شده/
@@ -124,7 +131,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 25 assertions passed');
+    console.log('Operational encryption session: 26 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
