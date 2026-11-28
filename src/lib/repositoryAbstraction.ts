@@ -45,6 +45,7 @@ import {
   wipeAllLocalIndexedDbs,
   clearHolooLocalStorageKeys,
   prepareEncryptedOperationalWorkspaceMigration,
+  rewrapOperationalKeyDescriptorForWorkspace,
   OP_DB_VERSION,
   type OperationalDbStats,
   type OperationalDbDetailedReport,
@@ -135,6 +136,12 @@ export const operationalBackupMaintenancePort = {
   savePreUpdateSafetyBackup,
 };
 export type OperationalBackupMaintenancePort = typeof operationalBackupMaintenancePort;
+
+/** Workspace key lifecycle operations remain behind the repository boundary. */
+export const operationalKeyManagementPort = {
+  rewrapWorkspaceKey: rewrapOperationalKeyDescriptorForWorkspace,
+};
+export type OperationalKeyManagementPort = typeof operationalKeyManagementPort;
 
 /** Read-only diagnostics boundary for the operational IndexedDB health summary. */
 export const operationalDiagnosticsPort = {
