@@ -21,7 +21,7 @@ import {
   computeSnapshotSha256Hex,
   decryptAndVerifyBackupEnvelope,
 } from './offlineFirstCore';
-import { requireBackupSessionPassphrase } from './backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease } from './backupSession';
 
 interface CompleteBackupPackageV2 {
   format: 'holoo-apex-complete-backup';
@@ -105,16 +105,19 @@ async function restoreCompleteBackupPackageUnlocked(
   packageJson: string,
   options: CompleteBackupRestoreOptions = {}
 ): Promise<CompleteBackupRestoreResult> {
-  const passphrase = requireBackupSessionPassphrase();
+  const lease = captureBackupSessionLease();
+  const passphrase = lease.passphrase;
   const parsed = parsePackage(packageJson);
   const workspaceEnvelopeJson = JSON.stringify(parsed.workspaceEnvelope);
   const verified = await decryptAndVerifyBackupEnvelope(workspaceEnvelopeJson, passphrase);
+  assertBackupSessionLease(lease);
   if (!verified.ok || !verified.snapshotJson || !verified.sha256) {
     throw new Error(verified.error || 'رمزگشایی فضای کاری ناموفق بود.');
   }
   const workspace = parseOperationalWorkspaceSnapshot(verified.snapshotJson);
   const workspaceRecordCount = countOperationalWorkspaceRecords(workspace);
   const packageDigest = await computeSnapshotSha256Hex(packageJson);
+  assertBackupSessionLease(lease);
   const attachmentBundleJson = JSON.stringify(parsed.documentAttachments);
   const restoreId = createRestoreId();
 
@@ -143,6 +146,7 @@ async function restoreCompleteBackupPackageUnlocked(
       updatedAt: now,
     };
     await createOperationalRestoreJournal(journal);
+    assertBackupSessionLease(lease);
     journalCreated = true;
     // Re-broadcast after the durable write: tabs opened during DB initialization
     // may have missed the initial transient announcement but are now already listening.
@@ -154,12 +158,15 @@ async function restoreCompleteBackupPackageUnlocked(
       packageDigest,
       options.allowLegacyUnboundAttachmentMetadata === true
     );
+    assertBackupSessionLease(lease);
     await verifyStagedDocumentAttachmentBundle(restoreId, packageDigest);
+    assertBackupSessionLease(lease);
     const stagedJournal = await updateStagingOperationalRestoreJournal(
       restoreId,
       stagedManifest.manifestDigest,
       stagedManifest.rowCount
     );
+    assertBackupSessionLease(lease);
     await transitionOperationalRestoreJournal(restoreId, ['staging'], 'commit_requested', {});
     commitIntentWritten = true;
 
