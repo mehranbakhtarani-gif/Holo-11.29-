@@ -45,7 +45,7 @@ async function run() {
     operationalDb.setOperationalRestoreBarrier(true);
     await assert.rejects(
       restoreBlockedBootstrap,
-      /Operational key unlock is blocked while workspace restore is active/,
+      /Operational key unlock is blocked while workspace restore is active|بازیابی پشتیبان در حال انجام یا نیازمند ادامه است/,
       'a restore barrier raised during descriptor loading must abort workspace key bootstrap'
     );
     assert.equal(
