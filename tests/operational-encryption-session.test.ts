@@ -155,6 +155,11 @@ async function run() {
     );
     await session.unlockOperationalDataSessionFromDescriptor(rotatedDescriptor, 'workspace-session-01');
     assert.equal(session.isOperationalDataSessionUnlocked(), true);
+    assert.deepEqual(
+      await sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, recordContext),
+      recordValue,
+      'passphrase rotation must preserve the original workspace DEK and all existing ciphertext'
+    );
     const replacementLease = session.captureOperationalDataKeyLease();
     session.assertOperationalDataKeyLease(replacementLease);
 
@@ -177,7 +182,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 34 assertions passed');
+    console.log('Operational encryption session: 35 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
