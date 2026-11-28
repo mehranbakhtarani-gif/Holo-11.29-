@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Complete backup restore browser integration</title>
+</head>
+<body>
+  <main>
+    <h1>IndexedDB restore recovery integration</h1>
+    <pre id="result" data-status="running">RUNNING</pre>
+  </main>
+  <script type="module">
+    // Prevent the production multi-tab reload channel from reloading this test harness.
+    window.BroadcastChannel = undefined;
+
+    const resultNode = document.getElementById('result');
+    const assert = (condition, message) => {
+      if (!condition) throw new Error(message);
+    };
+
+    const openDb = (name, version) => new Promise((resolve, reject) => {
+      const request = indexedDB.open(name, version);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+
+    const countStore = async (name, version, storeName) => {
+      const db = await openDb(name, version);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction([storeName], 'readonly');
+          const request = tx.objectStore(storeName).count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+          tx.onabort = () => reject(tx.error || new Error('count transaction aborted'));
+        });
+      } finally {
+        db.close();
+      }
+    };
+
+    const readAccountId = async () => {
+      const db = await openDb('holoo_apex_operational_db_v1', 5);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction(['accounts'], 'readonly');
+          const request = tx.objectStore('accounts').get('browser-restored-cash');
+          request.onsuccess = () => resolve(request.result?.id);
+          request.onerror = () => reject(request.error);
+        });
+      } finally {
+        db.close();
+      }
+    };
+
+    async function run() {
+      const { unlockBackupSession, lockBackupSession } = await import('../../src/lib/backupSession');
+      const { encryptBackupEnvelope } = await import('../../src/lib/offlineFirstCore');
+      const { saveDocumentAttachment } = await import('../../src/lib/documentVault');
+      const {
+        getActiveOperationalRestoreJournal,
+        isOperationalRestoreBarrierActive,
+      } = await import('../../src/lib/operationalDb');
+      const {
+        restoreCompleteBackupPackage,
+        resumePendingCompleteBackupRestore,
+      } = await import('../../src/lib/completeBackupRestore');
+      const passphrase = 'Browser-IDB-Restore-Test#1405';
+      unlockBackupSession(passphrase);
+
+      const oldAttachment = await saveDocumentAttachment({
+        entityType: 'invoice',
+        entityId: 'browser-old-invoice',
+        entityLabel: 'Browser old invoice',
+        fileName: 'browser-old.pdf',
+        mimeType: 'application/pdf',
+        dataUrl: 'data:application/pdf;base64,QQ==',
+        sizeBytes: 1,
+        uploadedBy: 'browser-restore-test',
+        uploadedByRole: 'accountant',
+      });
+      assert(oldAttachment.ok, 'could not seed the old encrypted attachment');
+      assert(await countStore('holoo_apex_document_vault_v1', 2, 'attachments') === 1,
+        'old attachment was not persisted in Chromium IndexedDB');
+
+      const workspace = {
+        profile: {
+          uid: 'browser-restore-workspace',
+          displayName: 'Browser restore test',
+          companyName: 'Browser restore test company',
+          fiscalYear: '1405',
+          currencyUnit: 'IRR',
+          role: 'accountant',
+        },
+        accounts: [{
+          id: 'browser-restored-cash',
+          ownerId: 'browser-restore-workspace',
+          code: '101',
+          title: 'Browser restored cash',
+          level: 'kol',
+          category: 'asset',
+          nature: 'debit',
+          isSystem: false,
+        }],
+        parties: [], products: [], vouchers: [], invoices: [], cheques: [],
+        employees: [], assets: [], costCenters: [], currencies: [], exchangeRates: [],
+        importDossiers: [], salesOrders: [], subcontractJobs: [], rbacOperators: [],
+        auditLogs: [], warehouses: [], taxReports: [], localProfiles: [],
+        syncOutbox: [], syncInbox: [], localRevision: 9,
+      };
+      const workspaceEnvelope = await encryptBackupEnvelope(JSON.stringify(workspace), passphrase);
+      const packageJson = JSON.stringify({
+        format: 'holoo-apex-complete-backup',
+        schemaVersion: 2,
+        exportedAt: new Date().toISOString(),
+        workspaceEnvelope,
+        documentAttachments: {
+          format: 'holoo-apex-encrypted-document-vault',
+          schemaVersion: 2,
+          attachments: [],
+        },
+      });
+
+      const nativeClear = IDBObjectStore.prototype.clear;
+      let failNextVaultReplacement = true;
+      Object.defineProperty(IDBObjectStore.prototype, 'clear', {
+        configurable: true,
+        value: function() {
+          if (this.name === 'attachments' && failNextVaultReplacement) {
+            failNextVaultReplacement = false;
+            this.transaction.abort();
+            return undefined;
+          }
+          return nativeClear.call(this);
+        },
+      });
+
+      let restoreFailed = false;
+      try {
+        await restoreCompleteBackupPackage(packageJson);
+      } catch {
+        restoreFailed = true;
+      }
+      assert(restoreFailed, 'injected real-browser IndexedDB abort was not surfaced');
+      assert(!failNextVaultReplacement, 'failure injector did not run');
+      const interrupted = await getActiveOperationalRestoreJournal();
+      assert(interrupted?.state === 'failed_recovery_required',
+        'durable recovery journal was not retained after the injected abort');
+      assert(isOperationalRestoreBarrierActive(), 'workspace writes were not blocked during recovery');
+      assert(await readAccountId() === 'browser-restored-cash',
+        'operational workspace transaction did not commit before the injected vault failure');
+      assert(await countStore('holoo_apex_document_vault_v1', 2, 'attachments') === 1,
+        'aborted Document Vault transaction changed the live attachment set');
+
+      const resumed = await resumePendingCompleteBackupRestore();
+      assert(!!resumed, 'browser recovery did not resume');
+      assert(resumed.restoredAttachments === 0, 'unexpected attachments were restored');
+      assert(await getActiveOperationalRestoreJournal() === null, 'recovery journal was not committed');
+      assert(await countStore('holoo_apex_document_vault_v1', 2, 'attachments') === 0,
+        'successful retry did not atomically replace the attachment set');
+      assert(isOperationalRestoreBarrierActive(), 'current tab should remain blocked until reload');
+
+      lockBackupSession();
+      resultNode.dataset.status = 'passed';
+      resultNode.textContent = 'PASS: Chromium IndexedDB crash injection and forward recovery';
+    }
+
+    run().catch((error) => {
+      resultNode.dataset.status = 'failed';
+      resultNode.textContent = error instanceof Error ? error.stack || error.message : String(error);
+    });
+  </script>
+</body>
+</html>

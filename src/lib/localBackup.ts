@@ -1,5 +1,7 @@
 import { getTodayShamsi } from './format';
 import { computeDeterministicHash256 } from './moneyMath';
+import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
+import { requireBackupSessionPassphrase } from './backupSession';
 
 export type LocalBackupReason = 'auto_change' | 'before_close' | 'manual' | 'pre_migration';
 
@@ -17,10 +19,12 @@ export interface LocalBackupSnapshotMeta {
   invoiceCount: number;
   productCount: number;
   sizeKb: number;
+  encryptionStatus?: 'encrypted' | 'legacy-plaintext';
 }
 
 export interface LocalBackupSnapshot extends LocalBackupSnapshotMeta {
-  payloadJson: string;
+  payloadJson?: string;
+  encryptedEnvelope?: string;
 }
 
 export interface BackupIntegrityResult {
@@ -251,79 +255,80 @@ export function verifyLocalBackupIntegrity(
  * Synchronous backup flush used on beforeunload / pagehide / visibilitychange so closing the app
  * on mobile, tablet, or desktop ALWAYS saves the latest complete snapshot into internal device storage.
  */
-export function saveSyncCloseSnapshot(params: {
-  payloadJson: string;
-  reason: LocalBackupReason;
-  companyName: string;
-  voucherCount: number;
-  invoiceCount: number;
-  productCount: number;
+export function saveSyncCloseSnapshot(_params: {
+  payloadJson: string; reason: LocalBackupReason; companyName: string;
+  voucherCount: number; invoiceCount: number; productCount: number;
 }): LocalBackupSnapshot | null {
-  try {
-    const snap = buildSnapshotObject(params);
-    localStorage.setItem(LAST_CLOSE_KEY, JSON.stringify(snap));
-    return snap;
-  } catch {
-    return null;
-  }
+  // WebCrypto is asynchronous; never persist plaintext during unload.
+  return null;
 }
 
+/**
+ * Returns only authenticated-format encrypted close snapshots to normal hydration paths.
+ * Legacy plaintext records are deliberately excluded from automatic restore.
+ */
 export function readSyncCloseSnapshot(): LocalBackupSnapshot | null {
   try {
     const raw = localStorage.getItem(LAST_CLOSE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as LocalBackupSnapshot;
-    if (parsed && typeof parsed.payloadJson === 'string') return parsed;
+    return parsed && typeof parsed.encryptedEnvelope === 'string' && parsed.encryptedEnvelope.length > 0
+      ? parsed
+      : null;
+  } catch {
     return null;
+  }
+}
+
+/**
+ * Exposes a legacy plaintext close snapshot only for an explicit, user-confirmed
+ * migration workflow. Never call this from application boot or automatic hydration.
+ */
+export function readLegacyPlaintextSyncCloseSnapshot(): LocalBackupSnapshot | null {
+  try {
+    const raw = localStorage.getItem(LAST_CLOSE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LocalBackupSnapshot;
+    return parsed && typeof parsed.payloadJson === 'string' && parsed.payloadJson.length > 0
+      ? parsed
+      : null;
   } catch {
     return null;
   }
 }
 
 export async function saveLocalSnapshot(params: {
-  payloadJson: string;
-  reason: LocalBackupReason;
-  companyName: string;
-  voucherCount: number;
-  invoiceCount: number;
-  productCount: number;
+  payloadJson: string; reason: LocalBackupReason; companyName: string;
+  voucherCount: number; invoiceCount: number; productCount: number;
 }): Promise<LocalBackupSnapshotMeta | null> {
+  const passphrase = requireBackupSessionPassphrase();
+  const encryptedEnvelope = await encryptBackupEnvelope(params.payloadJson, passphrase);
   const snap = buildSnapshotObject(params);
-  // Always update the synchronous latest-snapshot slot too
+  const stored: LocalBackupSnapshot = {
+    ...snap, payloadJson: undefined, encryptedEnvelope: JSON.stringify(encryptedEnvelope),
+    sizeKb: Math.max(1, Math.round(new Blob([JSON.stringify(encryptedEnvelope)]).size / 1024)),
+  };
+  const db = await openBackupDb();
   try {
-    localStorage.setItem(LAST_CLOSE_KEY, JSON.stringify(snap));
-  } catch {
-    // ignore quota error on localStorage and rely on IndexedDB
-  }
-
-  try {
-    const db = await openBackupDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.put(snap);
+      tx.objectStore(STORE_NAME).put(stored);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('Encrypted backup transaction aborted.'));
     });
-
-    // Prune oldest snapshots beyond MAX_SNAPSHOTS
     const all = await listLocalSnapshotsRaw(db);
     if (all.length > MAX_SNAPSHOTS) {
-      const toDelete = all.slice(MAX_SNAPSHOTS);
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         const store = tx.objectStore(STORE_NAME);
-        toDelete.forEach((s) => store.delete(s.id));
+        all.slice(MAX_SNAPSHOTS).forEach((row) => store.delete(row.id));
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       });
     }
-    db.close();
-  } catch {
-    // Fallback already saved in localStorage
-  }
-
-  const { payloadJson: _ignored, ...meta } = snap;
+  } finally { db.close(); }
+  const { payloadJson: _plain, encryptedEnvelope: _cipher, ...meta } = stored;
   return meta;
 }
 
@@ -343,35 +348,55 @@ function listLocalSnapshotsRaw(db: IDBDatabase): Promise<LocalBackupSnapshot[]> 
 
 export async function listLocalSnapshots(): Promise<LocalBackupSnapshotMeta[]> {
   const syncSnap = readSyncCloseSnapshot();
+  const legacySyncSnap = readLegacyPlaintextSyncCloseSnapshot();
   try {
     const db = await openBackupDb();
     const rows = await listLocalSnapshotsRaw(db);
-    // If sync close snapshot is newer than anything in IndexedDB, promote it into IndexedDB
-    if (syncSnap && !rows.some((r) => r.id === syncSnap.id)) {
-      await new Promise<void>((resolve) => {
+    // Only encrypted checkpoints may be promoted. Legacy plaintext close snapshots
+    // remain read-only migration sources and are never copied into new persistence.
+    if (syncSnap?.encryptedEnvelope && !rows.some((r) => r.id === syncSnap.id)) {
+      await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         tx.objectStore(STORE_NAME).put(syncSnap);
         tx.oncomplete = () => resolve();
-        tx.onerror = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('Encrypted checkpoint promotion aborted.'));
       });
       rows.unshift(syncSnap);
       rows.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
     }
+    if (legacySyncSnap && !rows.some((r) => r.id === legacySyncSnap.id)) {
+      rows.push(legacySyncSnap);
+      rows.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+    }
     db.close();
-    return rows.slice(0, MAX_SNAPSHOTS).map(({ payloadJson: _p, ...meta }) => meta);
+    return rows.slice(0, MAX_SNAPSHOTS).map((row) => {
+      const { payloadJson: _p, encryptedEnvelope: _e, ...meta } = row;
+      return { ...meta, encryptionStatus: row.encryptedEnvelope ? 'encrypted' as const : 'legacy-plaintext' as const };
+    });
   } catch {
-    if (syncSnap) {
-      const { payloadJson: _p, ...meta } = syncSnap;
-      return [meta];
+    const fallback = syncSnap ?? legacySyncSnap;
+    if (fallback) {
+      const { payloadJson: _p, encryptedEnvelope: _e, ...meta } = fallback;
+      return [{ ...meta, encryptionStatus: fallback.encryptedEnvelope ? 'encrypted' as const : 'legacy-plaintext' as const }];
     }
     return [];
   }
 }
 
-export async function loadLocalSnapshotPayload(snapshotId: string): Promise<string | null> {
+export async function loadLocalSnapshotPayload(
+  snapshotId: string,
+  allowLegacyPlaintext = false
+): Promise<string | null> {
+  const legacySyncSnap = allowLegacyPlaintext ? readLegacyPlaintextSyncCloseSnapshot() : null;
+  if (legacySyncSnap && legacySyncSnap.id === snapshotId) return legacySyncSnap.payloadJson ?? null;
   const syncSnap = readSyncCloseSnapshot();
   if (syncSnap && syncSnap.id === snapshotId) {
-    return syncSnap.payloadJson;
+    if (syncSnap.encryptedEnvelope) {
+      const result = await decryptAndVerifyBackupEnvelope(syncSnap.encryptedEnvelope, requireBackupSessionPassphrase());
+      return result.ok ? result.snapshotJson ?? null : null;
+    }
+    return allowLegacyPlaintext ? syncSnap.payloadJson ?? null : null;
   }
   try {
     const db = await openBackupDb();
@@ -382,7 +407,12 @@ export async function loadLocalSnapshotPayload(snapshotId: string): Promise<stri
       req.onerror = () => reject(req.error);
     });
     db.close();
-    return found?.payloadJson ?? null;
+    if (!found) return null;
+    if (found.encryptedEnvelope) {
+      const result = await decryptAndVerifyBackupEnvelope(found.encryptedEnvelope, requireBackupSessionPassphrase());
+      return result.ok ? result.snapshotJson ?? null : null;
+    }
+    return allowLegacyPlaintext ? found.payloadJson ?? null : null;
   } catch {
     return null;
   }
@@ -409,6 +439,24 @@ export async function deleteLocalSnapshot(snapshotId: string): Promise<void> {
   } catch {
     // ignore
   }
+}
+
+export async function downloadEncryptedBackupFileToDevice(
+  payloadJson: string,
+  fiscalYear: string,
+  passphrase: string
+): Promise<void> {
+  const envelope = await encryptBackupEnvelope(payloadJson, passphrase);
+  const stamp = getTodayShamsi().replace(/\//g, '-');
+  const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `holoo-apex-encrypted-backup-${fiscalYear}-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export function downloadBackupFileToDevice(payloadJson: string, fiscalYear: string): void {

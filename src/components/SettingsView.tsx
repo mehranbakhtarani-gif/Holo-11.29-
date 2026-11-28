@@ -51,6 +51,12 @@ import { SystemResetCenter } from './SystemResetCenter';
 import { useInvoiceSettings } from '../lib/invoiceSettings';
 import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
+import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
+import { requireBackupSessionPassphrase } from '../lib/backupSession';
+import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
+import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, loadOperationalWorkspace, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
+import { captureBusinessLocalStateSnapshot } from '../lib/businessLocalStateSnapshot';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
   { key: 'canCreateVoucher', label: 'ثبت سند حسابداری' },
@@ -94,6 +100,11 @@ export const SettingsView: React.FC<{
     setAutoBackupOnClose,
     localSnapshots,
     lastLocalBackupAt,
+    backupSessionUnlocked,
+    encryptedOperationalWorkspaceMeta,
+    prepareEncryptedOperationalWorkspaceMigration,
+    unlockBackupSession,
+    lockBackupSession,
     triggerLocalBackupNow,
     restoreFromLocalSnapshot,
     removeLocalSnapshot,
@@ -119,6 +130,43 @@ export const SettingsView: React.FC<{
     operationalDbStats,
     showToast,
   } = useAccounting();
+
+  const [pendingRestoreJournal, setPendingRestoreJournal] = useState<OperationalRestoreJournalRecord | null>(null);
+  const [restoreJournalReadError, setRestoreJournalReadError] = useState<string | null>(null);
+  const [restoreResumeBusy, setRestoreResumeBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getActiveOperationalRestoreJournal()
+      .then(async (journal) => {
+        if (!active) return;
+        setPendingRestoreJournal(journal);
+        setRestoreJournalReadError(null);
+        // Staging may legitimately outlive this component's mount while a large
+        // encrypted package is being validated in another tab. Do not infer that
+        // an old manifest is orphaned from age alone; cleanup must be an explicit,
+        // journal-aware maintenance operation.
+      })
+      .catch((error) => { if (active) setRestoreJournalReadError(error instanceof Error ? error.message : 'وضعیت بازیابی قابل بررسی نیست.'); });
+    return () => { active = false; };
+  }, []);
+
+  const handleResumeInterruptedRestore = async () => {
+    if (!backupSessionUnlocked || restoreResumeBusy) return;
+    setRestoreResumeBusy(true);
+    try {
+      const result = await resumePendingCompleteBackupRestore();
+      if (result) showToast(`بازیابی ناتمام تکمیل شد: ${result.restoredWorkspaceRecords} رکورد و ${result.restoredAttachments} پیوست.`);
+      else showToast('مرحلهٔ staging ناقص و بدون تغییر داده‌های اصلی پاک‌سازی شد.', 'warning');
+      window.location.reload();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ادامه بازیابی ناموفق بود؛ داده‌ها قفل باقی می‌مانند.', 'error');
+      const journal = await getActiveOperationalRestoreJournal().catch(() => null);
+      setPendingRestoreJournal(journal);
+    } finally {
+      setRestoreResumeBusy(false);
+    }
+  };
 
   const [profilePhotoBusy, setProfilePhotoBusy] = useState(false);
   const profilePhotoInputRef = useRef<HTMLInputElement | null>(null);
@@ -178,6 +226,7 @@ export const SettingsView: React.FC<{
   const [fiscalYear, setFiscalYear] = useState(profile.fiscalYear);
   const [currencyUnit, setCurrencyUnit] = useState(profile.currencyUnit);
   const [deviceNameInput, setDeviceNameInput] = useState(deviceLabel);
+  const [backupPassphraseInput, setBackupPassphraseInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uiThemeRef = useRef<HTMLDivElement | null>(null);
   const offlineFirstRef = useRef<HTMLDivElement | null>(null);
@@ -460,26 +509,123 @@ export const SettingsView: React.FC<{
     }
   };
 
-  const handleDownloadBackup = () => {
-    const json = exportBackupJson();
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const dateStamp = new Date().toISOString().slice(0, 10);
-    link.href = url;
-    link.download = `holoo-apex-backup-${profile.fiscalYear}-${dateStamp}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    showToast('فایل پشتیبان کامل حسابداری (JSON) با موفقیت دانلود شد.');
+  const handleDownloadBackup = async () => {
+    try {
+      if (!backupSessionUnlocked) {
+        showToast('برای پشتیبان یکپارچه، ابتدا قفل پشتیبان رمزگذاری‌شده را باز کنید.', 'error');
+        return;
+      }
+      const baseWorkspace = JSON.parse(exportBackupJson()) as Record<string, unknown>;
+      const operationalWorkspace = await loadOperationalWorkspace();
+      const workspaceJson = JSON.stringify({
+        ...baseWorkspace,
+        warehouses: operationalWorkspace?.warehouses ?? [],
+        taxReports: operationalWorkspace?.taxReports ?? [],
+        localProfiles: operationalWorkspace?.localProfiles ?? [],
+        syncOutbox: operationalWorkspace?.syncOutbox ?? [],
+        syncInbox: operationalWorkspace?.syncInbox ?? [],
+        localRevision: operationalWorkspace?.localRevision ?? 1,
+        businessLocalState: captureBusinessLocalStateSnapshot(),
+      }, null, 2);
+      if (new Blob([workspaceJson]).size > 8_000_000) {
+        showToast('حجم اطلاعات حسابداری از سقف ۸ مگابایت مسیر بازیابی فعلی بیشتر است؛ خروجی یکپارچه متوقف شد.', 'error');
+        return;
+      }
+      const workspaceEnvelope = await encryptBackupEnvelope(workspaceJson, requireBackupSessionPassphrase());
+      const attachmentBundle = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as Record<string, unknown>;
+      const packageJson = JSON.stringify({
+        format: 'holoo-apex-complete-backup',
+        schemaVersion: 2,
+        exportedAt: new Date().toISOString(),
+        workspaceEnvelope,
+        documentAttachments: attachmentBundle,
+      }, null, 2);
+      const blob = new Blob([packageJson], { type: 'application/json;charset=utf-8;' });
+      if (blob.size > 100 * 1024 * 1024) {
+        showToast('حجم بسته پشتیبان از سقف ۱۰۰ مگابایت مسیر بازیابی بیشتر است.', 'error');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.download = `holoo-apex-complete-backup-${profile.fiscalYear}-${dateStamp}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast('بسته پشتیبان حسابداری و پیوست‌های رمزگذاری‌شده صادر شد.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'ساخت بسته پشتیبان ناموفق بود.', 'error');
+    }
   };
 
   const handleRestoreBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      showToast('حجم بسته پشتیبان از سقف ۱۰۰ مگابایت بیشتر است.', 'error');
+      e.target.value = '';
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        importBackupJson(reader.result);
+    reader.onload = async () => {
+      if (typeof reader.result !== 'string') return;
+      try {
+        const parsed = JSON.parse(reader.result) as Record<string, unknown>;
+        if (parsed.format === 'holoo-apex-complete-backup' && parsed.schemaVersion === 2) {
+          if (!backupSessionUnlocked) {
+            showToast('برای بازیابی بسته یکپارچه ابتدا قفل پشتیبان را با همان رمز باز کنید.', 'error');
+            return;
+          }
+          const proceed = window.confirm(
+            'بازیابی مقاوم در برابر قطع برنامه آغاز می‌شود. اطلاعات حسابداری و پیوست‌ها در دو پایگاه مستقل، با ژورنال پایدار و امکان ادامه پس از راه‌اندازی مجدد اعمال می‌شوند. آیا ادامه می‌دهید؟'
+          );
+          if (!proceed) return;
+          const attachmentBundle = parsed.documentAttachments as Record<string, unknown>;
+          const allowLegacyUnboundAttachmentMetadata = attachmentBundle.schemaVersion === 1
+            ? window.confirm('این بسته پیوست نسخه قدیمی دارد و فرادادهٔ هر فایل به‌صورت رمزنگاری‌شده به محتوای آن متصل نشده است. محتوا و SHA-256 بررسی می‌شوند، اما انتساب فایل به سند/فاکتور قابل احراز رمزنگاری نیست. فقط در صورت اعتماد کامل به فایل ادامه دهید.')
+            : false;
+          if (attachmentBundle.schemaVersion === 1 && !allowLegacyUnboundAttachmentMetadata) return;
+          const result = await restoreCompleteBackupPackage(reader.result, {
+            allowLegacyUnboundAttachmentMetadata,
+          });
+          showToast(`بسته با موفقیت بازیابی شد: ${result.restoredWorkspaceRecords} رکورد و ${result.restoredAttachments} پیوست.`);
+          window.location.reload();
+          return;
+        }
+        if (parsed.format === 'holoo-apex-complete-backup' && parsed.schemaVersion === 1) {
+          if (!backupSessionUnlocked) {
+            showToast('برای بازیابی بسته یکپارچه ابتدا قفل پشتیبان را با همان رمز باز کنید.', 'error');
+            return;
+          }
+          if (!parsed.workspace || typeof parsed.workspace !== 'object' ||
+              !parsed.documentAttachments || typeof parsed.documentAttachments !== 'object') {
+            showToast('ساختار بسته قدیمی معتبر نیست.', 'error');
+            return;
+          }
+          const legacyAccepted = window.confirm(
+            'این بسته نسخه قدیمی است و اطلاعات حسابداری آن رمزگذاری نشده است. بازیابی قدیمی تراکنش یکپارچه و بازیابی خودکار ندارد. فقط در صورت اعتماد به فایل ادامه دهید.'
+          );
+          if (!legacyAccepted) return;
+          const legacyAttachmentBundle = parsed.documentAttachments as Record<string, unknown>;
+          if (legacyAttachmentBundle.schemaVersion === 1 && !window.confirm(
+            'فراداده پیوست‌های این نسخه قدیمی به محتوای رمزگذاری‌شده متصل نیست. محتوا و SHA-256 بررسی می‌شوند، اما انتساب فایل به سند رمزنگاری‌شده نیست. ادامه می‌دهید؟'
+          )) return;
+          showToast('بازیابی نسخه قدیمی در مسیر سازگاری انجام می‌شود؛ این مسیر تضمین بازیابی پس از crash ندارد.', 'warning');
+          const { restoreEncryptedDocumentAttachmentBundle } = await import('../lib/documentVault');
+          const attachmentResult = await restoreEncryptedDocumentAttachmentBundle(JSON.stringify(parsed.documentAttachments));
+          const workspaceImported = importBackupJson(JSON.stringify(parsed.workspace));
+          if (!workspaceImported) {
+            showToast(`پیوست‌ها بازیابی شدند (${attachmentResult.restored})، اما ورود اطلاعات حسابداری کامل نشد.`, 'error');
+            return;
+          }
+          showToast(`بسته قدیمی بازیابی شد: ${attachmentResult.restored} پیوست.`, 'warning');
+          window.location.reload();
+          return;
+        }
+        const imported = importBackupJson(reader.result);
+        if (imported) showToast('نسخه قدیمی پشتیبان بازیابی شد؛ پیوست‌های بایگانی در این فایل وجود ندارند.', 'warning');
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'بازیابی بسته پشتیبان ناموفق بود.', 'error');
       }
     };
     reader.readAsText(file);
@@ -489,6 +635,23 @@ export const SettingsView: React.FC<{
 
   return (
     <div className="space-y-6 max-w-5xl">
+      {(pendingRestoreJournal || restoreJournalReadError) && (
+        <div role="alert" className="rounded-xl border border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-2">
+          <div className="font-bold text-amber-900 dark:text-amber-200">بازیابی پشتیبان ناتمام است</div>
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            {restoreJournalReadError || `وضعیت ثبت‌شده: ${pendingRestoreJournal?.state}. برای جلوگیری از تغییر داده‌های نیمه‌بازیابی‌شده، عملیات فضای کاری مسدود است.`}
+          </p>
+          <button
+            type="button"
+            disabled={!backupSessionUnlocked || restoreResumeBusy || !!restoreJournalReadError}
+            onClick={handleResumeInterruptedRestore}
+            className="rounded-lg bg-amber-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+          >
+            {restoreResumeBusy ? 'در حال ادامه بازیابی…' : 'ادامه یا پاک‌سازی امن بازیابی'}
+          </button>
+          {!backupSessionUnlocked && <p className="text-xs text-amber-800 dark:text-amber-300">ابتدا قفل پشتیبان را با همان رمز باز کنید.</p>}
+        </div>
+      )}
       <div>
         <h1 className="text-xl font-bold text-slate-900 dark:text-white">
           تنظیمات شرکتی، طراحی قالب فاکتور، پشتیبان‌گیری و نصب اپلیکیشن
@@ -1279,6 +1442,79 @@ export const SettingsView: React.FC<{
           </div>
         </div>
 
+        <div className="p-3.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-bold text-slate-900 dark:text-white">قفل رمزنگاری پشتیبان‌ها</div>
+            <span className={backupSessionUnlocked ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-amber-700 dark:text-amber-400 font-semibold'}>
+              {backupSessionUnlocked ? 'باز · فقط در حافظه نشست' : 'قفل است'}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-5">
+            نسخه‌های جدید حافظه داخلی با PBKDF2-SHA-256 و AES-256-GCM رمزگذاری می‌شوند. رمز در حافظه مرورگر نگهداری می‌شود و با بارگذاری مجدد برنامه باید دوباره وارد شود؛ رمز یا کلید در localStorage ذخیره نمی‌شود.
+          </p>
+          {!backupSessionUnlocked ? (
+            <form className="flex flex-col sm:flex-row gap-2" onSubmit={(e) => {
+              e.preventDefault();
+              if (unlockBackupSession(backupPassphraseInput)) setBackupPassphraseInput('');
+            }}>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={backupPassphraseInput}
+                onChange={(e) => setBackupPassphraseInput(e.target.value)}
+                minLength={6}
+                placeholder="رمز اختصاصی پشتیبان (حداقل ۶ کاراکتر)"
+                className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+              />
+              <button type="submit" disabled={backupPassphraseInput.trim().length < 6}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold">
+                بازکردن قفل پشتیبان
+              </button>
+            </form>
+          ) : (
+            <button type="button" onClick={lockBackupSession}
+              className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200">
+              قفل‌کردن پشتیبان‌ها
+            </button>
+          )}
+        </div>
+
+        <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-bold text-slate-900 dark:text-white">آماده‌سازی مهاجرت پایگاه داده عملیاتی</div>
+            {encryptedOperationalWorkspaceMeta && (
+              <span className={
+                operationalDbStats?.localRevision === encryptedOperationalWorkspaceMeta.sourceRevision
+                  ? 'text-emerald-700 dark:text-emerald-400 font-semibold text-xs'
+                  : 'text-amber-700 dark:text-amber-400 font-semibold text-xs'
+              }>
+                {operationalDbStats?.localRevision === encryptedOperationalWorkspaceMeta.sourceRevision
+                  ? 'نسخه آماده معتبر'
+                  : 'نیازمند آماده‌سازی مجدد'}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-5">
+            این عملیات از تمام داده‌های عملیاتی فعلی یک نسخه AES-256-GCM رمزگذاری‌شده می‌سازد، آن را دوباره رمزگشایی و صحت‌سنجی می‌کند و فقط در صورت ثابت‌ماندن شماره نسخه منبع ذخیره می‌کند. داده‌های اصلی فعلاً دست‌نخورده باقی می‌مانند؛ این مرحله هنوز جایگزینی پایگاه داده نیست.
+          </p>
+          <button
+            type="button"
+            disabled={!backupSessionUnlocked}
+            onClick={() => void prepareEncryptedOperationalWorkspaceMigration()}
+            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white font-semibold text-sm"
+          >
+            آماده‌سازی و اعتبارسنجی نسخه رمزگذاری‌شده
+          </button>
+          {encryptedOperationalWorkspaceMeta && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+              <div>تعداد رکورد: <strong>{encryptedOperationalWorkspaceMeta.recordCount}</strong></div>
+              <div>نسخه منبع: <strong>{encryptedOperationalWorkspaceMeta.sourceRevision}</strong></div>
+              <div>نسخه طرح: <strong>{encryptedOperationalWorkspaceMeta.schemaVersion}</strong></div>
+              <div>زمان: <strong>{new Date(encryptedOperationalWorkspaceMeta.preparedAt).toLocaleString()}</strong></div>
+            </div>
+          )}
+        </div>
+
         {/* Device Identity & Auto-Backup Toggle */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-2.5">
@@ -1396,11 +1632,18 @@ export const SettingsView: React.FC<{
                       <div className="inline-flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => void restoreFromLocalSnapshot(snap.id)}
+                          onClick={() => {
+                            const isLegacyPlaintext = snap.encryptionStatus === 'legacy-plaintext';
+                            if (
+                              isLegacyPlaintext &&
+                              !window.confirm('این نسخه پشتیبان قدیمی و بدون رمزنگاری است. فقط در صورت اعتماد به این داده و پذیرش ریسک، آن را به‌صورت دستی بازیابی کنید. پس از بازیابی، فوراً یک نسخه پشتیبان رمزگذاری‌شده بسازید. ادامه می‌دهید؟')
+                            ) return;
+                            void restoreFromLocalSnapshot(snap.id, isLegacyPlaintext);
+                          }}
                           className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-teal-700 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/50 rounded-md"
                         >
                           <RefreshCw className="w-3 h-3" />
-                          <span>بازیابی</span>
+                          <span>{snap.encryptionStatus === 'legacy-plaintext' ? 'مهاجرت امن' : 'بازیابی'}</span>
                         </button>
                         <button
                           type="button"

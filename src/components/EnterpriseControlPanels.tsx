@@ -319,8 +319,12 @@ export const EnterpriseControlPanels: React.FC<{ activeTab: EnterpriseControlTab
   const [docVerifyMsg, setDocVerifyMsg] = useState<string>('');
 
   const refreshAttachments = async () => {
-    const list = await listDocumentAttachments({ viewerRole: activeOperator.role });
-    setAttachments(list);
+    try {
+      const list = await listDocumentAttachments({ viewerRole: activeOperator.role });
+      setAttachments(list);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'خواندن بایگانی اسناد ناموفق بود.', 'error');
+    }
   };
 
   useEffect(() => {

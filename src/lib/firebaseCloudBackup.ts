@@ -14,6 +14,8 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, isFirestoreOfflineError, OperationType } from './firebase';
 import { getTodayShamsi } from './format';
+import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
+import { requireBackupSessionPassphrase } from './backupSession';
 
 export const MAX_CLOUD_BACKUPS = 3;
 
@@ -30,23 +32,6 @@ export interface CloudBackupMeta {
   invoiceCount: number;
   productCount: number;
   sizeKb?: number;
-}
-
-/** Recursively removes undefined values so native Maps & Lists are strictly Firestore-compatible */
-function stripUndefinedDeep<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((item) => stripUndefinedDeep(item)) as unknown as T;
-  }
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v !== undefined) {
-        out[k] = stripUndefinedDeep(v);
-      }
-    }
-    return out as T;
-  }
-  return value;
 }
 
 function formatShamsiFromIso(iso: string): string {
@@ -66,45 +51,6 @@ function formatShamsiFromIso(iso: string): string {
   } catch {
     return getTodayShamsi();
   }
-}
-
-function buildCompactFirestoreSnapshot(rawSnapshotJson: string): {
-  snapshotMap: Record<string, unknown>;
-  sizeKb: number;
-} {
-  const parsed = JSON.parse(rawSnapshotJson) as Record<string, unknown>;
-  // Store structured native Maps/Lists (never JSON.stringify inside Firestore)
-  // Cap verbose auditLogs to latest 150 entries to stay comfortably under Firestore's 1 MiB document limit
-  const auditLogs = Array.isArray(parsed.auditLogs) ? parsed.auditLogs.slice(0, 150) : [];
-  const compactObj = stripUndefinedDeep({
-    version: String(parsed.version || 'holoo-apex-1.3'),
-    exportedAt: String(parsed.exportedAt || new Date().toISOString()),
-    profile: parsed.profile ?? {},
-    accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
-    parties: Array.isArray(parsed.parties) ? parsed.parties : [],
-    products: Array.isArray(parsed.products) ? parsed.products : [],
-    vouchers: Array.isArray(parsed.vouchers) ? parsed.vouchers : [],
-    invoices: Array.isArray(parsed.invoices) ? parsed.invoices : [],
-    cheques: Array.isArray(parsed.cheques) ? parsed.cheques : [],
-    employees: Array.isArray(parsed.employees) ? parsed.employees : [],
-    assets: Array.isArray(parsed.assets) ? parsed.assets : [],
-    costCenters: Array.isArray(parsed.costCenters) ? parsed.costCenters : [],
-    currencies: Array.isArray(parsed.currencies) ? parsed.currencies : [],
-    exchangeRates: Array.isArray(parsed.exchangeRates) ? parsed.exchangeRates : [],
-    importDossiers: Array.isArray(parsed.importDossiers) ? parsed.importDossiers : [],
-    salesOrders: Array.isArray(parsed.salesOrders) ? parsed.salesOrders : [],
-    subcontractJobs: Array.isArray(parsed.subcontractJobs) ? parsed.subcontractJobs : [],
-    rbacOperators: Array.isArray(parsed.rbacOperators) ? parsed.rbacOperators : [],
-    auditLogs,
-  });
-
-  const approxBytes = new Blob([JSON.stringify(compactObj)]).size;
-  if (approxBytes > 940_000) {
-    // Trim non-critical audit logs first if approaching Firestore's 1 MiB doc cap
-    compactObj.auditLogs = [];
-  }
-  const finalSizeKb = Math.min(1024, Math.max(1, Math.round(new Blob([JSON.stringify(compactObj)]).size / 1024)));
-  return { snapshotMap: compactObj, sizeKb: finalSizeKb };
 }
 
 export async function listAndPruneFirebaseBackups(
@@ -212,7 +158,13 @@ export async function saveAndPruneFirebaseBackup(params: {
     const maxRev = existing.backups.reduce((m, b) => Math.max(m, b.revision), 0);
     const nextRevision = maxRev + 1;
 
-    const { snapshotMap, sizeKb } = buildCompactFirestoreSnapshot(params.snapshotJson);
+    const passphrase = requireBackupSessionPassphrase();
+    const envelope = await encryptBackupEnvelope(params.snapshotJson, passphrase);
+    const encryptedEnvelopeJson = JSON.stringify(envelope);
+    const sizeKb = Math.max(1, Math.round(new Blob([encryptedEnvelopeJson]).size / 1024));
+    if (sizeKb > 900) {
+      throw new Error('حجم پشتیبان رمزگذاری‌شده از سقف امن یک سند Firestore بیشتر است؛ برای این نسخه باید از ذخیره‌سازی قطعه‌ای استفاده شود.');
+    }
     const backupId = `fbbak_${params.ownerId.slice(0, 12)}_${nowMs}_${nextRevision}`;
 
     await setDoc(doc(db, 'cloudBackups', backupId), {
@@ -229,7 +181,8 @@ export async function saveAndPruneFirebaseBackup(params: {
       invoiceCount: Math.max(0, Math.floor(params.invoiceCount)),
       productCount: Math.max(0, Math.floor(params.productCount)),
       sizeKb,
-      snapshot: snapshotMap,
+      snapshotEnvelope: encryptedEnvelopeJson,
+      encryption: 'PBKDF2-SHA256+AES-256-GCM',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -260,7 +213,9 @@ export async function saveAndPruneFirebaseBackup(params: {
       backups: [],
       prunedCount: 0,
       savedAtShamsi,
-      error: 'خطا در ذخیره نسخه پشتیبان روی Firebase Firestore.',
+      error: err instanceof Error && err.message.includes('قفل پشتیبان')
+        ? err.message
+        : 'خطا در ذخیره نسخه پشتیبان روی Firebase Firestore.',
     };
   }
 }
@@ -304,8 +259,24 @@ export async function pullFirebaseBackupSnapshot(
     }
 
     const data = snap.data() as Record<string, unknown>;
-    if (data.ownerId !== ownerId || !data.snapshot || typeof data.snapshot !== 'object') {
+    if (data.ownerId !== ownerId) {
       return { ok: false, error: 'نسخه پشتیبان انتخاب‌شده معتبر نیست.' };
+    }
+    let snapshotJson: string | undefined;
+    if (typeof data.snapshotEnvelope === 'string') {
+      const decrypted = await decryptAndVerifyBackupEnvelope(
+        data.snapshotEnvelope,
+        requireBackupSessionPassphrase()
+      );
+      if (!decrypted.ok || !decrypted.snapshotJson) {
+        return { ok: false, error: decrypted.error || 'رمزگشایی پشتیبان ابری ناموفق بود.' };
+      }
+      snapshotJson = decrypted.snapshotJson;
+    } else if (data.snapshot && typeof data.snapshot === 'object') {
+      // Legacy plaintext cloud backups remain readable for explicit migration only.
+      snapshotJson = JSON.stringify(data.snapshot);
+    } else {
+      return { ok: false, error: 'ساختار نسخه پشتیبان ابری نامعتبر است.' };
     }
 
     return {
@@ -314,7 +285,7 @@ export async function pullFirebaseBackupSnapshot(
       revision: Number(data.revision) || 1,
       deviceLabel: String(data.deviceLabel || 'دستگاه کاری'),
       savedAtShamsi: String(data.savedAtShamsi || ''),
-      snapshotJson: JSON.stringify(data.snapshot),
+      snapshotJson,
     };
   } catch {
     return { ok: false, error: 'خطا در بازیابی نسخه پشتیبان از Firebase Firestore.' };

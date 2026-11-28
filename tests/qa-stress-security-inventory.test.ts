@@ -7,6 +7,7 @@ import {
   computeIncomeStatement,
   computePartyBalances,
   computeTrialBalance,
+  getUnreturnedConsumedCostLayers,
   planAtomicInvoiceCommit,
   planInvoiceCancellation,
   planProformaToSaleConversion,
@@ -18,6 +19,7 @@ import {
   RBAC_ROLE_PRESETS,
 } from '../src/lib/enterpriseAccounting';
 import { allocateProportionalIrr, mulQtyByIrr, percentOfIrr } from '../src/lib/moneyMath';
+import { applyInventoryMovementStep, planWarehouseTransfer, recalculateInventoryLedger } from '../src/lib/inventoryCostingEngine';
 import { auditPendingApprovalItems } from '../src/lib/smartAutomationEngine';
 import { fuzzyFilterAndRank } from '../src/lib/fuzzySearch';
 import {
@@ -41,6 +43,237 @@ function logPass(name: string, detail?: string) {
 }
 
 console.log('Running QA Stress, Inventory Integration, Accounting Math & Security Suite...');
+/* ============================================================================
+ * WAREHOUSE TRANSFER COST-LAYER RECONCILIATION
+ * ========================================================================== */
+{
+  const validState = {
+    productId: 'transfer-product',
+    costingMethod: 'fifo' as const,
+    stockQty: 5,
+    totalValueIrr: 700,
+    weightedAvgUnitCostIrr: 140,
+    layers: [{
+      layerId: 'transfer-layer-1',
+      date: '1405/01/01',
+      sourceRef: 'purchase-transfer-1',
+      warehouse: 'انبار مبدا',
+      originalQty: 5,
+      remainingQty: 5,
+      unitCostIrr: 140,
+      totalCostIrr: 700,
+    }],
+  };
+  const plan = planWarehouseTransfer({
+    state: validState, fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-valid-1', date: '1405/01/02',
+  });
+  assert.equal(plan.transferredCostIrr, 420);
+  assert.equal(plan.transferredLayers.reduce((sum, layer) => sum + layer.remainingQty, 0), 3);
+  assert.equal(plan.remainingSourceLayers.reduce((sum, layer) => sum + layer.remainingQty, 0), 2);
+  assert.equal(plan.pnlImpactIrr, 0);
+  assert.throws(() => planWarehouseTransfer({
+    state: { ...validState, layers: [] },
+    fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-invalid-1', date: '1405/01/02',
+  }), /لایه‌های موجودی/);
+  assert.throws(() => planWarehouseTransfer({
+    state: { ...validState, layers: [{ ...validState.layers[0], totalCostIrr: -1 }] },
+    fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-invalid-2', date: '1405/01/02',
+  }), /لایه‌های بهای موجودی/);
+  assert.throws(() => planWarehouseTransfer({
+    state: { ...validState, totalValueIrr: 701 },
+    fromWarehouse: 'انبار مبدا', toWarehouse: 'انبار مقصد',
+    qty: 3, transferId: 'transfer-invalid-3', date: '1405/01/02',
+  }), /ارزش لایه‌های بهای موجودی/);
+  logPass('Warehouse transfer layer reconciliation', 'valid transfers preserve cost and reject missing or invalid source layers');
+}
+
+/* ============================================================================
+ * INVENTORY LEDGER CUMULATIVE SALE-RETURN GUARD
+ * ========================================================================== */
+{
+  for (const costingMethod of ['fifo', 'moving_average', 'periodic_average'] as const) {
+    assert.throws(
+      () => recalculateInventoryLedger({
+        productId: 'return-guard-product',
+        costingMethod,
+        openingQty: 10,
+        openingValueIrr: 1_000,
+        movements: [
+          { id: 'sale-guard-1', date: '1405/01/02', kind: 'sale', productId: 'return-guard-product', qty: 5 },
+          { id: 'return-guard-1', date: '1405/01/03', kind: 'sale_return', productId: 'return-guard-product', qty: 3, sourceRefId: 'sale-guard-1' },
+          { id: 'return-guard-2', date: '1405/01/04', kind: 'sale_return', productId: 'return-guard-product', qty: 3, sourceRefId: 'sale-guard-1' },
+        ],
+      }),
+      /مجموع برگشت فروش/,
+      costingMethod + ' must reject cumulative returns exceeding the source sale'
+    );
+  }
+  logPass('Inventory ledger cumulative sale-return guard', 'FIFO, moving average and periodic average all reject over-returns');
+
+  const fifoPartialReturns = recalculateInventoryLedger({
+    productId: 'fifo-partial-return-product',
+    costingMethod: 'fifo',
+    movements: [
+      { id: 'fifo-return-buy-1', date: '1405/01/01', kind: 'purchase', productId: 'fifo-partial-return-product', qty: 100, totalCostIrr: 100_000 },
+      { id: 'fifo-return-buy-2', date: '1405/01/02', kind: 'purchase', productId: 'fifo-partial-return-product', qty: 20, totalCostIrr: 40_000 },
+      { id: 'fifo-return-sale', date: '1405/01/03', kind: 'sale', productId: 'fifo-partial-return-product', qty: 120 },
+      { id: 'fifo-return-1', date: '1405/01/04', kind: 'sale_return', productId: 'fifo-partial-return-product', qty: 15, sourceRefId: 'fifo-return-sale' },
+      { id: 'fifo-return-2', date: '1405/01/05', kind: 'sale_return', productId: 'fifo-partial-return-product', qty: 15, sourceRefId: 'fifo-return-sale' },
+    ],
+  });
+  assert.equal(fifoPartialReturns.kardex.find((row) => row.movementId === 'fifo-return-1')?.cogsOrCostIrr, 30_000);
+  assert.equal(fifoPartialReturns.kardex.find((row) => row.movementId === 'fifo-return-2')?.cogsOrCostIrr, 20_000);
+  assert.equal(fifoPartialReturns.totalCogsIrr, 90_000);
+  assert.equal(fifoPartialReturns.finalState.stockQty, 30);
+  assert.equal(fifoPartialReturns.finalState.totalValueIrr, 50_000);
+  assert.equal(fifoPartialReturns.conservationDeltaIrr, 0);
+  logPass('FIFO successive partial returns', 'later returns continue through the original sale layers without repeating the same layer');
+}
+
+
+/* ============================================================================
+ * SALE RETURN CUMULATIVE QUANTITY GUARD
+ * ========================================================================== */
+{
+  const ownerId = 'qa_sale_return_owner';
+  const originalSale: Invoice = {
+    id: 'sale_original_1',
+    ownerId,
+    invoiceNumber: 'SAL-ORIGINAL-1',
+    invoiceType: 'sale',
+    date: '1405/01/10',
+    partyId: 'customer_1',
+    partyName: 'مشتری آزمون',
+    warehouse: 'انبار مرکزی',
+    subtotal: 1_000,
+    discount: 0,
+    vatAmount: 0,
+    grandTotal: 1_000,
+    paidCash: 1_000,
+    paidBank: 0,
+    paidCheque: 0,
+    creditAmount: 0,
+    status: 'settled',
+    items: [{
+      productId: 'product_return_1',
+      sku: 'RET-1',
+      productName: 'کالای آزمون',
+      unit: 'عدد',
+      quantity: 10,
+      unitPrice: 100,
+      discount: 0,
+      vatAmount: 0,
+      lineTotal: 1_000,
+      unitCostSnapshot: 50,
+      totalCostIrr: 500,
+    }],
+  };
+  const previousReturn: Invoice = {
+    ...originalSale,
+    id: 'sale_return_previous_1',
+    invoiceNumber: 'RET-PREV-1',
+    invoiceType: 'sale_return',
+    sourceInvoiceId: originalSale.id,
+    subtotal: 500,
+    grandTotal: 500,
+    paidCash: 500,
+    items: [{ ...originalSale.items[0], quantity: 5, unitPrice: 100, lineTotal: 500 }],
+  };
+  const overReturnPayload: Omit<Invoice, 'id' | 'ownerId' | 'voucherId'> = {
+    invoiceNumber: 'RET-OVER-1',
+    invoiceType: 'sale_return',
+    sourceInvoiceId: originalSale.id,
+    date: '1405/01/12',
+    partyId: originalSale.partyId,
+    partyName: originalSale.partyName,
+    warehouse: originalSale.warehouse,
+    subtotal: 600,
+    discount: 0,
+    vatAmount: 0,
+    grandTotal: 600,
+    paidCash: 600,
+    paidBank: 0,
+    paidCheque: 0,
+    creditAmount: 0,
+    status: 'settled',
+    items: [{ ...originalSale.items[0], quantity: 6, unitPrice: 100, lineTotal: 600 }],
+  };
+  assert.throws(() => planAtomicInvoiceCommit({
+    invoiceId: 'sale_return_new_1',
+    voucherId: 'voucher_return_new_1',
+    nextVoucherNumber: 3,
+    ownerId,
+    deviceId: 'qa_runner',
+    payload: overReturnPayload,
+    products: [],
+    originalInvoice: originalSale,
+    existingInvoices: [originalSale, previousReturn],
+  }), /مانده مجاز: 5/);
+  logPass('Cumulative sale-return guard', 'rejects a second partial return that would exceed the original sold quantity');
+
+  const splitLineOriginalSale: Invoice = {
+    ...originalSale,
+    items: [
+      { ...originalSale.items[0], quantity: 4, lineTotal: 400 },
+      { ...originalSale.items[0], quantity: 6, lineTotal: 600 },
+    ],
+  };
+  assert.throws(() => planAtomicInvoiceCommit({
+    invoiceId: 'sale_return_split_lines',
+    voucherId: 'voucher_return_split_lines',
+    nextVoucherNumber: 4,
+    ownerId,
+    deviceId: 'qa_runner',
+    payload: overReturnPayload,
+    products: [],
+    originalInvoice: splitLineOriginalSale,
+    existingInvoices: [splitLineOriginalSale, previousReturn],
+  }), /مانده مجاز: 5/);
+  logPass('Cumulative sale-return duplicate-line guard', 'aggregates all original sale lines for the same product before enforcing the remaining returnable quantity');
+
+  const originalFifoLayers = [
+    { layerId: 'fifo_a', qty: 5, unitCostIrr: 100, totalCostIrr: 500 },
+    { layerId: 'fifo_b', qty: 5, unitCostIrr: 200, totalCostIrr: 1_000 },
+  ];
+  const unreturnedLayers = getUnreturnedConsumedCostLayers(originalFifoLayers, 3);
+  assert.deepEqual(unreturnedLayers, [
+    { layerId: 'fifo_a', qty: 5, unitCostIrr: 100, totalCostIrr: 500 },
+    { layerId: 'fifo_b', qty: 2, unitCostIrr: 200, totalCostIrr: 400 },
+  ]);
+  const secondPartialReturn = applyInventoryMovementStep({
+    productId: 'product_return_1',
+    costingMethod: 'fifo',
+    stockQty: 3,
+    totalValueIrr: 600,
+    weightedAvgUnitCostIrr: 200,
+    layers: [{
+      layerId: 'ret_previous',
+      date: '1405/01/11',
+      sourceRef: originalSale.id,
+      warehouse: originalSale.warehouse,
+      originalQty: 3,
+      remainingQty: 3,
+      unitCostIrr: 200,
+      totalCostIrr: 600,
+    }],
+  }, {
+    id: 'return_second_partial',
+    date: '1405/01/12',
+    kind: 'sale_return',
+    productId: 'product_return_1',
+    warehouse: originalSale.warehouse,
+    qty: 3,
+    sourceRefId: originalSale.id,
+    originalConsumedLayers: unreturnedLayers,
+  });
+  assert.equal(secondPartialReturn.cogsOrCostIrr, 500, 'Second partial return must restore 2×200 + 1×100, not repeat 3×200');
+  assert.equal(secondPartialReturn.nextState.stockQty, 6);
+  logPass('FIFO partial-return layer remainder', 'second partial return resumes from unreturned historical layers and restores exact 500 IRR');
+}
+
 
 /* ============================================================================
  * 1. HIGH-VOLUME PERFORMANCE & STRESS BENCHMARK (25,000 Vouchers, 10,000 Invoices, 2,500 Products)

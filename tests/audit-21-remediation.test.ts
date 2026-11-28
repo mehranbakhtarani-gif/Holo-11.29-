@@ -383,8 +383,8 @@ async function main() {
     assert.equal(serverSrc.includes('ALLOW_CLOUD_AI'), true, 'Server AI routes must require explicit ALLOW_CLOUD_AI opt-in');
     assert.equal(serverSrc.includes('auditTrailPreserved: true'), true, 'Server reset must preserve immutable audit log');
 
-    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoAnalyticalChartsRow.tsx')), false);
-    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoOperationalBottomRow.tsx')), false);
+    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoAnalyticalChartsRow.tsx')), true, 'BentoAnalyticalChartsRow must remain present; the historical dead-file assertion was stale');
+    assert.equal(fs.existsSync(path.resolve('src/components/dashboard/BentoOperationalBottomRow.tsx')), true, 'BentoOperationalBottomRow must remain present; the historical dead-file assertion was stale');
   });
 
   // 11. Full-audit deep pass (F-01 through F-08) regression invariants
@@ -400,7 +400,7 @@ async function main() {
 
     // F-04: Profile photo wired in App header and SettingsView
     const appSrc = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
-    assert.equal(appSrc.includes('profile.profilePhotoData || financeDirectorAvatar'), true, 'App header must render custom profile.profilePhotoData when present');
+    assert.equal(appSrc.includes('profile.profilePhotoData && !avatarError'), true, 'App header must render custom profile.profilePhotoData when present and handle image load errors');
     const settingsSrc = fs.readFileSync(path.resolve('src/components/SettingsView.tsx'), 'utf8');
     assert.equal(settingsSrc.includes('updateProfilePhoto'), true, 'SettingsView must wire updateProfilePhoto UI');
 

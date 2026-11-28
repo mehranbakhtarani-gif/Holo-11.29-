@@ -43,6 +43,11 @@ service cloud.firestore {
       return val is string && val.size() >= 1 && val.size() <= maxLen;
     }
 
+    // IRR accounting amounts must remain exact JavaScript-safe integers at the trust boundary.
+    function isSafeIrrAmount(val) {
+      return val is int && val >= 0 && val <= 9007199254740991;
+    }
+
     function isOptionalString(data, field, maxLen) {
       return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
     }
@@ -166,9 +171,10 @@ service cloud.firestore {
         && isNonEmptyString(data.description, 300)
         && data.voucherType in ['opening', 'general', 'sales', 'purchase', 'treasury', 'payroll', 'depreciation', 'closing']
         && data.status in ['draft', 'permanent']
-        && data.totalDebit is number && data.totalDebit >= 0
-        && data.totalCredit is number && data.totalCredit >= 0
+        && isSafeIrrAmount(data.totalDebit)
+        && isSafeIrrAmount(data.totalCredit)
         && data.totalDebit == data.totalCredit
+        && (data.status == 'draft' || data.totalDebit > 0)
         && isOptionalString(data, 'currencyCode', 10)
         && (!('exchangeRate' in data) || (data.exchangeRate is number && data.exchangeRate > 0))
         && (!('foreignTotalDebit' in data) || (data.foreignTotalDebit is number && data.foreignTotalDebit >= 0))
@@ -203,14 +209,14 @@ service cloud.firestore {
         && (!('foreignDiscount' in data) || (data.foreignDiscount is number && data.foreignDiscount >= 0))
         && (!('foreignVatAmount' in data) || (data.foreignVatAmount is number && data.foreignVatAmount >= 0))
         && (!('foreignGrandTotal' in data) || (data.foreignGrandTotal is number && data.foreignGrandTotal >= 0))
-        && data.subtotal is number && data.subtotal >= 0
-        && data.discount is number && data.discount >= 0
-        && data.vatAmount is number && data.vatAmount >= 0
-        && data.grandTotal is number && data.grandTotal >= 0
-        && data.paidCash is number && data.paidCash >= 0
-        && data.paidBank is number && data.paidBank >= 0
-        && data.paidCheque is number && data.paidCheque >= 0
-        && data.creditAmount is number && data.creditAmount >= 0
+        && isSafeIrrAmount(data.subtotal)
+        && isSafeIrrAmount(data.discount)
+        && isSafeIrrAmount(data.vatAmount)
+        && isSafeIrrAmount(data.grandTotal)
+        && isSafeIrrAmount(data.paidCash)
+        && isSafeIrrAmount(data.paidBank)
+        && isSafeIrrAmount(data.paidCheque)
+        && isSafeIrrAmount(data.creditAmount)
         && data.status in ['issued', 'settled', 'cancelled']
         && isOptionalString(data, 'voucherId', 128)
         && data.items is list && data.items.size() >= 1 && data.items.size() <= 100 && data.items[0] is map
@@ -269,9 +275,10 @@ service cloud.firestore {
         && isNonEmptyString(data.title, 160)
         && isNonEmptyString(data.purchaseDate, 20)
         && data.purchaseCost is number && data.purchaseCost > 0
-        && data.salvageValue is number && data.salvageValue >= 0
+        && data.salvageValue is number && data.salvageValue >= 0 && data.salvageValue <= data.purchaseCost
         && data.usefulLifeYears is number && data.usefulLifeYears > 0 && data.usefulLifeYears <= 100
         && data.accumulatedDepreciation is number && data.accumulatedDepreciation >= 0
+        && data.accumulatedDepreciation <= (data.purchaseCost - data.salvageValue)
         && isOptionalString(data, 'costCenterId', 128)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -468,6 +475,7 @@ service cloud.firestore {
           'volumeDiscountRules',
           'moadianLinks',
           'fiscalArchives',
+          'warehouseTransfers',
           '_version',
           'updatedByDevice',
           'createdAt',
@@ -489,6 +497,7 @@ service cloud.firestore {
         && isOptionalMapList(data, 'volumeDiscountRules', 50)
         && (!('moadianLinks' in data) || (data.moadianLinks is map && data.moadianLinks.size() <= 500))
         && isOptionalMapList(data, 'fiscalArchives', 25)
+        && isOptionalMapList(data, 'warehouseTransfers', 250)
         && isOptionalVersion(data)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -511,8 +520,8 @@ service cloud.firestore {
     }
 
     function isValidCloudBackup(data) {
-      return data.keys().hasAll(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshot', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'companyName', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshot', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshotEnvelope', 'encryption', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'revision', 'reason', 'deviceId', 'deviceLabel', 'companyName', 'fiscalYear', 'savedAtMs', 'savedAtShamsi', 'voucherCount', 'invoiceCount', 'productCount', 'sizeKb', 'snapshotEnvelope', 'encryption', 'createdAt', 'updatedAt'])
         && data.ownerId == request.auth.uid
         && isValidId(data.ownerId)
         && data.revision is number && data.revision >= 1
@@ -527,7 +536,8 @@ service cloud.firestore {
         && data.invoiceCount is number && data.invoiceCount >= 0
         && data.productCount is number && data.productCount >= 0
         && data.sizeKb is number && data.sizeKb >= 0 && data.sizeKb <= 1024
-        && data.snapshot is map && data.snapshot.size() >= 1 && data.snapshot.size() <= 30
+        && data.encryption == 'PBKDF2-SHA256+AES-256-GCM'
+        && isNonEmptyString(data.snapshotEnvelope, 900000)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -971,6 +981,7 @@ service cloud.firestore {
             'volumeDiscountRules',
             'moadianLinks',
             'fiscalArchives',
+            'warehouseTransfers',
             '_version',
             'updatedByDevice',
             'updatedAt'

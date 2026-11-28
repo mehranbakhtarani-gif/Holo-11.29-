@@ -700,8 +700,18 @@ runTest('7. Standalone Android/PWA assets, manifest config, IDB v2 schema & Fire
   assert.ok(rules.includes("'integrityHash'"));
 
   const opDb = fs.readFileSync(path.join(root, 'src/lib/operationalDb.ts'), 'utf8');
-  assert.ok(opDb.includes('OP_DB_VERSION = 3'));
+  assert.ok(opDb.includes('OP_DB_VERSION = 5'));
   assert.ok(opDb.includes('syncInbox'));
+  assert.ok(opDb.includes('secureWorkspace'));
+  assert.ok(opDb.includes('prepareEncryptedOperationalWorkspaceMigration'));
+  const workspaceLoaderStart = opDb.indexOf('export async function loadOperationalWorkspace()');
+  const workspaceLoaderEnd = opDb.indexOf('export function countOperationalWorkspaceRecords', workspaceLoaderStart);
+  const workspaceLoader = opDb.slice(workspaceLoaderStart, workspaceLoaderEnd);
+  for (const storeName of ['warehouses', 'taxReports', 'localProfiles', 'syncOutbox', 'syncInbox']) {
+    assert.ok(workspaceLoader.includes(`'${storeName}'`), `Encrypted migration source must include ${storeName}`);
+  }
+  assert.ok(opDb.includes('schemaVersion: 2'), 'Encrypted workspace schema must version the auxiliary-store coverage');
+
   assert.ok(opDb.includes('commitStockAdjustmentOperationalTx'));
 
   const reportExport = fs.readFileSync(path.join(root, 'src/lib/accountingReportExport.ts'), 'utf8');

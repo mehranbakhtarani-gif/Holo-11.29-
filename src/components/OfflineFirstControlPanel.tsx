@@ -20,7 +20,6 @@ import { useAccounting } from '../context/AccountingContext';
 import { useOnlineStatus } from '../hooks/usePWAInstall';
 import {
   buildIsolatedWorkspaceStorageKey,
-  computeSnapshotSha256Hex,
   createLocalOfflinePasscodeRecord,
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
@@ -46,6 +45,7 @@ import {
   type OfflineSwSnapshot,
 } from '../lib/offlineStatus';
 import { toPersianDigits } from '../lib/format';
+import { requireBackupSessionPassphrase } from '../lib/backupSession';
 
 const LOCAL_CRED_STORAGE_PREFIX = 'local_offline_credential_v1';
 
@@ -288,14 +288,16 @@ export const OfflineFirstControlPanel: React.FC<{
         return;
       }
       const res = await safeApplySwUpdateWithBackup(async () => {
-        const snap = exportBackupJson();
-        const sha256 = await computeSnapshotSha256Hex(snap);
+        const envelope = await encryptBackupEnvelope(
+          exportBackupJson(),
+          requireBackupSessionPassphrase()
+        );
         return savePreUpdateSafetyBackup({
           id: `pre_update_${Date.now()}`,
           reason: 'pwa_update',
           schemaVersion: OP_DB_VERSION,
-          sha256,
-          snapshotJson: snap,
+          sha256: envelope.plaintextSha256,
+          envelopeJson: JSON.stringify(envelope),
           createdAt: new Date().toISOString(),
         });
       });

@@ -23,10 +23,15 @@ import {
 } from '../src/lib/bankReconciliationEngine';
 import {
   canRoleAccessSensitivity,
+  deleteDocumentAttachment,
+  exportEncryptedDocumentAttachmentBundle,
+  listDocumentAttachments,
   retrieveVerifiedAttachment,
+  restoreEncryptedDocumentAttachmentBundle,
   saveDocumentAttachment,
 } from '../src/lib/documentVault';
 import { evaluateMultiDeviceSyncState } from '../src/lib/dualCloudSync';
+import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
 import { computeFinancialForecast } from '../src/lib/financialForecastEngine';
 import { parseHolo203Json, runHolo203Migration } from '../src/lib/holoMigrationEngine';
 import {
@@ -49,6 +54,7 @@ import {
   computeWarehouseProductKardex,
   evaluateWarehouseShortageSurplus,
   executeTrackedWarehouseTransfer,
+  receiveTrackedWarehouseTransfer,
 } from '../src/lib/multiWarehouseEngine';
 import {
   computeSandboxDiff,
@@ -748,11 +754,60 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
     transferNumber: 'TRF-101',
     mode: 'immediate',
     defaultCostingMethod: 'fifo',
+    existingTransfers: [],
   });
   assert.equal(trf1.pnlImpactIrr, 0, 'Inter-warehouse transfer MUST have strictly 0 P&L impact');
   assert.equal(trf1.transferRecord.transferredCostIrr, 120_000_000);
   assert.equal(trf1.updatedProduct.stock, 100, 'Total physical stock across warehouses stays 100 kg');
   assert.equal(trf1.updatedProduct.inventoryValueIrr, 400_000_000, 'Total inventory value stays 400M IRR');
+  assert.throws(() => executeTrackedWarehouseTransfer({
+    product: prod,
+    fromWarehouse: 'انبار مرکزی',
+    toWarehouse: 'انبار شادآباد',
+    qty: 30,
+    date: '1405/02/05',
+    transferNumber: 'TRF-101',
+    mode: 'immediate',
+    defaultCostingMethod: 'fifo',
+    existingTransfers: [trf1.transferRecord],
+  }), /شماره انتقال برای این کالا قبلاً ثبت شده است/);
+
+  const fractionalProduct: Product = {
+    ...prod,
+    id: 'p_mw_fractional',
+    stock: 0.0145,
+    inventoryValueIrr: 14_500,
+    costLayers: [{
+      layerId: 'fractional-source-layer',
+      date: '1405/01/10',
+      sourceRef: 'fractional-opening',
+      warehouse: 'انبار مرکزی',
+      originalQty: 0.0145,
+      remainingQty: 0.0145,
+      unitCostIrr: 1_000_000,
+      totalCostIrr: 14_500,
+    }],
+  };
+  const fractionalTransfer = executeTrackedWarehouseTransfer({
+    product: fractionalProduct,
+    fromWarehouse: 'انبار مرکزی',
+    toWarehouse: 'انبار مقصد',
+    qty: 0.0045,
+    date: '1405/02/06',
+    transferNumber: 'TRF-FRACTIONAL',
+    mode: 'immediate',
+    defaultCostingMethod: 'fifo',
+    existingTransfers: [],
+  });
+  assert.equal(fractionalTransfer.updatedProduct.stock, 0.0145,
+    'warehouse transfers must preserve four-decimal stock precision');
+  assert.ok(
+    Math.abs(
+      (fractionalTransfer.updatedProduct.costLayers?.reduce((sum, layer) => sum + layer.remainingQty, 0) || 0) -
+      fractionalTransfer.updatedProduct.stock
+    ) < 0.00005,
+    'transferred and remaining cost layers must reconcile to product stock within quantity precision'
+  );
 
   // Transfer 10 kg in_transit to 'انبار تبریز'
   const trf2 = executeTrackedWarehouseTransfer({
@@ -764,8 +819,35 @@ test('6. Multi-Warehouse Physical/Reserved/Available/In-Transit, Tracked Transfe
     transferNumber: 'TRF-102',
     mode: 'in_transit',
     defaultCostingMethod: 'fifo',
+    existingTransfers: [trf1.transferRecord],
   });
   assert.equal(trf2.transferRecord.status, 'in_transit');
+
+  const receivedTransfer = receiveTrackedWarehouseTransfer({
+    product: trf2.updatedProduct,
+    transfer: trf2.transferRecord,
+    receivedDate: '1405/02/12',
+  });
+  assert.equal(receivedTransfer.transferRecord.status, 'received');
+  assert.equal(receivedTransfer.transferRecord.receivedDate, '1405/02/12');
+  assert.equal(receivedTransfer.updatedProduct.stock, 100);
+  assert.equal(receivedTransfer.updatedProduct.inventoryValueIrr, 400_000_000);
+  assert.equal(
+    receivedTransfer.updatedProduct.costLayers?.filter((layer) =>
+      layer.layerId.startsWith(`trf_${trf2.transferRecord.id}_`) &&
+      layer.warehouse === 'انبار تبریز'
+    ).reduce((sum, layer) => sum + layer.remainingQty, 0),
+    10
+  );
+  assert.throws(
+    () => receiveTrackedWarehouseTransfer({
+      product: receivedTransfer.updatedProduct,
+      transfer: receivedTransfer.transferRecord,
+      receivedDate: '1405/02/13',
+    }),
+    /فقط انتقال در راه/
+  );
+
 
   const matrix = computeMultiWarehouseMatrix({
     products: [trf2.updatedProduct],
@@ -1199,6 +1281,7 @@ test('11. Backup Integrity Verifies Checksum and Detects Tampered/Corrupted Snap
 // TEST 12: OFFLINE DOCUMENT VAULT (SHA-256 INTEGRITY & RBAC SENSITIVITY)
 // ============================================================================
 test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification & RBAC Sensitivity', async () => {
+  unlockBackupSession('document-vault-test-passphrase');
   const badMime = await saveDocumentAttachment({
     entityType: 'invoice',
     entityId: 'inv_1',
@@ -1210,6 +1293,30 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
     uploadedByRole: 'finance_manager',
   });
   assert.equal(badMime.ok, false);
+
+  const mismatchedMime = await saveDocumentAttachment({
+    entityType: 'invoice',
+    entityId: 'inv_bad_mime',
+    entityLabel: 'محتوای ناسازگار',
+    fileName: 'wrong.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+    uploadedBy: 'کاربر',
+    uploadedByRole: 'finance_manager',
+  });
+  assert.equal(mismatchedMime.ok, false, 'Data URL MIME must match declared attachment MIME');
+
+  const malformedBase64 = await saveDocumentAttachment({
+    entityType: 'invoice',
+    entityId: 'inv_bad_base64',
+    entityLabel: 'Base64 خراب',
+    fileName: 'broken.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:application/pdf;base64,not-base64!!',
+    uploadedBy: 'کاربر',
+    uploadedByRole: 'finance_manager',
+  });
+  assert.equal(malformedBase64.ok, false, 'Attachment payload must be valid base64 before encryption');
 
   const saved = await saveDocumentAttachment({
     entityType: 'contract',
@@ -1230,10 +1337,101 @@ test('12. Offline Document Vault Enforces MIME Allowlist, SHA-256 Verification &
   const denied = await retrieveVerifiedAttachment(saved.meta.id, 'warehouse_keeper');
   assert.equal(denied.ok, false);
 
+  const listed = await listDocumentAttachments({ entityType: 'contract', entityId: 'cnt_405' });
+  assert.equal(listed.length, 1);
+  assert.equal('dataUrl' in listed[0], false, 'Metadata listing must never expose plaintext attachment bytes');
+
+  lockBackupSession();
+  const locked = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
+  assert.equal(locked.ok, false, 'Encrypted attachment retrieval must require an unlocked vault');
+
+  unlockBackupSession('incorrect-document-vault-passphrase');
+  const wrongPassphrase = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
+  assert.equal(wrongPassphrase.ok, false, 'Wrong passphrase must not decrypt an attachment');
+
+  unlockBackupSession('document-vault-test-passphrase');
   const allowed = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
   assert.equal(allowed.ok, true);
   if (allowed.ok) {
     assert.equal(allowed.integrityValid, true);
+    assert.equal(allowed.record.dataUrl, 'data:application/pdf;base64,JVBERi0xLjQK');
+  }
+
+  const encryptedBundleJson = await exportEncryptedDocumentAttachmentBundle();
+  assert.equal(encryptedBundleJson.includes('data:application/pdf;base64,JVBERi0xLjQK'), false,
+    'Portable attachment bundle must not contain plaintext file bytes');
+  const tamperedBundle = JSON.parse(encryptedBundleJson) as {
+    format: string; schemaVersion: number; exportedAt: string;
+    attachments: Array<{ encryptedEnvelope: string }>;
+  };
+  const originalEnvelope = tamperedBundle.attachments[0].encryptedEnvelope;
+  tamperedBundle.attachments[0].encryptedEnvelope = (originalEnvelope[0] === 'A' ? 'B' : 'A') + originalEnvelope.slice(1);
+  await assert.rejects(
+    () => restoreEncryptedDocumentAttachmentBundle(JSON.stringify(tamperedBundle)),
+    /رمزگشایی|خراب|معتبر/
+  );
+
+  const tamperedMetadataBundle = JSON.parse(encryptedBundleJson) as {
+    attachments: Array<{ entityId: string }>;
+  };
+  tamperedMetadataBundle.attachments[0].entityId = 'invoice_other_tenant';
+  await assert.rejects(
+    () => restoreEncryptedDocumentAttachmentBundle(JSON.stringify(tamperedMetadataBundle)),
+    /اصالت فراداده/
+  );
+
+  const postExportAttachment = await saveDocumentAttachment({
+    entityType: 'invoice',
+    entityId: 'inv_after_export',
+    entityLabel: 'پیوست ایجادشده پس از تهیه پشتیبان',
+    fileName: 'later.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+    uploadedBy: 'مدیر مالی',
+    uploadedByRole: 'finance_manager',
+  });
+  assert.equal(postExportAttachment.ok, true, 'A second attachment should be persisted before testing full restore replacement');
+  if (!postExportAttachment.ok) return;
+
+  const removed = await deleteDocumentAttachment(saved.meta.id, 'finance_manager');
+  assert.equal(removed.ok, true);
+  const restored = await restoreEncryptedDocumentAttachmentBundle(encryptedBundleJson);
+  assert.equal(restored.restored, 1);
+  const afterRestore = await retrieveVerifiedAttachment(saved.meta.id, 'auditor_readonly');
+  assert.equal(afterRestore.ok, true);
+  if (afterRestore.ok) assert.equal(afterRestore.integrityValid, true);
+  const staleAfterRestore = await retrieveVerifiedAttachment(postExportAttachment.meta.id, 'finance_manager');
+  assert.equal(staleAfterRestore.ok, false, 'Full backup restore must remove attachments absent from the backup snapshot');
+  lockBackupSession();
+});
+
+// ============================================================================
+// TEST 12B: DOCUMENT VAULT MUST FAIL CLOSED WHEN BROWSER PERSISTENCE FAILS
+// ============================================================================
+test('12B. Document Vault Never Reports Success When Browser IndexedDB Is Unavailable', async () => {
+  unlockBackupSession('document-vault-test-passphrase');
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { indexedDB: { open: () => { throw new Error('simulated IndexedDB failure'); } } },
+  });
+  try {
+    const result = await saveDocumentAttachment({
+      entityType: 'invoice',
+      entityId: 'inv_no_persistence',
+      entityLabel: 'فاکتور بدون ذخیره پایدار',
+      fileName: 'invoice.pdf',
+      mimeType: 'application/pdf',
+      dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+      uploadedBy: 'آزمایش',
+      uploadedByRole: 'finance_manager',
+    });
+    assert.equal(result.ok, false, 'A failed IndexedDB write must never be reported as successful');
+    if (!result.ok) assert.match(result.error, /IndexedDB/);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'window', previous);
+    else Reflect.deleteProperty(globalThis, 'window');
+    lockBackupSession();
   }
 });
 

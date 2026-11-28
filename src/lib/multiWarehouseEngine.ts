@@ -25,7 +25,7 @@ import {
   roundQty,
   WarehouseTransferPlan,
 } from './inventoryCostingEngine';
-import { addIrr, mulQtyByIrr, roundQtyFixed, sumIrr, toExactIrr } from './moneyMath';
+import { addIrr, computeDeterministicHash256, mulQtyByIrr, roundQtyFixed, sumIrr, toExactIrr } from './moneyMath';
 
 export type WarehouseTransferStatus = 'in_transit' | 'received' | 'cancelled';
 
@@ -297,6 +297,7 @@ export function executeTrackedWarehouseTransfer(params: {
   operatorName?: string;
   notes?: string;
   defaultCostingMethod?: InventoryCostingMethod;
+  existingTransfers: readonly TrackedWarehouseTransfer[];
 }): {
   plan: WarehouseTransferPlan;
   updatedProduct: Product;
@@ -314,7 +315,22 @@ export function executeTrackedWarehouseTransfer(params: {
     operatorName,
     notes,
     defaultCostingMethod = 'moving_average',
+    existingTransfers,
   } = params;
+
+  const cleanTransferNumber = transferNumber.trim();
+  if (!cleanTransferNumber || cleanTransferNumber.length > 80) {
+    throw new Error('شماره انتقال انبار خالی یا بیش از حد طولانی است.');
+  }
+  if (!Array.isArray(existingTransfers)) {
+    throw new Error('برای جلوگیری از ثبت تکراری، فهرست انتقال‌های قبلی الزامی است.');
+  }
+  if (existingTransfers.some((item) =>
+    item.productId === product.id &&
+    item.transferNumber.trim().toLocaleLowerCase() === cleanTransferNumber.toLocaleLowerCase()
+  )) {
+    throw new Error('شماره انتقال برای این کالا قبلاً ثبت شده است؛ از اجرای دوباره انتقال جلوگیری شد.');
+  }
 
   const state = normalizeProductCostState(product, defaultCostingMethod);
   // Filter layers belonging to source warehouse
@@ -330,7 +346,10 @@ export function executeTrackedWarehouseTransfer(params: {
     layers: sourceLayers,
   };
 
-  const transferId = `trf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const transferId = `trf_${computeDeterministicHash256(`${product.id}::${cleanTransferNumber}`).slice(0, 24)}`;
+  if (state.layers.some((layer) => layer.layerId.startsWith(`trf_${transferId}_`))) {
+    throw new Error('شناسه انتقال قبلاً در لایه‌های موجودی این کالا اعمال شده است؛ انتقال تکراری متوقف شد.');
+  }
   const plan = planWarehouseTransfer({
     state: sourceState,
     fromWarehouse,
@@ -348,7 +367,7 @@ export function executeTrackedWarehouseTransfer(params: {
   }));
 
   const combinedLayers = [...otherLayers, ...plan.remainingSourceLayers, ...movedLayers];
-  const totalQty = roundQtyFixed(combinedLayers.reduce((s, l) => s + l.remainingQty, 0), 2);
+  const totalQty = roundQty(combinedLayers.reduce((s, l) => s + l.remainingQty, 0));
   const totalValIrr = sumIrr(combinedLayers.map((l) => l.totalCostIrr));
 
   const updatedProduct: Product = {
@@ -364,7 +383,7 @@ export function executeTrackedWarehouseTransfer(params: {
 
   const transferRecord: TrackedWarehouseTransfer = {
     id: transferId,
-    transferNumber,
+    transferNumber: cleanTransferNumber,
     date,
     receivedDate: mode === 'immediate' ? date : undefined,
     productId: product.id,
@@ -391,6 +410,87 @@ export function executeTrackedWarehouseTransfer(params: {
 /**
  * Builds an independent per-warehouse Kardex for a specific product.
  */
+/**
+ * Receives an in-transit tracked transfer without changing total stock or inventory value.
+ * Every transferred FIFO layer must still exist under the expected in-transit warehouse.
+ */
+export function receiveTrackedWarehouseTransfer(params: {
+  product: Product;
+  transfer: TrackedWarehouseTransfer;
+  receivedDate: string;
+}): {
+  updatedProduct: Product;
+  transferRecord: TrackedWarehouseTransfer;
+} {
+  const { product, transfer, receivedDate } = params;
+  if (transfer.status !== 'in_transit') {
+    throw new Error('فقط انتقال در راه قابل دریافت است؛ دریافت تکراری یا انتقال لغوشده مجاز نیست.');
+  }
+  if (transfer.productId !== product.id) {
+    throw new Error('کالای انتقال با کالای انتخاب‌شده تطابق ندارد.');
+  }
+  if (!receivedDate.trim() || !transfer.toWarehouse.trim()) {
+    throw new Error('تاریخ دریافت و انبار مقصد برای ثبت دریافت معتبر نیستند.');
+  }
+  if (!Array.isArray(transfer.transferredLayers) || transfer.transferredLayers.length === 0) {
+    throw new Error('لایه‌های بهای انتقال برای دریافت یافت نشدند.');
+  }
+
+  const state = normalizeProductCostState(product, product.costingMethod || 'moving_average');
+  const transitWarehouse = `در راه → ${transfer.toWarehouse}`;
+  const expectedLayers = new Map(
+    transfer.transferredLayers.map((layer) => [layer.layerId, layer])
+  );
+  if (expectedLayers.size !== transfer.transferredLayers.length) {
+    throw new Error('شناسه لایه‌های انتقال تکراری است؛ دریافت متوقف شد.');
+  }
+
+  const foundLayerIds = new Set<string>();
+  const receivedLayers = state.layers.map((layer) => {
+    const expected = expectedLayers.get(layer.layerId);
+    if (!expected) return layer;
+    if (
+      layer.warehouse !== transitWarehouse ||
+      Math.abs(layer.remainingQty - expected.remainingQty) > 0.00005 ||
+      Math.round(layer.totalCostIrr) !== Math.round(expected.totalCostIrr)
+    ) {
+      throw new Error('لایه کالای در راه با جزئیات انتقال ثبت‌شده تطابق ندارد؛ دریافت متوقف شد.');
+    }
+    foundLayerIds.add(layer.layerId);
+    return { ...layer, warehouse: transfer.toWarehouse };
+  });
+
+  if (foundLayerIds.size !== expectedLayers.size) {
+    throw new Error('تمام لایه‌های انتقال در وضعیت در راه موجود نیستند؛ دریافت متوقف شد.');
+  }
+  const receivedQty = roundQty(transfer.transferredLayers.reduce((sum, layer) => sum + layer.remainingQty, 0));
+  const receivedCostIrr = sumIrr(transfer.transferredLayers.map((layer) => layer.totalCostIrr));
+  if (
+    Math.abs(receivedQty - transfer.qty) > 0.00005 ||
+    receivedCostIrr !== Math.round(transfer.transferredCostIrr)
+  ) {
+    throw new Error('مقدار یا ارزش لایه‌های انتقال با سند انتقال تطابق ندارد؛ دریافت متوقف شد.');
+  }
+
+  const updatedProduct: Product = {
+    ...product,
+    warehouse: receivedLayers.length > 0 && receivedLayers.every((layer) => layer.warehouse === transfer.toWarehouse)
+      ? transfer.toWarehouse
+      : product.warehouse,
+    stock: state.stockQty,
+    inventoryValueIrr: state.totalValueIrr,
+    costLayers: receivedLayers,
+  };
+  return {
+    updatedProduct,
+    transferRecord: {
+      ...transfer,
+      status: 'received',
+      receivedDate,
+    },
+  };
+}
+
 export function computeWarehouseProductKardex(params: {
   product: Product;
   warehouse: string;

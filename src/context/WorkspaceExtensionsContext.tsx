@@ -8,12 +8,18 @@ import React, {
   useState,
 } from 'react';
 import {
+  getChangedWorkspaceExtensionKeys,
+  mergeRemoteArray,
+  mergeWorkspaceExtensionField,
+} from '../lib/workspaceExtensionsMerge';
+import {
   collection,
   deleteDoc,
   doc,
   getDoc,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -26,6 +32,7 @@ import {
   OperationType,
 } from '../lib/firebase';
 import { useAccounting } from './AccountingContext';
+import { isOperationalRestoreBarrierActive } from '../lib/operationalDb';
 import {
   BankLoan,
   BomFormula,
@@ -48,11 +55,13 @@ import {
   loadReservedInvoices,
   ProductApexMeta,
   ReservedInvoice,
-  saveFavoriteMenus,
-  saveProductApexMeta,
-  saveReservedInvoices,
 } from '../lib/smartIntelligence';
-import { ActiveModule } from '../types/accounting';
+import { ActiveModule, Product } from '../types/accounting';
+import {
+  executeTrackedWarehouseTransfer,
+  receiveTrackedWarehouseTransfer as planTrackedWarehouseReceipt,
+  TrackedWarehouseTransfer,
+} from '../lib/multiWarehouseEngine';
 
 const LOCAL_EXT_STORAGE_KEY = 'holoo_apex96_workspace_extensions_v2';
 
@@ -71,6 +80,7 @@ export interface WorkspaceExtensionsState {
   volumeDiscountRules: VolumeDiscountRule[];
   moadianLinks: Record<string, MoadianInvoiceMeta>;
   fiscalArchives: FiscalYearArchive[];
+  warehouseTransfers: TrackedWarehouseTransfer[];
 }
 
 function stripUndefinedDeep<T>(value: T): T {
@@ -80,8 +90,13 @@ function stripUndefinedDeep<T>(value: T): T {
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v !== undefined) {
-        out[k] = stripUndefinedDeep(v);
+      if (v !== undefined && k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+        Object.defineProperty(out, k, {
+          value: stripUndefinedDeep(v),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
       }
     }
     return out as T;
@@ -136,6 +151,7 @@ function loadInitialExtensions(): WorkspaceExtensionsState {
     moadianLinks:
       saved.moadianLinks && typeof saved.moadianLinks === 'object' ? saved.moadianLinks : {},
     fiscalArchives: Array.isArray(saved.fiscalArchives) ? saved.fiscalArchives : [],
+    warehouseTransfers: Array.isArray(saved.warehouseTransfers) ? saved.warehouseTransfers : [],
   };
 }
 
@@ -155,6 +171,11 @@ interface WorkspaceExtensionsContextValue extends WorkspaceExtensionsState {
   setPresenceModule: (mod: ActiveModule) => void;
   setEditingLock: (recordKey: string, recordLabel?: string) => void;
   getConflictingDevices: (recordKey: string) => DevicePresenceRecord[];
+  createTrackedWarehouseTransfer: (params: {
+    productId: string; fromWarehouse: string; toWarehouse: string; qty: number;
+    transferNumber: string; mode: 'immediate' | 'in_transit'; date: string;
+  }) => Promise<TrackedWarehouseTransfer>;
+  receiveTrackedWarehouseTransfer: (transferId: string, receivedDate: string) => Promise<TrackedWarehouseTransfer>;
 }
 
 const WorkspaceExtensionsContext = createContext<WorkspaceExtensionsContextValue | null>(null);
@@ -162,7 +183,7 @@ const WorkspaceExtensionsContext = createContext<WorkspaceExtensionsContextValue
 export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products } = useAccounting();
+  const { user, isCloudMode, deviceId, deviceLabel, activeOperator, products, updateProduct, isPrivilegedOperator } = useAccounting();
 
   const [state, setState] = useState<WorkspaceExtensionsState>(() => loadInitialExtensions());
   const [onlineDevices, setOnlineDevices] = useState<DevicePresenceRecord[]>([]);
@@ -172,14 +193,18 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     label: '',
   });
 
-  const hasCloudExtDocRef = useRef(false);
   const versionRef = useRef(1);
+  const cloudWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeCloudUidRef = useRef<string | null>(isCloudMode ? user?.uid ?? null : null);
+  const pendingCloudMutationsRef = useRef(0);
+  activeCloudUidRef.current = isCloudMode ? user?.uid ?? null : null;
   const hasPresenceDocRef = useRef(false);
   const stateRef = useRef(state);
   stateRef.current = state;
 
   // Seed default dye-lots once from existing products if user has none yet
   useEffect(() => {
+    if (isOperationalRestoreBarrierActive()) return;
     if (stateRef.current.dyeLots.length === 0 && products.length > 0) {
       const seededLots: YarnDyeLot[] = products
         .filter((p) => p.lotNumber && p.stock > 0)
@@ -207,23 +232,56 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   // Persist local mirror whenever state changes
   const persistLocalMirror = useCallback((next: WorkspaceExtensionsState) => {
+    if (isOperationalRestoreBarrierActive()) return;
+    // Keep the four compatibility stores convergent if a quota/security error
+    // interrupts the write sequence. localStorage has no multi-key transaction,
+    // so capture previous values and roll back every key already written.
+    const writes: Array<[string, string]> = [
+      [LOCAL_EXT_STORAGE_KEY, JSON.stringify(next)],
+      ['holoo_apex96_reserved_invoices_v1', JSON.stringify(next.reservedInvoices)],
+      ['holoo_apex96_favorite_menus', JSON.stringify(next.favoriteMenus)],
+      ['holoo_apex96_product_meta_v1', JSON.stringify(next.productMetaMap)],
+    ];
+    const previous = writes.map(([key]) => [key, localStorage.getItem(key)] as const);
+    let completed = 0;
     try {
-      localStorage.setItem(LOCAL_EXT_STORAGE_KEY, JSON.stringify(next));
-      saveReservedInvoices(next.reservedInvoices);
-      saveFavoriteMenus(next.favoriteMenus);
-      for (const [k, v] of Object.entries(next.productMetaMap)) {
-        saveProductApexMeta(k, v);
+      for (const [key, value] of writes) {
+        localStorage.setItem(key, value);
+        completed += 1;
       }
-    } catch {
-      // ignore quota errors
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      for (let index = completed - 1; index >= 0; index -= 1) {
+        const [key, value] = previous[index];
+        try {
+          if (value === null) localStorage.removeItem(key);
+          else localStorage.setItem(key, value);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        throw new Error(
+          `Workspace extension persistence failed and rollback was incomplete: ${String(error)}; ${rollbackErrors.length} rollback error(s)`
+        );
+      }
+      throw error;
     }
   }, []);
 
-  // Push cloud patch safely matching firestore.rules bounds
+  // Serialize local writes and transactionally patch only fields changed by this device.
+  // Firestore retries the transaction if another device commits between read and write.
   const pushToCloud = useCallback(
-    async (next: WorkspaceExtensionsState) => {
-      if (!isCloudMode || !user?.uid) return;
-      const docRef = doc(db, 'workspaceExtensions', user.uid);
+    async (
+      next: WorkspaceExtensionsState,
+      previous: WorkspaceExtensionsState = next
+    ) => {
+      if (isOperationalRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
+      const cloudUid = user.uid;
+      if (activeCloudUidRef.current !== cloudUid) return;
+
+      const docRef = doc(db, 'workspaceExtensions', cloudUid);
+      const changedKeys = getChangedWorkspaceExtensionKeys(previous, next);
       const bounded = stripUndefinedDeep({
         reservedInvoices: next.reservedInvoices.slice(0, 50),
         productMetaMap: Object.fromEntries(Object.entries(next.productMetaMap).slice(0, 500)),
@@ -239,39 +297,98 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         volumeDiscountRules: next.volumeDiscountRules.slice(0, 50),
         moadianLinks: Object.fromEntries(Object.entries(next.moadianLinks).slice(0, 500)),
         fiscalArchives: next.fiscalArchives.slice(0, 25),
-        _version: versionRef.current + 1,
-        updatedByDevice: deviceLabel.slice(0, 120),
+        warehouseTransfers: next.warehouseTransfers.slice(0, 250),
       });
 
-      try {
-        if (!hasCloudExtDocRef.current) {
-          const snap = await getDoc(docRef);
-          hasCloudExtDocRef.current = snap.exists();
-        }
-        if (hasCloudExtDocRef.current) {
-          await updateDoc(docRef, {
-            ...bounded,
-            updatedAt: serverTimestamp(),
+      const write = async () => {
+        if (isOperationalRestoreBarrierActive() || activeCloudUidRef.current !== cloudUid) return;
+        try {
+          const committedVersion = await runTransaction(db, async (transaction) => {
+            if (activeCloudUidRef.current !== cloudUid) throw new Error('Workspace account changed before cloud write');
+            const snap = await transaction.get(docRef);
+            if (activeCloudUidRef.current !== cloudUid) throw new Error('Workspace account changed during cloud write');
+            if (!snap.exists()) {
+              transaction.set(docRef, {
+                ownerId: user.uid,
+                ...bounded,
+                _version: 1,
+                updatedByDevice: deviceLabel.slice(0, 120),
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              return 1;
+            }
+
+            const remote = snap.data();
+            const remoteVersion =
+              Number.isSafeInteger(remote._version) && remote._version >= 0
+                ? remote._version
+                : 0;
+            if (remoteVersion >= Number.MAX_SAFE_INTEGER) {
+              throw new Error('Workspace extension cloud version limit reached');
+            }
+
+            const patch: Record<string, unknown> = {};
+            for (const key of changedKeys) {
+              const remoteValue = Object.prototype.hasOwnProperty.call(remote, key)
+                ? remote[key]
+                : previous[key];
+              const merged = mergeWorkspaceExtensionField(
+                previous[key],
+                bounded[key],
+                remoteValue
+              );
+              if (!merged.ok) {
+                throw new Error(
+                  `Workspace extension concurrent conflict in ${String(key)}: ${merged.conflicts.join(', ')}`
+                );
+              }
+              if (
+                (Array.isArray(merged.value) && merged.value.length > (key === 'reservedInvoices' ? 50 :
+                  key === 'favoriteMenus' ? 30 : key === 'pettyCashItems' ? 200 :
+                  key === 'recurringTemplates' ? 50 : key === 'bankLoans' ? 50 :
+                  key === 'dyeLots' ? 250 : key === 'warehouseSlips' ? 200 :
+                  key === 'bomFormulas' ? 100 : key === 'installmentPlans' ? 120 :
+                  key === 'volumeDiscountRules' ? 50 : key === 'fiscalArchives' ? 25 : Number.MAX_SAFE_INTEGER)) ||
+                ((key === 'productMetaMap' || key === 'moadianLinks') &&
+                  merged.value && typeof merged.value === 'object' &&
+                  Object.keys(merged.value as Record<string, unknown>).length > 500)
+              ) {
+                throw new Error(`Workspace extension concurrent merge exceeds the cloud limit for ${String(key)}`);
+              }
+              patch[key as string] = merged.value;
+            }
+            if (Object.keys(patch).length === 0) return remoteVersion;
+
+            const nextVersion = remoteVersion + 1;
+            transaction.update(docRef, {
+              ...patch,
+              _version: nextVersion,
+              updatedByDevice: deviceLabel.slice(0, 120),
+              updatedAt: serverTimestamp(),
+            });
+            return nextVersion;
           });
-        } else {
-          await setDoc(docRef, {
-            ownerId: user.uid,
-            ...bounded,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          hasCloudExtDocRef.current = true;
-        }
-        versionRef.current = bounded._version;
-      } catch (err) {
-        if (!isFirestoreOfflineError(err)) {
-          try {
-            handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${user.uid}`);
-          } catch {
-            // logged cleanly
+
+          versionRef.current = Math.max(versionRef.current, committedVersion);
+        } catch (err) {
+          if (activeCloudUidRef.current !== cloudUid && err instanceof Error && err.message.includes('Workspace account changed')) return;
+          if (!isFirestoreOfflineError(err)) {
+            try {
+              handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${cloudUid}`);
+            } catch {
+              // logged cleanly
+            }
           }
         }
-      }
+      };
+
+      pendingCloudMutationsRef.current += 1;
+      const queuedWrite = cloudWriteQueueRef.current.then(write, write).finally(() => {
+        pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
+      });
+      cloudWriteQueueRef.current = queuedWrite;
+      await queuedWrite;
     },
     [isCloudMode, user?.uid, deviceLabel]
   );
@@ -279,7 +396,6 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   // Live Firestore listener for /workspaceExtensions/{uid}
   useEffect(() => {
     if (!isCloudMode || !user?.uid) {
-      hasCloudExtDocRef.current = false;
       return;
     }
 
@@ -287,18 +403,19 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     const unsub = onSnapshot(
       docRef,
       (snap) => {
+        if (isOperationalRestoreBarrierActive() || activeCloudUidRef.current !== user.uid) return;
+        if (pendingCloudMutationsRef.current > 0) return;
         if (!snap.exists()) {
-          hasCloudExtDocRef.current = false;
           // Bootstrap cloud extensions from current local workspace
-          void pushToCloud(stateRef.current);
+          void pushToCloud(stateRef.current, stateRef.current);
           return;
         }
-        hasCloudExtDocRef.current = true;
         const data = snap.data() as Partial<WorkspaceExtensionsState> & { _version?: number };
         if (typeof data._version === 'number') {
           versionRef.current = Math.max(versionRef.current, data._version);
         }
-        setState((prev) => {
+        if (isOperationalRestoreBarrierActive()) return;
+        const prev = stateRef.current;
           const merged: WorkspaceExtensionsState = {
             reservedInvoices: Array.isArray(data.reservedInvoices)
               ? data.reservedInvoices
@@ -307,10 +424,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
               data.productMetaMap && typeof data.productMetaMap === 'object'
                 ? data.productMetaMap
                 : prev.productMetaMap,
-            favoriteMenus:
-              Array.isArray(data.favoriteMenus) && data.favoriteMenus.length > 0
-                ? data.favoriteMenus
-                : prev.favoriteMenus,
+            favoriteMenus: mergeRemoteArray(data.favoriteMenus, prev.favoriteMenus),
             pettyCashCeilingIrr:
               typeof data.pettyCashCeilingIrr === 'number'
                 ? data.pettyCashCeilingIrr
@@ -318,10 +432,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             pettyCashItems: Array.isArray(data.pettyCashItems)
               ? data.pettyCashItems
               : prev.pettyCashItems,
-            recurringTemplates:
-              Array.isArray(data.recurringTemplates) && data.recurringTemplates.length > 0
-                ? data.recurringTemplates
-                : prev.recurringTemplates,
+            recurringTemplates: mergeRemoteArray(data.recurringTemplates, prev.recurringTemplates),
             bankLoans: Array.isArray(data.bankLoans) ? data.bankLoans : prev.bankLoans,
             dyeLots: Array.isArray(data.dyeLots) ? data.dyeLots : prev.dyeLots,
             warehouseSlips: Array.isArray(data.warehouseSlips)
@@ -331,10 +442,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             installmentPlans: Array.isArray(data.installmentPlans)
               ? data.installmentPlans
               : prev.installmentPlans,
-            volumeDiscountRules:
-              Array.isArray(data.volumeDiscountRules) && data.volumeDiscountRules.length > 0
-                ? data.volumeDiscountRules
-                : prev.volumeDiscountRules,
+            volumeDiscountRules: mergeRemoteArray(data.volumeDiscountRules, prev.volumeDiscountRules),
             moadianLinks:
               data.moadianLinks && typeof data.moadianLinks === 'object'
                 ? data.moadianLinks
@@ -342,10 +450,13 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             fiscalArchives: Array.isArray(data.fiscalArchives)
               ? data.fiscalArchives
               : prev.fiscalArchives,
+            warehouseTransfers: Array.isArray(data.warehouseTransfers)
+              ? data.warehouseTransfers
+              : prev.warehouseTransfers,
           };
-          persistLocalMirror(merged);
-          return merged;
-        });
+        persistLocalMirror(merged);
+        stateRef.current = merged;
+        setState(merged);
       },
       (err) => {
         if (!isFirestoreOfflineError(err)) {
@@ -461,12 +572,15 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   const updateExtensions = useCallback(
     (updater: (prev: WorkspaceExtensionsState) => WorkspaceExtensionsState) => {
-      setState((prev) => {
-        const next = updater(prev);
-        persistLocalMirror(next);
-        void pushToCloud(next);
-        return next;
-      });
+      if (isOperationalRestoreBarrierActive()) return;
+      // Avoid side effects inside a React state updater: React may replay updater
+      // functions. Keep the ref in sync so rapid consecutive actions compose safely.
+      const previous = stateRef.current;
+      const next = updater(previous);
+      persistLocalMirror(next);
+      stateRef.current = next;
+      setState(next);
+      void pushToCloud(next, previous);
     },
     [persistLocalMirror, pushToCloud]
   );
@@ -535,6 +649,168 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     [updateExtensions]
   );
 
+  const persistTransferState = useCallback((nextTransfers: TrackedWarehouseTransfer[]) => {
+    const previous = stateRef.current;
+    const next = { ...previous, warehouseTransfers: nextTransfers };
+    persistLocalMirror(next);
+    stateRef.current = next;
+    setState(next);
+  }, [persistLocalMirror]);
+
+  const createTrackedWarehouseTransfer = useCallback(async (params: {
+    productId: string; fromWarehouse: string; toWarehouse: string; qty: number;
+    transferNumber: string; mode: 'immediate' | 'in_transit'; date: string;
+  }): Promise<TrackedWarehouseTransfer> => {
+    if (isOperationalRestoreBarrierActive()) throw new Error('عملیات انتقال تا پایان بازیابی متوقف است.');
+    if (!isPrivilegedOperator(activeOperator) && !activeOperator.permissions.canEditInventory) {
+      throw new Error('مجوز ویرایش موجودی برای ثبت انتقال انبار کافی نیست.');
+    }
+    const localProduct = products.find((item) => item.id === params.productId);
+    if (!localProduct) throw new Error('کالای انتخاب‌شده یافت نشد.');
+    const cloudUid = isCloudMode ? user?.uid : null;
+    if (isCloudMode && !cloudUid) throw new Error('حساب ابری فعال نیست؛ انتقال ثبت نشد.');
+
+    pendingCloudMutationsRef.current += 1;
+    try {
+      let result: ReturnType<typeof executeTrackedWarehouseTransfer> | undefined;
+      if (cloudUid) {
+        const productRef = doc(db, 'products', params.productId);
+        const extensionRef = doc(db, 'workspaceExtensions', cloudUid);
+        await runTransaction(db, async (transaction) => {
+          if (activeCloudUidRef.current !== cloudUid) throw new Error('حساب کاربری هنگام انتقال تغییر کرد.');
+          const [productSnap, extensionSnap] = await Promise.all([
+            transaction.get(productRef), transaction.get(extensionRef),
+          ]);
+          if (!productSnap.exists()) throw new Error('کالای مبدا در پایگاه ابری وجود ندارد.');
+          const remoteProduct = { ...productSnap.data(), id: params.productId } as Product;
+          const extensionData = extensionSnap.exists() ? extensionSnap.data() : {};
+          const existing = Array.isArray(extensionData.warehouseTransfers)
+            ? extensionData.warehouseTransfers as TrackedWarehouseTransfer[] : [];
+          result = executeTrackedWarehouseTransfer({
+            product: remoteProduct, ...params, existingTransfers: existing,
+            defaultCostingMethod: remoteProduct.costingMethod || 'moving_average',
+            operatorName: activeOperator?.fullName,
+          });
+          transaction.update(productRef, {
+            stock: Number(result.updatedProduct.stock.toFixed(4)),
+            inventoryValueIrr: Math.round(result.updatedProduct.inventoryValueIrr || 0),
+            costLayers: result.updatedProduct.costLayers || [],
+            buyPrice: remoteProduct.buyPrice,
+            lotNumber: remoteProduct.lotNumber ?? '',
+            _version: Math.max(0, Number(productSnap.data()._version) || 0) + 1,
+            updatedByDevice: deviceLabel.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          });
+          const nextVersion = Math.max(0, Number(extensionData._version) || 0) + 1;
+          transaction.set(extensionRef, {
+            ownerId: cloudUid,
+            warehouseTransfers: [...existing, result.transferRecord].slice(-250),
+            _version: nextVersion,
+            updatedByDevice: deviceLabel.slice(0, 120),
+            createdAt: extensionSnap.exists() ? extensionData.createdAt : serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+        });
+      } else {
+        result = executeTrackedWarehouseTransfer({
+          product: localProduct, ...params,
+          existingTransfers: stateRef.current.warehouseTransfers,
+          defaultCostingMethod: localProduct.costingMethod || 'moving_average',
+          operatorName: activeOperator?.fullName,
+        });
+        await updateProduct(params.productId, {
+          stock: result.updatedProduct.stock,
+          inventoryValueIrr: result.updatedProduct.inventoryValueIrr,
+          costLayers: result.updatedProduct.costLayers,
+        });
+      }
+      if (!result) throw new Error('نتیجه انتقال تولید نشد.');
+      const nextTransfers = cloudUid
+        ? [...stateRef.current.warehouseTransfers.filter((item) => item.id !== result!.transferRecord.id), result.transferRecord].slice(-250)
+        : [...stateRef.current.warehouseTransfers, result.transferRecord].slice(-250);
+      persistTransferState(nextTransfers);
+      return result.transferRecord;
+    } finally {
+      pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
+    }
+  }, [products, isCloudMode, user?.uid, activeOperator, isPrivilegedOperator, deviceLabel, updateProduct, persistTransferState]);
+
+  const receiveTrackedWarehouseTransfer = useCallback(async (
+    transferId: string, receivedDate: string
+  ): Promise<TrackedWarehouseTransfer> => {
+    if (isOperationalRestoreBarrierActive()) throw new Error('عملیات دریافت تا پایان بازیابی متوقف است.');
+    if (!isPrivilegedOperator(activeOperator) && !activeOperator.permissions.canEditInventory) {
+      throw new Error('مجوز ویرایش موجودی برای دریافت انتقال انبار کافی نیست.');
+    }
+    const transfer = stateRef.current.warehouseTransfers.find((item) => item.id === transferId);
+    if (!transfer) throw new Error('سند انتقال یافت نشد.');
+    const localProduct = products.find((item) => item.id === transfer.productId);
+    if (!localProduct) throw new Error('کالای انتقال یافت نشد.');
+    const cloudUid = isCloudMode ? user?.uid : null;
+    if (isCloudMode && !cloudUid) throw new Error('حساب ابری فعال نیست؛ دریافت ثبت نشد.');
+
+    pendingCloudMutationsRef.current += 1;
+    try {
+      let updatedTransfer: TrackedWarehouseTransfer | undefined;
+      if (cloudUid) {
+        const productRef = doc(db, 'products', transfer.productId);
+        const extensionRef = doc(db, 'workspaceExtensions', cloudUid);
+        await runTransaction(db, async (transaction) => {
+          if (activeCloudUidRef.current !== cloudUid) throw new Error('حساب کاربری هنگام دریافت تغییر کرد.');
+          const [productSnap, extensionSnap] = await Promise.all([
+            transaction.get(productRef), transaction.get(extensionRef),
+          ]);
+          if (!productSnap.exists() || !extensionSnap.exists()) throw new Error('کالای انتقال یا دفتر انتقال ابری یافت نشد.');
+          const extensionData = extensionSnap.data();
+          const remoteTransfers = Array.isArray(extensionData.warehouseTransfers)
+            ? extensionData.warehouseTransfers as TrackedWarehouseTransfer[] : [];
+          const remoteTransfer = remoteTransfers.find((item) => item.id === transferId);
+          if (!remoteTransfer || remoteTransfer.status !== 'in_transit') {
+            throw new Error('انتقال در راه وجود ندارد یا قبلاً دریافت شده است.');
+          }
+          const remoteProduct = { ...productSnap.data(), id: transfer.productId } as Product;
+          const received = planTrackedWarehouseReceipt({
+            product: remoteProduct, transfer: remoteTransfer, receivedDate,
+          });
+          updatedTransfer = received.transferRecord;
+          transaction.update(productRef, {
+            stock: Number(received.updatedProduct.stock.toFixed(4)),
+            inventoryValueIrr: Math.round(received.updatedProduct.inventoryValueIrr || 0),
+            costLayers: received.updatedProduct.costLayers || [],
+            buyPrice: remoteProduct.buyPrice,
+            lotNumber: remoteProduct.lotNumber ?? '',
+            _version: Math.max(0, Number(productSnap.data()._version) || 0) + 1,
+            updatedByDevice: deviceLabel.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          });
+          transaction.update(extensionRef, {
+            warehouseTransfers: remoteTransfers.map((item) => item.id === transferId ? received.transferRecord : item),
+            _version: Math.max(0, Number(extensionData._version) || 0) + 1,
+            updatedByDevice: deviceLabel.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          });
+        });
+      } else {
+        const received = planTrackedWarehouseReceipt({
+          product: localProduct, transfer, receivedDate,
+        });
+        updatedTransfer = received.transferRecord;
+        await updateProduct(transfer.productId, {
+          stock: received.updatedProduct.stock,
+          inventoryValueIrr: received.updatedProduct.inventoryValueIrr,
+          costLayers: received.updatedProduct.costLayers,
+        });
+      }
+      if (!updatedTransfer) throw new Error('نتیجه دریافت انتقال تولید نشد.');
+      persistTransferState(stateRef.current.warehouseTransfers.map((item) =>
+        item.id === transferId ? updatedTransfer! : item
+      ));
+      return updatedTransfer;
+    } finally {
+      pendingCloudMutationsRef.current = Math.max(0, pendingCloudMutationsRef.current - 1);
+    }
+  }, [products, isCloudMode, user?.uid, activeOperator, isPrivilegedOperator, deviceLabel, updateProduct, persistTransferState]);
+
   const setPresenceModule = useCallback((mod: ActiveModule) => {
     setActivePresenceModule(mod);
   }, []);
@@ -577,6 +853,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       setPresenceModule,
       setEditingLock,
       getConflictingDevices,
+      createTrackedWarehouseTransfer,
+      receiveTrackedWarehouseTransfer,
     }),
     [
       state,
@@ -593,6 +871,8 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       setPresenceModule,
       setEditingLock,
       getConflictingDevices,
+      createTrackedWarehouseTransfer,
+      receiveTrackedWarehouseTransfer,
     ]
   );
 

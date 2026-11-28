@@ -218,6 +218,51 @@ function allocateLayerCostIrr(layer: InventoryCostLayer, takeQty: number): numbe
 }
 
 /**
+ * Allocate successive partial FIFO returns from the unreturned tail of the
+ * original sale's consumed layers. Integer-Rial boundaries are differenced so
+ * repeated partial returns conserve the original layer cost without rounding drift.
+ */
+function sliceFifoReturnAllocations(
+  original: ConsumedCostLayerAllocation[],
+  alreadyReturnedQty: number,
+  returnQty: number
+): ConsumedCostLayerAllocation[] {
+  let skip = roundQty(alreadyReturnedQty);
+  let remaining = roundQty(returnQty);
+  const selected: Array<ConsumedCostLayerAllocation | undefined> = new Array(original.length);
+
+  for (let index = original.length - 1; index >= 0 && remaining > 0.00005; index -= 1) {
+    const allocation = original[index];
+    const allocationQty = roundQty(allocation.qty);
+    if (!Number.isFinite(allocationQty) || allocationQty <= 0 ||
+        !Number.isFinite(allocation.totalCostIrr) || allocation.totalCostIrr < 0) {
+      throw new Error('ریز لایه‌های بهای فروش اصلی برای برگشت معتبر نیست.');
+    }
+
+    const skippedHere = Math.min(skip, allocationQty);
+    skip = roundQty(Math.max(0, skip - skippedHere));
+    const availableHere = roundQty(Math.max(0, allocationQty - skippedHere));
+    const take = roundQty(Math.min(availableHere, remaining));
+    if (take <= 0.00005) continue;
+
+    const costAtStart = Math.round((allocation.totalCostIrr * skippedHere) / allocationQty);
+    const costAtEnd = Math.round((allocation.totalCostIrr * (skippedHere + take)) / allocationQty);
+    selected[index] = {
+      ...allocation,
+      qty: take,
+      totalCostIrr: Math.max(0, costAtEnd - costAtStart),
+      unitCostIrr: take > 0 ? Math.round((costAtEnd - costAtStart) / take) : allocation.unitCostIrr,
+    };
+    remaining = roundQty(Math.max(0, remaining - take));
+  }
+
+  if (skip > 0.00005 || remaining > 0.00005) {
+    throw new Error('مقدار برگشت تجمعی از تخصیص لایه‌های فروش اصلی بیشتر است.');
+  }
+  return selected.filter((allocation): allocation is ConsumedCostLayerAllocation => Boolean(allocation));
+}
+
+/**
  * Applies a single chronological inventory movement against a ProductInventoryState
  * using either FIFO or Moving Weighted Average (and maintains exact FIFO layers in parallel
  * so switching methods or auditing layers is always mathematically traceable).
@@ -413,6 +458,18 @@ export function applyInventoryMovementStep(
       : undefined;
     const origLayers = movement.originalConsumedLayers || refHistory?.consumedLayers;
 
+    // A FIFO sale return must be backed by the original sale's consumed-layer allocation.
+    // Never invent a fallback cost layer for quantities that were not part of that sale.
+    if (method === 'fifo' && (!origLayers || origLayers.length === 0)) {
+      throw new Error('برای برگشت فروش در روش FIFO، ریزلایه‌های مصرف‌شده سند فروش اصلی در دسترس نیست؛ برگشت بدون مرجع معتبر مجاز نیست.');
+    }
+    if (method === 'fifo') {
+      const originalSoldQty = roundQty(origLayers!.reduce((sum, layer) => sum + roundQty(layer.qty), 0));
+      if (qty > originalSoldQty + 0.00005) {
+        throw new Error(`مقدار برگشت فروش (${roundQty2(qty)}) از مقدار فروش مرجع (${roundQty2(originalSoldQty)}) بیشتر است.`);
+      }
+    }
+
     let restoredCostIrr = 0;
     const restoredLayerEntries: InventoryCostLayer[] = [];
 
@@ -443,20 +500,7 @@ export function applyInventoryMovementStep(
       }
 
       if (remainingToRestore > 0.00005) {
-        const fallbackUnit =
-          movement.unitCostIrr ?? refHistory?.unitCostIrr ?? state.weightedAvgUnitCostIrr;
-        const extraVal = Math.round(remainingToRestore * fallbackUnit);
-        restoredCostIrr += extraVal;
-        restoredLayerEntries.push({
-          layerId: `ret_${movement.id}_extra`,
-          date: movement.date,
-          sourceRef: movement.sourceRefId || movement.id,
-          warehouse: movement.warehouse,
-          originalQty: remainingToRestore,
-          remainingQty: remainingToRestore,
-          unitCostIrr: fallbackUnit,
-          totalCostIrr: extraVal,
-        });
+        throw new Error('تخصیص لایه‌های فروش مرجع برای مقدار برگشتی کافی نیست؛ از ایجاد لایه بهای تمام‌شده حدسی جلوگیری شد.');
       }
 
       // Prepend restored historical layers to front of FIFO queue (earliest-available)
@@ -554,8 +598,13 @@ export function applyInventoryMovementStep(
         }
       }
 
-      // If still remaining (or no explicit sourceRefId), adjust newest purchase layers first (LIFO layer reversal)
-      for (let i = layers.length - 1; i >= 0 && remainingToRemove > 0.00005; i--) {
+      // When an originating purchase is specified, never silently consume unrelated purchase layers.
+      if (movement.sourceRefId && remainingToRemove > 0.00005) {
+        throw new Error('مقدار برگشت از خرید از مانده لایه خرید مرجع بیشتر است یا لایه مرجع پیدا نشد؛ برگشت به لایه‌های خرید دیگر منتقل نمی‌شود.');
+      }
+
+      // Without a source reference only, preserve the documented newest-layer reversal policy.
+      for (let i = layers.length - 1; !movement.sourceRefId && i >= 0 && remainingToRemove > 0.00005; i--) {
         const layer = layers[i];
         if (layer.remainingQty <= 0.00005) continue;
         const take = roundQty(Math.min(layer.remainingQty, remainingToRemove));
@@ -691,6 +740,27 @@ export function recalculateInventoryLedger(input: {
       return (a.sequence ?? 0) - (b.sequence ?? 0);
     });
 
+  // Enforce cumulative sale-return limits for every costing method, not only invoice UI flows.
+  // This protects direct ledger rebuilds/imports from returning more than the referenced sale.
+  const soldQtyByRef = new Map<string, number>();
+  const returnedQtyByRef = new Map<string, number>();
+  for (const movement of sorted) {
+    if (movement.kind === 'sale') {
+      soldQtyByRef.set(movement.id, roundQty((soldQtyByRef.get(movement.id) || 0) + movement.qty));
+      continue;
+    }
+    if (movement.kind !== 'sale_return' || !movement.sourceRefId) continue;
+    const soldQty = soldQtyByRef.get(movement.sourceRefId);
+    if (soldQty === undefined) {
+      throw new Error('سند فروش مرجع برای برگشت فروش در دفتر موجودی یافت نشد.');
+    }
+    const returnedQty = roundQty((returnedQtyByRef.get(movement.sourceRefId) || 0) + movement.qty);
+    if (returnedQty > soldQty + 0.00005) {
+      throw new Error('مجموع برگشت فروش (' + roundQty2(returnedQty) + ') از مقدار فروش مرجع (' + roundQty2(soldQty) + ') بیشتر است.');
+    }
+    returnedQtyByRef.set(movement.sourceRefId, returnedQty);
+  }
+
   // -------- PERIODIC WEIGHTED AVERAGE MODE --------
   if (costingMethod === 'periodic_average') {
     let availableQty = roundQty(openingQty);
@@ -700,6 +770,9 @@ export function recalculateInventoryLedger(input: {
     let totalNetOutQty = 0;
     let totalSalesQty = 0;
     let totalWasteQty = 0;
+    let totalPurchaseReturnVarianceIrr = 0;
+    const purchaseLayerBalances = new Map<string, { remainingQty: number; remainingValueIrr: number }>();
+    const purchaseReturnCosts = new Map<string, { inventoryCostIrr: number; varianceIrr: number }>();
 
     // Pass 1: Pool all opening + purchases + surplus - purchase_returns across the entire period
     for (const m of sorted) {
@@ -714,14 +787,32 @@ export function recalculateInventoryLedger(input: {
         if (m.kind === 'purchase') {
           totalPurchasesQty = roundQty(totalPurchasesQty + q);
           totalPurchasesValueIrr += val;
+          purchaseLayerBalances.set(m.id, { remainingQty: q, remainingValueIrr: val });
         }
       } else if (m.kind === 'purchase_return') {
-        const val =
+        const invoiceReturnValueIrr =
           m.totalCostIrr !== undefined
-            ? Math.round(m.totalCostIrr)
-            : Math.round(q * (m.unitCostIrr ?? 0));
+            ? Math.max(0, Math.round(m.totalCostIrr))
+            : Math.max(0, Math.round(q * (m.unitCostIrr ?? 0)));
+        let inventoryCostRemovedIrr = Math.min(availableValueIrr, invoiceReturnValueIrr);
+        let varianceIrr = invoiceReturnValueIrr - inventoryCostRemovedIrr;
+        if (m.sourceRefId) {
+          const sourceLayer = purchaseLayerBalances.get(m.sourceRefId);
+          if (!sourceLayer || q > sourceLayer.remainingQty + 0.00005) {
+            throw new Error('برگشت خرید در روش میانگین دوره‌ای به لایه خرید معتبر یا مقدار باقیمانده کافی متصل نیست.');
+          }
+          inventoryCostRemovedIrr =
+            q >= sourceLayer.remainingQty - 0.00005
+              ? sourceLayer.remainingValueIrr
+              : Math.round((sourceLayer.remainingValueIrr * q) / sourceLayer.remainingQty);
+          sourceLayer.remainingQty = roundQty(Math.max(0, sourceLayer.remainingQty - q));
+          sourceLayer.remainingValueIrr = Math.max(0, sourceLayer.remainingValueIrr - inventoryCostRemovedIrr);
+          varianceIrr = invoiceReturnValueIrr - inventoryCostRemovedIrr;
+        }
+        purchaseReturnCosts.set(m.id, { inventoryCostIrr: inventoryCostRemovedIrr, varianceIrr });
+        totalPurchaseReturnVarianceIrr += varianceIrr;
         availableQty = roundQty(Math.max(0, availableQty - q));
-        availableValueIrr = Math.max(0, availableValueIrr - val);
+        availableValueIrr = Math.max(0, availableValueIrr - inventoryCostRemovedIrr);
       } else if (m.kind === 'sale') {
         totalSalesQty = roundQty(totalSalesQty + q);
         totalNetOutQty = roundQty(totalNetOutQty + q);
@@ -782,10 +873,17 @@ export function recalculateInventoryLedger(input: {
           purchaseReturnVarianceIrr: 0,
         });
       } else if (m.kind === 'purchase_return') {
-        const val =
-          m.totalCostIrr !== undefined
+        if (!m.allowNegativeStock && runningQty + 0.0001 < q) {
+          throw new Error(
+            `موجودی انبار در تاریخ ${m.date} برای برگشت از خرید کافی نیست (موجودی: ${roundQty2(runningQty)}، برگشت: ${roundQty2(q)}).`
+          );
+        }
+        const returnCost = purchaseReturnCosts.get(m.id);
+        const val = returnCost?.inventoryCostIrr ??
+          (m.totalCostIrr !== undefined
             ? Math.round(m.totalCostIrr)
-            : Math.round(q * (m.unitCostIrr ?? periodicUnitCostIrr));
+            : Math.round(q * (m.unitCostIrr ?? periodicUnitCostIrr)));
+        const varianceIrr = returnCost?.varianceIrr ?? 0;
         runningQty = roundQty(runningQty - q);
         runningVal = Math.max(0, runningVal - val);
         kardex.push({
@@ -802,7 +900,7 @@ export function recalculateInventoryLedger(input: {
           outValueIrr: val,
           balanceValueIrr: runningVal,
           cogsOrCostIrr: val,
-          purchaseReturnVarianceIrr: 0,
+          purchaseReturnVarianceIrr: varianceIrr,
         });
       } else if (m.kind === 'sale' || m.kind === 'waste' || m.kind === 'shortage') {
         if (!m.allowNegativeStock && runningQty + 0.0001 < q) {
@@ -829,6 +927,25 @@ export function recalculateInventoryLedger(input: {
           outValueIrr: costIrr,
           balanceValueIrr: runningVal,
           cogsOrCostIrr: costIrr,
+          purchaseReturnVarianceIrr: 0,
+        });
+      } else if (m.kind === 'transfer_out' || m.kind === 'transfer_in') {
+        // Transfers are value-neutral at the product-wide ledger level. Keep them
+        // visible in the Kardex without changing aggregate quantity, value, or P&L.
+        kardex.push({
+          movementId: m.id,
+          date: m.date,
+          kind: m.kind,
+          productId,
+          warehouse: m.warehouse || warehouse,
+          inQty: m.kind === 'transfer_in' ? q : 0,
+          outQty: m.kind === 'transfer_out' ? q : 0,
+          balanceQty: roundQty2(runningQty),
+          unitCostIrr: periodicUnitCostIrr,
+          inValueIrr: 0,
+          outValueIrr: 0,
+          balanceValueIrr: runningVal,
+          cogsOrCostIrr: 0,
           purchaseReturnVarianceIrr: 0,
         });
       } else if (m.kind === 'sale_return') {
@@ -894,7 +1011,7 @@ export function recalculateInventoryLedger(input: {
       totalSalesQty: roundQty2(totalSalesQty),
       totalCogsIrr,
       totalWasteCostIrr,
-      totalPurchaseReturnVarianceIrr: 0,
+      totalPurchaseReturnVarianceIrr,
       conservationDeltaIrr: availableValueIrr - (totalCogsIrr + totalWasteCostIrr + endingValueIrr),
     };
   }
@@ -938,8 +1055,27 @@ export function recalculateInventoryLedger(input: {
   let netInflowsIrr = Math.round(openingValueIrr);
   let netOutflowsIrr = 0;
 
+  const fifoReturnedQtyBySaleRef = new Map<string, number>();
+
   for (const m of sorted) {
-    const step = applyInventoryMovementStep(state, m, saleHistoryByRef);
+    let movementForStep = m;
+    if (costingMethod === 'fifo' && m.kind === 'sale_return' && m.sourceRefId) {
+      const originalAllocations =
+        saleHistoryByRef.get(m.sourceRefId)?.consumedLayers || m.originalConsumedLayers;
+      if (originalAllocations?.length) {
+        const alreadyReturned = fifoReturnedQtyBySaleRef.get(m.sourceRefId) || 0;
+        movementForStep = {
+          ...m,
+          originalConsumedLayers: sliceFifoReturnAllocations(
+            originalAllocations,
+            alreadyReturned,
+            m.qty
+          ),
+        };
+        fifoReturnedQtyBySaleRef.set(m.sourceRefId, roundQty(alreadyReturned + m.qty));
+      }
+    }
+    const step = applyInventoryMovementStep(state, movementForStep, saleHistoryByRef);
     state = step.nextState;
 
     if (m.kind === 'sale') {
@@ -1036,6 +1172,21 @@ export function planWarehouseTransfer(input: {
   }
 
   const remainingSourceLayers = cloneLayers(state.layers);
+  const layerQty = remainingSourceLayers.reduce((sum, layer) => {
+    if (!Number.isFinite(layer.remainingQty) || layer.remainingQty < 0 ||
+        !Number.isFinite(layer.totalCostIrr) || layer.totalCostIrr < 0) {
+      throw new Error('لایه‌های بهای موجودی برای انتقال معتبر نیستند.');
+    }
+    return sum + layer.remainingQty;
+  }, 0);
+  if (Math.abs(layerQty - state.stockQty) > 0.011) {
+    throw new Error('مجموع مقدار لایه‌های موجودی با موجودی ثبت‌شده انبار تطابق ندارد؛ انتقال متوقف شد.');
+  }
+  const layerValueIrr = remainingSourceLayers.reduce((sum, layer) => sum + Math.round(layer.totalCostIrr), 0);
+  if (!Number.isFinite(state.totalValueIrr) ||
+      layerValueIrr !== Math.round(state.totalValueIrr)) {
+    throw new Error('ارزش لایه‌های بهای موجودی با ارزش ثبت‌شده انبار تطابق ندارد؛ انتقال متوقف شد.');
+  }
   const transferredLayers: InventoryCostLayer[] = [];
   let rem = qty;
   let transferredCostIrr = 0;
@@ -1060,6 +1211,10 @@ export function planWarehouseTransfer(input: {
       unitCostIrr: take > 0 ? Math.round(takeCost / take) : layer.unitCostIrr,
       totalCostIrr: takeCost,
     });
+  }
+
+  if (rem > 0.00005) {
+    throw new Error('لایه‌های بهای موجودی برای پوشش کامل مقدار انتقال کافی نیستند؛ انتقال متوقف شد.');
   }
 
   return {

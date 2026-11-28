@@ -1352,10 +1352,33 @@ export function calculateEmployeePayroll(
 }
 
 export function calculateMonthlyDepreciation(asset: FixedAsset): number {
-  const depreciable = Math.max(0, asset.purchaseCost - asset.salvageValue);
-  const remaining = Math.max(0, depreciable - asset.accumulatedDepreciation);
+  const purchaseCost = Number(asset.purchaseCost);
+  const salvageValue = Number(asset.salvageValue);
+  const usefulLifeYears = Number(asset.usefulLifeYears);
+  const accumulatedDepreciation = Number(asset.accumulatedDepreciation);
+  if (
+    !Number.isSafeInteger(purchaseCost) ||
+    purchaseCost <= 0 ||
+    !Number.isSafeInteger(salvageValue) ||
+    salvageValue < 0 ||
+    salvageValue > purchaseCost ||
+    !Number.isFinite(usefulLifeYears) ||
+    usefulLifeYears <= 0 ||
+    !Number.isSafeInteger(accumulatedDepreciation) ||
+    accumulatedDepreciation < 0
+  ) {
+    throw new Error(`اطلاعات مالی دارایی «${asset.assetCode}» معتبر نیست.`);
+  }
+  const depreciable = purchaseCost - salvageValue;
+  if (accumulatedDepreciation > depreciable) {
+    throw new Error(`استهلاک انباشته دارایی «${asset.assetCode}» از مبلغ استهلاک‌پذیر بیشتر است.`);
+  }
+  const remaining = depreciable - accumulatedDepreciation;
   if (remaining <= 0) return 0;
-  const monthly = Math.round(depreciable / (asset.usefulLifeYears * 12));
+  const monthly = Math.round(depreciable / (usefulLifeYears * 12));
+  if (!Number.isSafeInteger(monthly) || monthly < 0) {
+    throw new Error(`محاسبه ماهانه استهلاک دارایی «${asset.assetCode}» نامعتبر است.`);
+  }
   return Math.min(monthly, remaining);
 }
 
@@ -1952,6 +1975,40 @@ export interface AtomicInvoicePlanResult {
  * correlated records (Inventory updates, sealed Accounting Voucher, Sayadi Cheque, Invoice)
  * BEFORE any storage write executes — guaranteeing strict all-or-nothing atomicity.
  */
+/**
+ * Returns the still-unreturned portion of a sale's original FIFO allocations.
+ * Partial returns consume the last-issued layers first; later returns must continue
+ * from the remaining allocation rather than restoring the same layer twice.
+ */
+export function getUnreturnedConsumedCostLayers(
+  originalLayers: ConsumedCostLayerAllocation[],
+  previouslyReturnedQty: number
+): ConsumedCostLayerAllocation[] {
+  const remainingLayers = originalLayers.map((layer) => ({ ...layer }));
+  let qtyToRelease = roundQty(Number(previouslyReturnedQty) || 0);
+  const totalQty = roundQty(remainingLayers.reduce((sum, layer) => sum + roundQty(Number(layer.qty) || 0), 0));
+  if (qtyToRelease < 0 || qtyToRelease > totalQty + 0.00005) {
+    throw new Error('مقدار برگشت‌های قبلی از تخصیص لایه‌های فروش اصلی بیشتر است؛ برگشت جدید متوقف شد.');
+  }
+  for (let index = remainingLayers.length - 1; index >= 0 && qtyToRelease > 0.00005; index -= 1) {
+    const layer = remainingLayers[index];
+    const layerQty = roundQty(Number(layer.qty) || 0);
+    if (layerQty <= 0.00005) continue;
+    const qtyToRemove = roundQty(Math.min(layerQty, qtyToRelease));
+    const layerCost = Math.max(0, Math.round(Number(layer.totalCostIrr) || 0));
+    const costToRemove = qtyToRemove >= layerQty - 0.00005
+      ? layerCost
+      : Math.round((layerCost * qtyToRemove) / layerQty);
+    layer.qty = roundQty(layerQty - qtyToRemove);
+    layer.totalCostIrr = Math.max(0, layerCost - costToRemove);
+    qtyToRelease = roundQty(Math.max(0, qtyToRelease - qtyToRemove));
+  }
+  if (qtyToRelease > 0.00005) {
+    throw new Error('تخصیص لایه‌های مصرف‌شده برای برگشت‌های قبلی کامل نیست؛ برگشت جدید متوقف شد.');
+  }
+  return remainingLayers.filter((layer) => layer.qty > 0.00005);
+}
+
 export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicInvoicePlanResult {
   const {
     invoiceId,
@@ -2002,6 +2059,51 @@ export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicIn
   }
   if (existingVouchers.some((v) => v.referenceId === invoiceId && !v.reversalOfVoucherId)) {
     throw new Error('برای این فاکتور قبلاً سند حسابداری صادر شده است.');
+  }
+
+  // 0b. Validate cumulative sale returns independently of inventory availability.
+  // This guard must run even when the product is missing from the local cache.
+  if (payload.invoiceType === 'sale_return') {
+    if (!payload.sourceInvoiceId || !originalInvoice ||
+        originalInvoice.id !== payload.sourceInvoiceId ||
+        originalInvoice.ownerId !== ownerId ||
+        originalInvoice.invoiceType !== 'sale' ||
+        originalInvoice.status === 'cancelled') {
+      throw new Error('فاکتور فروش مرجع برگشت معتبر نیست یا به این شرکت تعلق ندارد.');
+    }
+    const requestedByProduct = new Map<string, number>();
+    for (const item of payload.items) {
+      const qty = roundQty(Number(item.quantity) || 0);
+      requestedByProduct.set(item.productId, roundQty((requestedByProduct.get(item.productId) || 0) + qty));
+    }
+    const previouslyReturnedByProduct = new Map<string, number>();
+    for (const invoice of existingInvoices) {
+      if (invoice.id === invoiceId ||
+          invoice.ownerId !== ownerId ||
+          invoice.invoiceType !== 'sale_return' ||
+          invoice.status === 'cancelled' ||
+          invoice.sourceInvoiceId !== originalInvoice.id) continue;
+      for (const item of invoice.items || []) {
+        previouslyReturnedByProduct.set(
+          item.productId,
+          roundQty((previouslyReturnedByProduct.get(item.productId) || 0) + (Number(item.quantity) || 0))
+        );
+      }
+    }
+    for (const [productId, requestedQty] of requestedByProduct) {
+      const originalQty = roundQty(
+        originalInvoice.items
+          .filter((item) => item.productId === productId)
+          .reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)
+      );
+      const previouslyReturnedQty = previouslyReturnedByProduct.get(productId) || 0;
+      const remainingReturnable = roundQty(originalQty - previouslyReturnedQty);
+      if (originalQty <= 0 || requestedQty > remainingReturnable + 0.00005) {
+        throw new Error(
+          `مقدار برگشت کالا از مقدار فروش اولیه بیشتر است؛ مقدار فروش: ${originalQty}، برگشت‌های قبلی: ${previouslyReturnedQty}، مانده مجاز: ${Math.max(0, remainingReturnable)}.`
+        );
+      }
+    }
   }
 
   // 1. Validate arithmetic & settlement totals strictly before any mutation
@@ -2137,6 +2239,24 @@ export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicIn
         payload.invoiceType === 'sale_return'
           ? originalInvoice?.items.find((it) => it.productId === pid)
           : undefined;
+      let remainingOriginalConsumedLayers = origSaleItem?.consumedLayers?.map((layer) => ({ ...layer }));
+      if (payload.invoiceType === 'sale_return' && origSaleItem?.consumedLayers?.length) {
+        const previouslyReturnedQty = existingInvoices
+          .filter((invoice) =>
+            invoice.id !== invoiceId &&
+            invoice.ownerId === ownerId &&
+            invoice.invoiceType === 'sale_return' &&
+            invoice.status !== 'cancelled' &&
+            invoice.sourceInvoiceId === originalInvoice?.id
+          )
+          .flatMap((invoice) => invoice.items)
+          .filter((item) => item.productId === pid)
+          .reduce((sum, item) => sum + roundQty(Number(item.quantity) || 0), 0);
+        remainingOriginalConsumedLayers = getUnreturnedConsumedCostLayers(
+          origSaleItem.consumedLayers,
+          previouslyReturnedQty
+        );
+      }
       const explicitItemUnitCost =
         payload.invoiceType === 'sale_return'
           ? payload.items.find((it) => it.productId === pid && it.unitCostSnapshot && it.unitCostSnapshot > 0)
@@ -2159,7 +2279,7 @@ export function planAtomicInvoiceCommit(input: AtomicInvoicePlanInput): AtomicIn
             ? origSaleItem?.unitCostSnapshot ?? explicitItemUnitCost
             : undefined,
         sourceRefId: originalInvoice?.id ?? payload.sourceInvoiceId,
-        originalConsumedLayers: origSaleItem?.consumedLayers,
+        originalConsumedLayers: remainingOriginalConsumedLayers,
         allowNegativeStock,
       });
 
@@ -2573,13 +2693,18 @@ export function validateVoucherPayload(input: {
       }
     }
 
-    const rawD = Number(line.debit) || 0;
-    const rawC = Number(line.credit) || 0;
-    if (!Number.isFinite(rawD) || !Number.isFinite(rawC) || rawD < 0 || rawC < 0) {
+    const debitInput = Number(line.debit);
+    const creditInput = Number(line.credit);
+    const rawD = Number.isFinite(debitInput) ? debitInput : 0;
+    const rawC = Number.isFinite(creditInput) ? creditInput : 0;
+    if (!Number.isFinite(debitInput) || !Number.isFinite(creditInput) || rawD < 0 || rawC < 0) {
       errors.push(`ردیف ${rowNum}: مبالغ بدهکار و بستانکار نمی‌توانند منفی یا نامعتبر باشند.`);
     }
     const d = Math.max(0, Math.round(rawD));
     const c = Math.max(0, Math.round(rawC));
+    if (!Number.isSafeInteger(d) || !Number.isSafeInteger(c)) {
+      errors.push(`ردیف ${rowNum}: مبلغ آرتیکل از محدوده دقت امن عددی جاوااسکریپت بیشتر است؛ مبلغ باید با واحد صحیح ریال و در محدوده امن ثبت شود.`);
+    }
     if (d === 0 && c === 0) {
       errors.push(`ردیف ${rowNum}: آرتیکل بدون مبلغ (بدهکار = ۰ و بستانکار = ۰) مجاز نیست.`);
     }
@@ -2597,6 +2722,9 @@ export function validateVoucherPayload(input: {
 
     totalDebit += d;
     totalCredit += c;
+    if (!Number.isSafeInteger(totalDebit) || !Number.isSafeInteger(totalCredit)) {
+      errors.push('جمع بدهکار یا بستانکار از محدوده دقت امن عددی جاوااسکریپت بیشتر است.');
+    }
     sanitizedLines.push({
       ...line,
       accountCode: code,

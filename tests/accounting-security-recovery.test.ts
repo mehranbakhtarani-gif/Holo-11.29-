@@ -574,6 +574,72 @@ test('Stage 10 [Scenario 5]: Moving & Periodic Weighted Average — Buy 100@100k
   assert.equal(pwa.conservationDeltaIrr, 0);
 });
 
+test('Periodic weighted average: warehouse transfers remain visible and value-neutral in Kardex', () => {
+  const result = recalculateInventoryLedger({
+    productId: 'prd_periodic_transfer',
+    costingMethod: 'periodic_average',
+    openingQty: 10,
+    openingValueIrr: 1_000,
+    movements: [
+      {
+        id: 'transfer_out_1',
+        date: '1405/01/02',
+        sequence: 1,
+        kind: 'transfer_out',
+        productId: 'prd_periodic_transfer',
+        warehouse: 'انبار مبدا',
+        targetWarehouse: 'انبار مقصد',
+        qty: 3,
+      },
+      {
+        id: 'transfer_in_1',
+        date: '1405/01/02',
+        sequence: 2,
+        kind: 'transfer_in',
+        productId: 'prd_periodic_transfer',
+        warehouse: 'انبار مقصد',
+        qty: 3,
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    result.kardex.map((entry) => entry.kind),
+    ['transfer_out', 'transfer_in'],
+    'Both transfer legs must remain visible in the periodic-average Kardex'
+  );
+  assert.equal(result.kardex[0].outQty, 3);
+  assert.equal(result.kardex[1].inQty, 3);
+  assert.equal(result.kardex[0].outValueIrr, 0);
+  assert.equal(result.kardex[1].inValueIrr, 0);
+  assert.equal(result.finalState.stockQty, 10);
+  assert.equal(result.finalState.totalValueIrr, 1_000);
+  assert.equal(result.conservationDeltaIrr, 0);
+});
+
+test('Periodic weighted average: purchase returns reverse originating cost and report price variance', () => {
+  const result = recalculateInventoryLedger({
+    productId: 'prd_periodic_purchase_return',
+    costingMethod: 'periodic_average',
+    movements: [
+      { id: 'periodic_buy_1', date: '1405/01/01', sequence: 1, kind: 'purchase', productId: 'prd_periodic_purchase_return', qty: 100, totalCostIrr: 100_000_000 },
+      { id: 'periodic_buy_2', date: '1405/01/02', sequence: 2, kind: 'purchase', productId: 'prd_periodic_purchase_return', qty: 100, totalCostIrr: 150_000_000 },
+      { id: 'periodic_return_1', date: '1405/01/03', sequence: 3, kind: 'purchase_return', productId: 'prd_periodic_purchase_return', qty: 20, totalCostIrr: 36_000_000, sourceRefId: 'periodic_buy_2' },
+      { id: 'periodic_sale_1', date: '1405/01/04', sequence: 4, kind: 'sale', productId: 'prd_periodic_purchase_return', qty: 100 },
+    ],
+  });
+
+  const purchaseReturn = result.kardex.find((entry) => entry.movementId === 'periodic_return_1');
+  assert.ok(purchaseReturn);
+  assert.equal(purchaseReturn.outValueIrr, 30_000_000, 'Inventory must be reduced at the original purchase cost');
+  assert.equal(purchaseReturn.purchaseReturnVarianceIrr, 6_000_000, 'Invoice credit above historical cost must be reported as variance');
+  assert.equal(result.totalPurchaseReturnVarianceIrr, 6_000_000);
+  assert.equal(result.totalCogsIrr, 122_222_222);
+  assert.equal(result.finalState.stockQty, 80);
+  assert.equal(result.finalState.totalValueIrr, 97_777_778);
+  assert.equal(result.conservationDeltaIrr, 0);
+});
+
 test('Stage 10 [Scenarios 6 & 7]: Sales Return (10 units historical cost recovery) & Purchase Return (20 units + variance)', () => {
   const res = recalculateInventoryLedger({
     productId: 'prd_ret_test',

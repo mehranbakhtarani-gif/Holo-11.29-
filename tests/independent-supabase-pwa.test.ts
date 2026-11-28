@@ -8,9 +8,12 @@ import {
   loadSupabaseAutoBackupEnabled,
   normalizeSupabaseBackups,
   pushSnapshotToSupabase,
+  encodeSupabaseSnapshot,
+  decodeSupabaseSnapshot,
   runLiveServerAndSupabaseTest,
   saveSupabaseAutoBackupEnabled,
 } from '../src/lib/dualCloudSync';
+import { unlockBackupSession, lockBackupSession } from '../src/lib/backupSession';
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -44,6 +47,30 @@ async function test(name: string, fn: () => Promise<void> | void) {
 async function run() {
   (globalThis as unknown as { localStorage: ReturnType<typeof createMemoryStorage> }).localStorage =
     createMemoryStorage();
+
+  await test('Supabase cloud snapshot codec encrypts, decrypts, and rejects tampering', async () => {
+    unlockBackupSession('supabase-test-passphrase');
+    try {
+      const payload = JSON.stringify({ accounts: [{ id: 'a1', balance: 2500 }] });
+      const encoded = await encodeSupabaseSnapshot(payload);
+      const wrapper = JSON.parse(encoded) as { kind: string; envelope: { ciphertextB64: string } };
+      assert.equal(wrapper.kind, 'holoo-apex-encrypted-sync-v1');
+      assert.notEqual(encoded.includes('"balance":2500'), true);
+      assert.equal(await decodeSupabaseSnapshot(encoded), payload);
+      await assert.rejects(() => decodeSupabaseSnapshot(payload));
+      assert.equal(await decodeSupabaseSnapshot(payload, true), payload);
+      const tampered = {
+        ...wrapper,
+        envelope: {
+          ...wrapper.envelope,
+          ciphertextB64: wrapper.envelope.ciphertextB64.slice(0, -4) + 'AAAA',
+        },
+      };
+      await assert.rejects(() => decodeSupabaseSnapshot(JSON.stringify(tampered)));
+    } finally {
+      lockBackupSession();
+    }
+  });
 
   await test('Independent Supabase auto-backup defaults to enabled and persists toggles', () => {
     assert.equal(loadSupabaseAutoBackupEnabled(), true);
@@ -155,6 +182,7 @@ async function run() {
       const deleted = await deleteSupabaseBackup(null, 'sbw_test__bak__12345678');
       assert.equal(deleted.ok, true);
 
+      unlockBackupSession('supabase-test-passphrase');
       const sync = await pushSnapshotToSupabase({
         idToken: null,
         deviceId: 'dev_test',
@@ -171,6 +199,7 @@ async function run() {
       assert.equal(sync.ok, true);
       assert.equal(sync.data?.serverRevision, 6);
     } finally {
+      lockBackupSession();
       globalThis.fetch = origFetch;
     }
   });

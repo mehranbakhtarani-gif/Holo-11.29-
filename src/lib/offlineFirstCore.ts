@@ -129,7 +129,7 @@ export function resolveEffectiveOperatingMode(
 
 export const ENCRYPTED_BACKUP_FORMAT = 'holoo-apex-encrypted-backup';
 export const ENCRYPTED_BACKUP_SCHEMA_VERSION = 2;
-const PBKDF2_ITERATIONS = 100_000;
+const PBKDF2_ITERATIONS = 600_000;
 const IMPORTED_BACKUP_DIGESTS_KEY = 'holoo_apex_imported_backup_digests_v1';
 
 export interface EncryptedBackupEnvelope {
@@ -282,18 +282,28 @@ export async function decryptAndVerifyBackupEnvelope(
     return { ok: false, error: 'پارامترهای رمزنگاری فایل پشتیبان نامعتبر است.' };
   }
   if (
+    parsed.kdf !== 'PBKDF2-SHA256' ||
+    parsed.cipher !== 'AES-256-GCM' ||
     typeof parsed.saltB64 !== 'string' ||
     typeof parsed.ivB64 !== 'string' ||
     typeof parsed.ciphertextB64 !== 'string' ||
-    typeof parsed.plaintextSha256 !== 'string'
+    typeof parsed.plaintextSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/i.test(parsed.plaintextSha256) ||
+    parsed.saltB64.length > 64 ||
+    parsed.ivB64.length > 32 ||
+    parsed.ciphertextB64.length > 16_000_000
   ) {
-    return { ok: false, error: 'فیلدهای امنیتی فایل پشتیبان ناقص است.' };
+    return { ok: false, error: 'فیلدهای امنیتی یا الگوریتم فایل پشتیبان نامعتبر است.' };
   }
 
   try {
     const salt = base64ToBytes(parsed.saltB64);
     const iv = base64ToBytes(parsed.ivB64);
     const ciphertext = base64ToBytes(parsed.ciphertextB64);
+    // PBKDF2 salt must be 128 bits, AES-GCM nonce 96 bits, and the tag at least 128 bits.
+    if (salt.byteLength !== 16 || iv.byteLength !== 12 || ciphertext.byteLength < 16) {
+      return { ok: false, error: 'طول پارامترهای رمزنگاری فایل پشتیبان نامعتبر است.' };
+    }
     const key = await deriveAesKeyFromPassphrase(passphrase.trim(), salt, iterations);
     const plainBuf = await globalThis.crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: iv as BufferSource },

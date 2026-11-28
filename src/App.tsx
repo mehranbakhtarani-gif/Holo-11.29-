@@ -2312,18 +2312,23 @@ export default function App() {
       <OfflineIndicator onOpenHealth={() => setShowHealthDrawer(true)} />
       <PwaUpdateBanner
         onCreatePreUpdateBackup={async () => {
-          const [{ computeSnapshotSha256Hex }, { OP_DB_VERSION, savePreUpdateSafetyBackup }] = await Promise.all([
+          const [
+            { encryptBackupEnvelope },
+            { requireBackupSessionPassphrase },
+            { OP_DB_VERSION, savePreUpdateSafetyBackup },
+          ] = await Promise.all([
             import('./lib/offlineFirstCore'),
+            import('./lib/backupSession'),
             import('./lib/operationalDb'),
           ]);
-          const snap = exportBackupJson();
-          const sha256 = await computeSnapshotSha256Hex(snap);
+          // A PWA update must never create a plaintext safety snapshot.
+          const envelope = await encryptBackupEnvelope(exportBackupJson(), requireBackupSessionPassphrase());
           return savePreUpdateSafetyBackup({
             id: `pre_update_${Date.now()}`,
             reason: 'pwa_update',
             schemaVersion: OP_DB_VERSION,
-            sha256,
-            snapshotJson: snap,
+            sha256: envelope.plaintextSha256,
+            envelopeJson: JSON.stringify(envelope),
             createdAt: new Date().toISOString(),
           });
         }}
