@@ -88,10 +88,12 @@ function toShadowRows(storeName: OperationalEncryptedStore, workspaceId: string,
   });
 }
 
-function workspaceStoreKeyRange(workspaceId: string, migrationId: string, storeName: OperationalEncryptedStore): IDBKeyRange {
+function workspaceStoreKeyRange(workspaceId: string, storeName: OperationalEncryptedStore): IDBKeyRange {
   const keyRange = typeof window !== 'undefined' ? window.IDBKeyRange : globalThis.IDBKeyRange;
   if (!keyRange) throw new Error('IndexedDB key-range support is unavailable.');
-  return keyRange.only([workspaceId, migrationId, storeName]);
+  // Schema v7 intentionally indexes only [workspaceId, storeName]. migrationId
+  // is validated on each returned row because it is metadata, not part of keyPath.
+  return keyRange.only([workspaceId, storeName]);
 }
 
 /** Write ciphertext only to the isolated shadow store; source business stores remain untouched. */
@@ -311,8 +313,8 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
 
   const cursorResult = await new Promise<{ rows: EncryptedOperationalShadowRow[]; hasMore: boolean }>((resolve, reject) => {
     const tx = db.transaction([ENCRYPTED_SHADOW_STORE], 'readonly');
-    const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceMigrationStore');
-    const request = index.openCursor(workspaceStoreKeyRange(workspaceId, migrationId, storeName));
+    const index = tx.objectStore(ENCRYPTED_SHADOW_STORE).index('workspaceStore');
+    const request = index.openCursor(workspaceStoreKeyRange(workspaceId, storeName));
     const result: EncryptedOperationalShadowRow[] = [];
     let hasMore = false;
     request.onsuccess = () => {
