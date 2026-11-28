@@ -84,6 +84,13 @@ async function main() {
     /passphrase is required/
   );
   const meshSource = fs.readFileSync(path.resolve('src/lib/p2pMeshSync.ts'), 'utf8');
+  const passphraseGenerator = meshSource.slice(
+    meshSource.indexOf('export function generateSecureMeshPassphrase'),
+    meshSource.indexOf('export function loadMeshPassphrase')
+  );
+  assert.match(passphraseGenerator, /Cryptographically secure randomness is unavailable/);
+  assert.doesNotMatch(passphraseGenerator, /Math\\.random|Date\\.now/,
+    'mesh pairing secrets must never fall back to non-cryptographic randomness');
   assert.match(meshSource, /if \(isValidMeshPeerId\(targetPeer\)\) \{[\s\S]*?this\.connections\.delete\(targetPeer\);[\s\S]*?pendingConnection\.close\(\);[\s\S]*?this\.schedulePeerReconnect\(targetPeer\);/,
     'peer-unavailable signaling errors must clean up stale pending connections before retrying');
   assert.match(meshSource, /conn\.on\('close',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
