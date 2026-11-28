@@ -26,6 +26,26 @@ const record = createOperationalMigrationJournalRecord({
 assert.equal(record.phase, 'preparing');
 assert.equal(isValidOperationalMigrationJournalRecord(record), true);
 assert.equal(record.stores.length, 2);
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...record,
+  updatedAt: '2026-11-28T11:59:59.000Z',
+}), false, 'journal updatedAt must never precede createdAt');
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...record,
+  createdAt: '2026-11-28T12:00:00+00:00',
+}), false, 'journal timestamps must use canonical UTC ISO format');
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...record,
+  stores: record.stores.map((store, index) => index === 0 ? { ...store, cursor: 'unexpected-pending-cursor' } : store),
+}), false, 'pending checkpoints must not contain a cursor');
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...record,
+  stores: record.stores.map((store, index) => index === 0 ? { ...store, sourceRecordCount: 1 } : store),
+}), false, 'pending checkpoints must not claim a source snapshot');
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...record,
+  stores: record.stores.map((store, index) => index === 0 ? { ...store, sourceDigest } : store),
+}), false, 'pending checkpoints must not contain digests');
 assert.throws(() => assertOperationalMigrationBinding(record, {
   ...binding,
   workspaceId: 'workspace-2',
@@ -56,6 +76,10 @@ current = advanceOperationalMigrationStoreCheckpoint(
   current, 'accounts', copying(1, 1, 'account-1'), binding, now
 );
 assert.equal(current.stores[0].batchSequence, 1);
+assert.equal(isValidOperationalMigrationJournalRecord({
+  ...current,
+  stores: current.stores.map((store, index) => index === 0 ? { ...store, targetDigest: sourceDigest } : store),
+}), false, 'copying checkpoints must not claim a verified target digest');
 assert.throws(() => advanceOperationalMigrationStoreCheckpoint(
   current, 'accounts', copying(1, 2, 'account-2'), binding, now
 ), /non-monotonic/);
