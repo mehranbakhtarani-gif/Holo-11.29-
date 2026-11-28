@@ -356,10 +356,10 @@ async function runTests() {
   const preUpdateBackupContract = operationalDbSrc.slice(preUpdateBackupStart, preUpdateBackupEnd);
   assert.match(preUpdateBackupContract, /envelopeJson: string/);
   assert.doesNotMatch(preUpdateBackupContract, /snapshotJson/);
-  assert.match(localBackupSrc, /export async function saveLocalSnapshot[\\s\\S]*captureBackupSessionLease[\\s\\S]*lease\\.passphrase[\\s\\S]*assertBackupSessionLease/);
-  assert.match(localBackupSrc, /export async function downloadEncryptedBackupFileToDevice[\\s\\S]*captureBackupSessionLease[\\s\\S]*lease\\.passphrase[\\s\\S]*assertBackupSessionLease/);
-  assert.match(cloudBackupSrc, /captureBackupSessionLease[\\s\\S]*encryptBackupEnvelope\\(params\.snapshotJson, lease\.passphrase\\)[\\s\\S]*assertBackupSessionLease/);
-  assert.match(settingsViewSrc, /const lease = captureBackupSessionLease\\(\\)[\\s\\S]*encryptBackupEnvelope\\(workspaceJson, lease\.passphrase\\)[\\s\\S]*assertBackupSessionLease\\(lease\\)[\\s\\S]*exportEncryptedDocumentAttachmentBundle[\\s\\S]*assertBackupSessionLease\\(lease\\)/);
+  assert.match(localBackupSrc, /export async function saveLocalSnapshot[\s\S]*captureBackupSessionLease[\s\S]*lease\.passphrase[\s\S]*assertBackupSessionLease/);
+  assert.match(localBackupSrc, /export async function downloadEncryptedBackupFileToDevice[\s\S]*captureBackupSessionLease[\s\S]*lease\.passphrase[\s\S]*assertBackupSessionLease/);
+  assert.match(cloudBackupSrc, /captureBackupSessionLease[\s\S]*encryptBackupEnvelope\(params\.snapshotJson, lease\.passphrase\)[\s\S]*assertBackupSessionLease/);
+  assert.match(settingsViewSrc, /const lease = captureBackupSessionLease\(\)[\s\S]*encryptBackupEnvelope\(workspaceJson, lease\.passphrase\)[\s\S]*assertBackupSessionLease\(lease\)[\s\S]*exportEncryptedDocumentAttachmentBundle[\s\S]*assertBackupSessionLease\(lease\)/);
   assert.match(preUpdateBackupContract, /holoo-apex-encrypted-backup/);
   assert.match(preUpdateBackupContract, /AES-256-GCM/);
   assert.match(preUpdateBackupContract, /decryptAndVerifyBackupEnvelope/);
