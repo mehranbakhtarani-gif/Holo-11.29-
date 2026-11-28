@@ -169,7 +169,7 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
   const lease = captureOperationalDataKeyLease();
   assertWorkspaceLease(lease, workspaceId);
 
-  const rows = await new Promise<unknown[]>((resolve, reject) => {
+  const cursorResult = await new Promise<{ rows: unknown[]; hasMore: boolean }>((resolve, reject) => {
     const tx = db.transaction([storeName], 'readonly');
     const result: unknown[] = [];
     const request = tx.objectStore(storeName).openCursor();
@@ -184,16 +184,14 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
       result.push(cursor.value);
       cursor.continue();
     };
-    tx.oncomplete = () => resolve(result);
+    tx.oncomplete = () => resolve({ rows: result, hasMore });
     tx.onerror = () => reject(tx.error ?? new Error('Encrypted operational cursor read failed.'));
     tx.onabort = () => reject(tx.error ?? new Error('Encrypted operational cursor read aborted.'));
-    // Keep a marker on the returned array without changing persisted records.
-    void hasMore;
   });
 
   const items: T[] = [];
   let scanned = 0;
-  for (const row of rows) {
+  for (const row of cursorResult.rows) {
     assertWorkspaceLease(lease, workspaceId);
     if (!isEncryptedOperationalRow(storeName, row, workspaceId)) {
       throw new Error('Plaintext or malformed row encountered in encrypted operational store.');
@@ -212,5 +210,5 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
       if (items.length >= limit) break;
     }
   }
-  return { items, scanned, hasMore: rows.length >= maxScan };
+  return { items, scanned, hasMore: cursorResult.hasMore };
 }
