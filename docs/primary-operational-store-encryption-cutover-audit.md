@@ -538,3 +538,15 @@ The existing `cloudWriteQueueRef` serializes Firestore writes; it does not seria
 The latest CI run for the branch-pinned importer selector commit passed all workflow steps, including TypeScript, the complete test suite, Firestore Emulator security tests, and production build. This validates the pure classifier/selector tests; it does not validate a provider cutover or IndexedDB migration.
 
 No production precedence behavior was changed in this audit. In particular, no database version bump, new IndexedDB store, provider reader redirection, legacy key deletion, encryption-at-rest cutover, merge, or deployment was performed. The next safe implementation unit is a separately tested IndexedDB extension repository and migration journal behind the repository abstraction, followed by an async provider bootstrap only after concurrency, restore, compatibility, and rollback gates pass.
+
+
+### Warehouse transfer local-durability boundary
+
+A focused review of `createTrackedWarehouseTransfer` and `receiveTrackedWarehouseTransfer` adds a separate transaction boundary to the cutover checklist:
+
+- In cloud mode, product stock/cost layers and the Firestore `workspaceExtensions.warehouseTransfers` document are updated in one Firestore transaction. After that remote commit, the provider updates React state and writes the four localStorage compatibility keys separately.
+- In local mode, `updateProduct` is awaited before `persistTransferState` writes the extension transfer list. These are separate local persistence operations; a failure between them can leave product inventory and the transfer register divergent.
+- Receipt uses the locally observed transfer to identify the product, but the cloud transaction correctly re-reads the remote transfer and requires its status to remain `in_transit` before applying stock changes. The local path does not gain equivalent cross-record atomicity from that remote guard.
+- Consequently, the Firestore transaction is a remote atomicity guarantee only. It does not make the subsequent local mirror write durable or atomic, and the local mode path is not a multi-entity IndexedDB transaction.
+
+The extension repository integration must therefore expose a transaction that can commit the extension transfer record and the corresponding operational product update together when both are local IndexedDB entities, with restore-barrier and expected-revision checks. Cloud propagation and its `_version` remain a later, separate step. Required failure-injection tests include a crash after local product staging, after transfer-row staging, cloud success followed by local mirror failure, duplicate receipt, and concurrent receipt from two tabs. No production transfer code was changed in this audit.
