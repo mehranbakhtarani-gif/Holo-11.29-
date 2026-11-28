@@ -374,7 +374,9 @@ async function runTests() {
   const offlinePanelUpdateEnd = offlinePanelSrc.indexOf('\n  };', offlinePanelUpdateStart);
   const offlinePanelUpdate = offlinePanelSrc.slice(offlinePanelUpdateStart, offlinePanelUpdateEnd);
   assert.match(offlinePanelUpdate, /encryptBackupEnvelope/);
-  assert.match(offlinePanelUpdate, /requireBackupSessionPassphrase/);
+  assert.match(offlinePanelUpdate, /captureBackupSessionLease/);
+  assert.match(offlinePanelUpdate, /assertBackupSessionLease/);
+  assert.match(offlinePanelUpdate, /lease\\.passphrase/);
   assert.match(offlinePanelUpdate, /envelopeJson:/);
   assert.doesNotMatch(offlinePanelUpdate, /snapshotJson:/);
 
