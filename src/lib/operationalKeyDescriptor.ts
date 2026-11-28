@@ -221,12 +221,7 @@ export async function createOperationalKeyDescriptor(
     createOperationalDataSalt(),
     createdAt
   );
-  const generated = await globalThis.crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 },
-    true,
-    ['encrypt', 'decrypt']
-  );
-  const raw = new Uint8Array(await globalThis.crypto.subtle.exportKey('raw', generated));
+  const raw = requireRandomBytes(DATA_KEY_BYTES);
   try {
     return await wrapRawDataKey(raw, passphrase, identity);
   } finally {
