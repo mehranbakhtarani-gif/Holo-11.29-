@@ -109,8 +109,8 @@ async function main() {
     'stopping the mesh connector must clear all peer retry timers');
   const meshPassphraseSource = fs.readFileSync(path.resolve('src/lib/p2pMeshSync.ts'), 'utf8');
   const meshHookSource = fs.readFileSync(path.resolve('src/hooks/useLocalFirstMeshSync.ts'), 'utf8');
-  assert.match(meshPassphraseSource, /clean\\.length >= 10 && clean !== LEGACY_INSECURE_MESH_PASSPHRASE/);
-  assert.match(meshHookSource, /clean\\.length < 10 \\|\\| clean === LEGACY_INSECURE_MESH_PASSPHRASE/);
+  assert.match(meshPassphraseSource, /clean\.length >= 10 && clean !== LEGACY_INSECURE_MESH_PASSPHRASE/);
+  assert.match(meshHookSource, /clean\.length < 10 \|\| clean === LEGACY_INSECURE_MESH_PASSPHRASE/);
   console.log('P2P HMAC-SHA256 and reconnect lifecycle regression checks passed');
 }
 
