@@ -39,6 +39,7 @@ async function run() {
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, keyId: 'bad' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, cipher: 'AES-CBC' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: 'not-base64' }), false);
+    assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: 'A'.repeat(1_000_000) }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: 'AAAAAAAAAAAAAAAAAAAAA===' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, createdAt: 'invalid' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, wrapIvB64: 'AA==' }), false);
@@ -117,7 +118,7 @@ async function run() {
       /at least 10/
     );
 
-    console.log('Operational key descriptor: 37 assertions passed');
+    console.log('Operational key descriptor: 38 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
