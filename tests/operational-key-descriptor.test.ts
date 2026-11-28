@@ -17,6 +17,15 @@ async function run() {
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
   try {
     const subtle = webcrypto.subtle;
+    const originalRandom = webcrypto.getRandomValues.bind(webcrypto);
+    const randomBuffers: Uint8Array[] = [];
+    Object.defineProperty(webcrypto, 'getRandomValues', {
+      configurable: true,
+      value: ((array: Uint8Array) => {
+        randomBuffers.push(new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
+        return originalRandom(array);
+      }) as typeof webcrypto.getRandomValues,
+    });
     const originalEncrypt = subtle.encrypt.bind(subtle);
     const encryptionBuffers: Uint8Array[] = [];
     Object.defineProperty(subtle, 'encrypt', {
@@ -38,6 +47,12 @@ async function run() {
       'operational-key-1405',
       oldPassphrase
     );
+    assert.equal(randomBuffers.length, 3, 'descriptor creation must allocate only salt, DEK, and wrapping IV random buffers');
+    assert.ok(
+      randomBuffers.every((buffer) => buffer.every((byte) => byte === 0)),
+      'descriptor creation must clear generated salt, raw DEK, and wrapping IV buffers'
+    );
+    randomBuffers.length = 0;
     assert.ok(encryptionBuffers.length >= 3, 'DEK wrapping must pass only owned buffers to Web Crypto');
     assert.ok(
       encryptionBuffers.every((buffer) => buffer.every((byte) => byte === 0)),
@@ -135,6 +150,12 @@ async function run() {
       oldPassphrase,
       newPassphrase
     );
+    assert.equal(randomBuffers.length, 2, 'descriptor rewrap must allocate only a fresh salt and wrapping IV');
+    assert.ok(
+      randomBuffers.every((buffer) => buffer.every((byte) => byte === 0)),
+      'descriptor rewrap must clear generated salt and wrapping IV buffers'
+    );
+    randomBuffers.length = 0;
     assert.equal(rewrapped.workspaceId, restored.workspaceId);
     assert.equal(rewrapped.keyId, restored.keyId);
     assert.notEqual(rewrapped.saltB64, restored.saltB64);
@@ -165,7 +186,7 @@ async function run() {
       /at least 10/
     );
 
-    console.log('Operational key descriptor: 40 assertions passed');
+    console.log('Operational key descriptor: 44 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
