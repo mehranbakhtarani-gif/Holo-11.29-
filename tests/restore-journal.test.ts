@@ -23,7 +23,7 @@ const valid: OperationalRestoreJournalRecord = {
   updatedAt: now,
 };
 
-assert.equal(OP_DB_VERSION, 6, 'Restore journal requires operational DB schema v6');
+assert.equal(OP_DB_VERSION, 7, 'Restore and encrypted shadow journals require operational DB schema v7');
 assert.ok(!OPERATIONAL_STORES.includes('restoreJournal' as never), 'Restore journal is infrastructure, not an accounting collection');
 assert.equal(isValidOperationalRestoreJournalRecord(valid), true);
 assert.equal(isValidOperationalRestoreJournalRecord({ ...valid, packageDigest: 'not-a-digest' }), false);
