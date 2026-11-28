@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
+import { indexedDB } from 'fake-indexeddb';
+import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
 import {
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
 } from '../src/lib/offlineFirstCore';
 import {
   countOperationalWorkspaceRecords,
+  getPreparedEncryptedOperationalWorkspaceMeta,
+  loadOperationalWorkspace,
+  loadPreparedEncryptedOperationalWorkspace,
+  saveOperationalWorkspaceTx,
+  writeEncryptedOperationalWorkspaceSnapshot,
   parseOperationalWorkspaceSnapshot,
   queryOperationalStorePaginated,
   validateEncryptedOperationalWorkspaceRecordMetadata,
@@ -127,6 +134,50 @@ async function run() {
   };
   const rejected = await decryptAndVerifyBackupEnvelope(JSON.stringify(tampered), passphrase);
   assert.equal(rejected.ok, false);
+
+  // Exercise the actual OP_DB v5 secureWorkspace write/read path, not only envelope helpers.
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { indexedDB } });
+  const operationalSeed = {
+    ...workspace,
+    localRevision: 7,
+    businessLocalState: undefined,
+  };
+  const saved = await saveOperationalWorkspaceTx(operationalSeed as never);
+  assert.ok(saved, 'the operational workspace seed must commit to IndexedDB');
+  const loadedSource = await loadOperationalWorkspace();
+  assert.ok(loadedSource, 'the operational workspace must hydrate from IndexedDB');
+  unlockBackupSession(passphrase);
+  try {
+    const writtenMeta = await writeEncryptedOperationalWorkspaceSnapshot(
+      'workspace-1', loadedSource, saved!.localRevision
+    );
+    assert.equal(writtenMeta.sourceRevision, saved!.localRevision);
+    assert.deepEqual(await getPreparedEncryptedOperationalWorkspaceMeta('workspace-1'), writtenMeta);
+    const prepared = await loadPreparedEncryptedOperationalWorkspace('workspace-1');
+    assert.ok(prepared, 'the prepared encrypted snapshot must decrypt and load');
+    assert.deepEqual(prepared.accounts, loadedSource.accounts);
+    assert.equal(prepared.localRevision, loadedSource.localRevision);
+
+    lockBackupSession();
+    unlockBackupSession('WrongPassphrase#1405');
+    await assert.rejects(
+      () => loadPreparedEncryptedOperationalWorkspace('workspace-1'),
+      /رمز|decrypt|authentication|operation/i,
+      'an incorrect session key must not load the encrypted snapshot'
+    );
+    unlockBackupSession(passphrase);
+
+    const newerSave = await saveOperationalWorkspaceTx(loadedSource);
+    assert.ok(newerSave);
+    await assert.rejects(
+      () => loadPreparedEncryptedOperationalWorkspace('workspace-1'),
+      /قدیمی است|تطابق ندارد/,
+      'a prepared snapshot must be rejected after the plaintext operational revision advances'
+    );
+    assert.equal((await getPreparedEncryptedOperationalWorkspaceMeta('workspace-1'))?.sourceRevision, saved!.localRevision);
+  } finally {
+    lockBackupSession();
+  }
 
   console.log('Encrypted operational workspace migration: metadata validation covered');
 }
