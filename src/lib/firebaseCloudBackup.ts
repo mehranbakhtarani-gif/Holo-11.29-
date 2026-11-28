@@ -59,11 +59,15 @@ export async function listAndPruneFirebaseBackups(
 ): Promise<{ backups: CloudBackupMeta[]; prunedCount: number }> {
   const q = query(collection(db, 'cloudBackups'), where('ownerId', '==', ownerId));
   let snap;
+  let authoritativeForPrune = false;
   try {
     snap = preferServer ? await getDocsFromServer(q) : await getDocs(q);
+    // Never delete backups based on an incomplete offline cache result.
+    authoritativeForPrune = !snap.metadata.fromCache;
   } catch (err) {
     if (isFirestoreOfflineError(err)) {
       snap = await getDocs(q);
+      authoritativeForPrune = false;
     } else {
       handleFirestoreError(err, OperationType.LIST, 'cloudBackups');
       return { backups: [], prunedCount: 0 };
@@ -100,7 +104,7 @@ export async function listAndPruneFirebaseBackups(
   const toPrune = rows.slice(MAX_CLOUD_BACKUPS);
   let prunedCount = 0;
 
-  if (toPrune.length > 0) {
+  if (authoritativeForPrune && toPrune.length > 0) {
     try {
       const batch = writeBatch(db);
       for (const stale of toPrune) {
