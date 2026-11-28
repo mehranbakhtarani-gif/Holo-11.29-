@@ -16,12 +16,15 @@ import {
 } from './operationalMigrationJournal';
 import type { OperationalEncryptedStore } from './operationalRecordEncryption';
 
-const ENCRYPTED_STORES = new Set<OperationalEncryptedStore>([
+/** Every logical business store must be included before the journal can claim completeness. */
+export const OPERATIONAL_MIGRATION_STORES: readonly OperationalEncryptedStore[] = [
   'accounts', 'parties', 'products', 'vouchers', 'invoices', 'cheques',
   'employees', 'assets', 'costCenters', 'currencies', 'exchangeRates',
   'importDossiers', 'salesOrders', 'subcontractJobs', 'rbacOperators',
   'auditLogs', 'warehouses', 'taxReports', 'localProfiles',
-]);
+] as const;
+
+const ENCRYPTED_STORES = new Set<OperationalEncryptedStore>(OPERATIONAL_MIGRATION_STORES);
 
 /**
  * Run or resume every store in the journal. The returned journal is ready for
@@ -41,8 +44,10 @@ export async function runOperationalShadowMigration(
     }
     return entry.storeName as OperationalEncryptedStore;
   });
-  if (stores.length === 0 || new Set(stores).size !== stores.length) {
-    throw new Error('Operational shadow migration must contain unique supported stores.');
+  if (stores.length !== OPERATIONAL_MIGRATION_STORES.length ||
+      new Set(stores).size !== stores.length ||
+      OPERATIONAL_MIGRATION_STORES.some((requiredStore) => !stores.includes(requiredStore))) {
+    throw new Error('Operational shadow migration journal must include every required business store exactly once.');
   }
 
   let journal = initialJournal;
