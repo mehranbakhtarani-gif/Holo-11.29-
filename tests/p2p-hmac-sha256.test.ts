@@ -84,8 +84,8 @@ async function main() {
     /passphrase is required/
   );
   const meshSource = fs.readFileSync(path.resolve('src/lib/p2pMeshSync.ts'), 'utf8');
-  assert.match(meshSource, /if \(isValidMeshPeerId\(targetPeer\)\) this\.schedulePeerReconnect\(targetPeer\);/,
-    'peer-unavailable signaling errors must schedule a peer-specific retry');
+  assert.match(meshSource, /if \(isValidMeshPeerId\(targetPeer\)\) \{[\s\S]*?this\.connections\.delete\(targetPeer\);[\s\S]*?pendingConnection\.close\(\);[\s\S]*?this\.schedulePeerReconnect\(targetPeer\);/,
+    'peer-unavailable signaling errors must clean up stale pending connections before retrying');
   assert.match(meshSource, /conn\.on\('close',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
     'closed WebRTC data channels must schedule reconnection');
   assert.match(meshSource, /conn\.on\('error',[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
