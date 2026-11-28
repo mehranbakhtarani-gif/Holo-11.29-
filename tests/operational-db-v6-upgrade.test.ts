@@ -73,23 +73,20 @@ async function readRecord(db: IDBDatabase, storeName: string, key: IDBValidKey):
 async function run() {
   try {
     await seedVersionFive();
-    const heldV5 = await openAtVersion(5);
-    const blockedUpgrade = await new Promise<{ blocked: boolean; completed: boolean }>((resolve, reject) => {
-      let blocked = false;
-      const request = indexedDB.open(DB_NAME, 6);
-      request.onblocked = () => { blocked = true; heldV5.close(); };
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const upgraded = request.result;
-        const completed = upgraded.version === 6 &&
-          upgraded.objectStoreNames.contains('operationalMigrationJournal');
-        upgraded.close();
-        resolve({ blocked, completed });
-      };
-    });
-    assert.deepEqual(blockedUpgrade, { blocked: true, completed: true },
-      'a v5 connection must block the upgrade until it closes, then v6 must complete');
+    const fakeWindow = { indexedDB } as unknown as Window & { indexedDB: IDBFactory };
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
+    Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
+    const operationalDb = await import('../src/lib/operationalDb');
 
+    const heldV5 = await openAtVersion(5);
+    heldV5.onversionchange = () => heldV5.close();
+    await assert.rejects(
+      () => operationalDb.loadOperationalKeyDescriptor('migration-schema-test-workspace'),
+      /blocked by another open tab\/connection/,
+      'the production opener must fail closed when a legacy tab blocks schema upgrade'
+    );
+
+    // The production open request resumes after the old connection closes and creates v6.
     const v6 = await openAtVersion(6);
     try {
       assert.equal(v6.version, 6);
@@ -123,13 +120,8 @@ async function run() {
       v6.close();
     }
 
-    // Exercise the production open path against the already-upgraded database.
-    const fakeWindow = { indexedDB } as unknown as Window & { indexedDB: IDBFactory };
-    Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
-    Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
-    const operationalDb = await import('../src/lib/operationalDb');
     await operationalDb.loadOperationalKeyDescriptor('migration-schema-test-workspace');
-    console.log('Operational IndexedDB v5→v6 upgrade: data, keyPaths, indexes, and blocked-tab behavior passed');
+    console.log('Operational IndexedDB v5→v6 production upgrade: data, keyPaths, indexes, and blocked-tab behavior passed');
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
     else Reflect.deleteProperty(globalThis, 'window');
@@ -137,7 +129,6 @@ async function run() {
     else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
   }
 }
-
 run().catch((error) => {
   console.error(error);
   process.exit(1);
