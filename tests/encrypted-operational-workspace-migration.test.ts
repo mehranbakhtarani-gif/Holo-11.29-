@@ -193,6 +193,46 @@ async function run() {
       'the prepared snapshot must load again when the original extension state is restored'
     );
 
+    // Force an extension-only mutation while WebCrypto is still encrypting.
+    // The final IndexedDB callback must re-check localStorage before publishing.
+    let signalEncryptionStarted!: () => void;
+    let releaseEncryption!: () => void;
+    const encryptionStarted = new Promise<void>((resolve) => { signalEncryptionStarted = resolve; });
+    const encryptionGate = new Promise<void>((resolve) => { releaseEncryption = resolve; });
+    const subtle = globalThis.crypto.subtle;
+    const originalEncrypt = subtle.encrypt.bind(subtle);
+    Object.defineProperty(subtle, 'encrypt', {
+      configurable: true,
+      value: (...args: Parameters<SubtleCrypto['encrypt']>) => {
+        signalEncryptionStarted();
+        return encryptionGate.then(() => Reflect.apply(originalEncrypt, subtle, args) as Promise<ArrayBuffer>);
+      },
+    });
+    try {
+      const racingWrite = writeEncryptedOperationalWorkspaceSnapshot(
+        'workspace-1', loadedSource, saved!.localRevision
+      );
+      await encryptionStarted;
+      localStorage.setItem('holoo_apex96_workspace_extensions_v2', JSON.stringify({ raceMutation: true }));
+      releaseEncryption();
+      await assert.rejects(
+        () => racingWrite,
+        /افزونه‌ها پس از تهیه snapshot تغییر کرده‌اند/,
+        'an extension-only mutation during asynchronous encryption must prevent stale shadow publication'
+      );
+    } finally {
+      releaseEncryption();
+      Object.defineProperty(subtle, 'encrypt', {
+        configurable: true,
+        value: originalEncrypt,
+      });
+      localStorage.removeItem('holoo_apex96_workspace_extensions_v2');
+    }
+    assert.ok(
+      await loadPreparedEncryptedOperationalWorkspace('workspace-1'),
+      'a rejected in-flight stale write must preserve the previously prepared snapshot'
+    );
+
     lockBackupSession();
     unlockBackupSession('WrongPassphrase#1405');
     await assert.rejects(
