@@ -240,3 +240,44 @@ The branch now contains a partial mitigation for the extension-only stale-shadow
 This is a freshness guard, not a durable extension revision protocol. It does not make localStorage and IndexedDB atomic, cannot prevent a mutation immediately after a successful freshness check, and does not guarantee cross-tab ordering or automatic shadow refresh after extension-only changes. The migration test now also pauses WebCrypto encryption, mutates the extension localStorage value while encryption is in flight, and verifies that the final IndexedDB callback rejects the stale write while preserving the previously prepared shadow. This is a deterministic same-tab race test; it does not establish cross-tab ordering, browser-process crash safety, or atomicity across localStorage and IndexedDB. A monotonic durable extension generation and explicit scheduling/retry behavior remain required before migration or cutover.
 
 No primary-store encryption cutover, schema bump, merge, or deployment was performed. The primary IndexedDB stores remain plaintext and authoritative; `secureWorkspace` remains a non-authoritative encrypted shadow/checkpoint.
+
+
+## Extension durability design decision — 2026-11-28
+
+A focused re-audit of `WorkspaceExtensionsContext.tsx`, `businessLocalStateSnapshot.ts`, and the operational database upgrade path rules out a localStorage-only generation counter as a durable consistency protocol.
+
+### Confirmed write and concurrency characteristics
+
+- The extension aggregate and three compatibility mirrors are written sequentially to four localStorage keys. The current code rolls back keys already written if a later `setItem` fails, but rollback itself can fail and the four-key sequence is not atomic.
+- Ordinary `updateExtensions` is synchronous: it computes from `stateRef.current`, writes the local mirror, updates React state, and starts cloud propagation without awaiting it. Cloud snapshot hydration also writes the mirror. Tracked warehouse transfer persistence uses the same local mirror helper.
+- The Firestore path has its own transaction/version behavior. A local persistence redesign must not conflate the local IndexedDB generation with the Firestore document `_version`, nor overwrite newer cloud changes during hydration/replay.
+- `captureBusinessLocalStateSnapshot` reads an allowlist of independent localStorage keys one at a time. A snapshot can therefore observe a mixed set if another tab mutates those keys during capture.
+- IndexedDB schema is currently version 5. Its upgrade handler creates object stores and indexes in the versionchange transaction. The existing operational stores, specialized multi-store financial transactions, restore journal, and restore barrier are separate compatibility constraints.
+
+### Rejected approach: increment a counter beside localStorage writes
+
+A counter in IndexedDB (or localStorage) does not make the payload and counter atomic when they live in different storage systems. Increment-before-write can leave a permanently advanced counter after a crash; increment-after-write leaves a crash window where changed payload is paired with the old counter. A localStorage counter also remains vulnerable to cross-tab read/modify/write races. BroadcastChannel/storage events are notifications, not a durable transaction or serialization primitive. The existing freshness comparison is useful as a rejection guard, but it cannot close these windows.
+
+### Recommended target: one authoritative IndexedDB extension aggregate
+
+Before implementing generation tracking, move the authoritative extension aggregate into a dedicated record in the operational IndexedDB database (for example, a `workspaceExtensions` object store keyed by workspace ID). Store the aggregate payload, schema version, and monotonically increasing generation in the same record. A single IndexedDB readwrite transaction then atomically replaces the aggregate and advances its generation. For any command that must atomically affect both core accounting entities and extensions, include both stores in the same transaction; do not split the business invariant across independent commits.
+
+The intended contract is:
+
+1. All extension mutations enter a typed asynchronous persistence command. The command reads the current aggregate/generation and applies a validated patch inside one readwrite transaction; stale expected generations are rejected or explicitly rebased.
+2. React may render an optimistic state, but persistence completion/failure is observable. A failed durable write must not be reported as committed or silently disappear behind a fire-and-forget promise.
+3. Cloud hydration and outbox replay use the same command boundary and explicit source/version metadata. Firestore `_version`, local IndexedDB generation, and sync operation IDs remain distinct fields with documented ordering rules.
+4. Legacy localStorage keys become migration inputs and, only if compatibility requires them, derived mirrors. They are never used as the authority for generation or encrypted-shadow freshness. Mirror writes are repairable and must not roll back a committed IndexedDB transaction.
+5. Encrypted shadow preparation reads the extension aggregate and generation from IndexedDB, includes both in the authenticated snapshot, and verifies the same generation in the final IndexedDB transaction that publishes the shadow. Because both records share one database, the final freshness fence can be transactionally enforced.
+6. Restore stages and validates the extension aggregate, then commits it under the existing restore barrier/journal with an explicit target generation. Recovery must be idempotent and must not expose a partially restored aggregate.
+
+### Migration and test gates before implementation
+
+- Inventory every reader/writer of the four compatibility keys, including helpers outside `WorkspaceExtensionsContext`; classify each as authoritative read, migration-only fallback, or derived mirror. No key can be retired until this inventory is complete.
+- Define behavior for existing profiles, empty profiles, corrupted legacy JSON, simultaneous tabs on old and new app versions, quota failure, blocked/versionchange upgrades, and rollback to an older application build. An older build that still treats localStorage as authoritative is a compatibility hazard; rollout must either be gated or retain a proven downgrade bridge.
+- Add transaction tests for concurrent tab writes, compare-and-swap generation conflicts, abort after payload put but before commit, and crash/reopen recovery. Test that generation never advances without its matching payload and vice versa.
+- Add migration tests for interruption before/after each journal transition, legacy mirror disagreement, duplicate migration attempts, and rollback. Test cloud hydration racing a local mutation and outbox replay racing restore.
+- Only after the extension aggregate is authoritative in IndexedDB should the encrypted repository migration consume it. Do not add an extension generation to the current localStorage snapshot and describe it as durable.
+- Keep the current freshness guard and encrypted shadow non-authoritative until this migration, the repository encryption work, and real-device recovery gates are complete.
+
+This is an architecture decision and source-level audit only. No schema bump, data migration, localStorage authority change, encrypted cutover, merge, or deployment was performed.
