@@ -8,13 +8,14 @@ import {
   commitSalesOrderDispatchOperationalTx,
   commitStockAdjustmentOperationalTx,
 } from '../src/lib/operationalDb';
-import { operationalBackupMaintenancePort, operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort, operationalWorkspacePersistencePort } from '../src/lib/repositoryAbstraction';
+import { operationalBackupMaintenancePort, operationalDiagnosticsPort, operationalEncryptionPreparationPort, operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort, operationalWorkspacePersistencePort } from '../src/lib/repositoryAbstraction';
 import {
   clearPendingSyncOutboxOperations, enqueueSyncOutboxOperation, getActiveOperationalRestoreJournal,
   isInboxOperationProcessed, isOperationalRestoreBarrierActive, listPendingSyncOutboxOperations,
   loadOperationalWorkspace,
   markSyncOutboxOperationStatus, recordInboxOperation,
   OP_DB_VERSION, savePreUpdateSafetyBackup, saveOperationalWorkspaceTx,
+  getOperationalDbStats, prepareEncryptedOperationalWorkspaceMigration,
 } from '../src/lib/operationalDb';
 
 // The port must remain a transparent delegation layer. Replacing an implementation
@@ -44,6 +45,10 @@ assert.deepEqual(Object.keys(operationalWorkspacePersistencePort).sort(), ['isRe
 assert.equal(operationalBackupMaintenancePort.databaseVersion, OP_DB_VERSION);
 assert.equal(operationalBackupMaintenancePort.savePreUpdateSafetyBackup, savePreUpdateSafetyBackup);
 assert.deepEqual(Object.keys(operationalBackupMaintenancePort).sort(), ['databaseVersion','savePreUpdateSafetyBackup'].sort());
+assert.equal(operationalDiagnosticsPort.getStats, getOperationalDbStats);
+assert.deepEqual(Object.keys(operationalDiagnosticsPort).sort(), ['getStats']);
+assert.equal(operationalEncryptionPreparationPort.prepareShadowSnapshot, prepareEncryptedOperationalWorkspaceMigration);
+assert.deepEqual(Object.keys(operationalEncryptionPreparationPort).sort(), ['prepareShadowSnapshot']);
 
 const settingsViewSource = fs.readFileSync(path.join(process.cwd(), 'src/components/SettingsView.tsx'), 'utf8');
 assert.match(settingsViewSource, /operationalRecoveryPort/);
@@ -53,6 +58,9 @@ assert.match(offlinePanelSource, /operationalBackupMaintenancePort/);
 assert.doesNotMatch(offlinePanelSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
 const accountingSource = fs.readFileSync(path.join(process.cwd(), 'src/context/AccountingContext.tsx'), 'utf8');
 assert.match(accountingSource, /operationalWorkspacePersistencePort/);
+assert.match(accountingSource, /operationalDiagnosticsPort/);
+assert.match(accountingSource, /operationalEncryptionPreparationPort/);
+assert.doesNotMatch(accountingSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
 assert.doesNotMatch(accountingSource, /\b(loadOperationalWorkspace|saveOperationalWorkspaceTx|isOperationalRestoreBarrierActive)\b/);
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8');
 assert.match(appSource, /import\('\.\/lib\/repositoryAbstraction'\)/);
