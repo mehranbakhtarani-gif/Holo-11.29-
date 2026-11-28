@@ -14,6 +14,7 @@ import {
 
 async function run() {
   const previousCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const previousRandom = Object.getOwnPropertyDescriptor(webcrypto, 'getRandomValues');
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
   try {
     const subtle = webcrypto.subtle;
@@ -188,6 +189,8 @@ async function run() {
 
     console.log('Operational key descriptor: 44 assertions passed');
   } finally {
+    if (previousRandom) Object.defineProperty(webcrypto, 'getRandomValues', previousRandom);
+    else Reflect.deleteProperty(webcrypto, 'getRandomValues');
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
   }
