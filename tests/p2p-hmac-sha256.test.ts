@@ -92,6 +92,10 @@ async function main() {
     'failed WebRTC data channels must schedule reconnection');
   assert.match(meshSource, /private watchPeerConnection\([\s\S]*?}, 20_000\);[\s\S]*?this\.schedulePeerReconnect\(remotePeerId\);/,
     'a stalled PeerJS attempt with no lifecycle event must time out and retry');
+  assert.match(meshSource, /if \(existing\) \{[\s\S]*?if \(existing\.open\) void this\.sendHello\(existing\);[\s\S]*?continue;/,
+    'mesh startup must not create parallel offers while a peer connection is pending');
+  assert.match(meshSource, /if \(prev && prev !== conn\) \{[\s\S]*?prev\.close\(\);/,
+    'a superseded pending or open peer connection must be cleaned up');
   assert.match(meshSource, /this\.watchPeerConnection\(remotePeerId, conn\);/,
     'every outbound or inbound peer connection must receive a bounded open watchdog');
   assert.match(meshSource, /for \(const timer of this\.peerReconnectTimers\.values\(\)\) window\.clearTimeout\(timer\);/,
