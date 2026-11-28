@@ -2318,20 +2318,20 @@ export default function App() {
           const [
             { encryptBackupEnvelope },
             { captureBackupSessionLease, assertBackupSessionLease },
-            { OP_DB_VERSION, savePreUpdateSafetyBackup },
+            { operationalBackupMaintenancePort },
           ] = await Promise.all([
             import('./lib/offlineFirstCore'),
             import('./lib/backupSession'),
-            import('./lib/operationalDb'),
+            import('./lib/repositoryAbstraction'),
           ]);
           // A PWA update must never create a plaintext safety snapshot.
           const lease = captureBackupSessionLease();
           const envelope = await encryptBackupEnvelope(exportBackupJson(), lease.passphrase);
           assertBackupSessionLease(lease);
-          return savePreUpdateSafetyBackup({
+          return operationalBackupMaintenancePort.savePreUpdateSafetyBackup({
             id: `pre_update_${Date.now()}`,
             reason: 'pwa_update',
-            schemaVersion: OP_DB_VERSION,
+            schemaVersion: operationalBackupMaintenancePort.databaseVersion,
             sha256: envelope.plaintextSha256,
             envelopeJson: JSON.stringify(envelope),
             createdAt: new Date().toISOString(),
