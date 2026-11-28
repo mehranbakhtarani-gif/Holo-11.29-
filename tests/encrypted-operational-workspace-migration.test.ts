@@ -136,9 +136,15 @@ async function run() {
   assert.equal(rejected.ok, false);
 
   // Exercise the actual OP_DB v5 secureWorkspace write/read path, not only envelope helpers.
+  const localValues = new Map<string, string>();
+  const localStorage = {
+    getItem: (key: string) => localValues.get(key) ?? null,
+    setItem: (key: string, value: string) => { localValues.set(key, String(value)); },
+    removeItem: (key: string) => { localValues.delete(key); },
+  };
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { indexedDB, localStorage: { getItem: () => null }, dispatchEvent: () => true },
+    value: { indexedDB, localStorage, dispatchEvent: () => true },
   });
   const operationalSeed = {
     ...workspace,
@@ -172,6 +178,20 @@ async function run() {
     assert.ok(prepared, 'the prepared encrypted snapshot must decrypt and load');
     assert.deepEqual(prepared.accounts, loadedSource.accounts);
     assert.equal(prepared.localRevision, loadedSource.localRevision);
+
+    // Extension-only localStorage changes do not advance the IndexedDB revision.
+    // The encrypted shadow must nevertheless reject the now-stale payload.
+    localStorage.setItem('holoo_apex96_workspace_extensions_v2', JSON.stringify({}));
+    await assert.rejects(
+      () => loadPreparedEncryptedOperationalWorkspace('workspace-1'),
+      /افزونه‌ها پس از تهیه snapshot تغییر کرده‌اند/,
+      'an extension-only mutation must invalidate a prepared shadow even when the IDB revision is unchanged'
+    );
+    localStorage.removeItem('holoo_apex96_workspace_extensions_v2');
+    assert.ok(
+      await loadPreparedEncryptedOperationalWorkspace('workspace-1'),
+      'the prepared snapshot must load again when the original extension state is restored'
+    );
 
     lockBackupSession();
     unlockBackupSession('WrongPassphrase#1405');
