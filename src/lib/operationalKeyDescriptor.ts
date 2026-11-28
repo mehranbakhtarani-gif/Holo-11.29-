@@ -171,11 +171,18 @@ async function wrapRawDataKey(
     identity.iterations
   );
   const iv = requireRandomBytes(WRAP_IV_BYTES);
-  const wrapped = await globalThis.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(descriptorAad(identity)), tagLength: 128 },
-    kek,
-    toArrayBuffer(rawDataKey)
-  );
+  const rawBuffer = toArrayBuffer(rawDataKey);
+  let wrapped: ArrayBuffer;
+  try {
+    wrapped = await globalThis.crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(descriptorAad(identity)), tagLength: 128 },
+      kek,
+      rawBuffer
+    );
+  } finally {
+    // Clear the temporary copy as well as the caller-owned raw key buffer.
+    new Uint8Array(rawBuffer).fill(0);
+  }
   const descriptor: OperationalKeyDescriptor = {
     ...identity,
     wrapIvB64: encodeBase64(iv),
@@ -246,16 +253,18 @@ export async function deriveOperationalKeyFromDescriptor(
     throw new Error('Operational key descriptor is invalid or belongs to another workspace.');
   }
   const raw = await unwrapRawDataKey(passphrase, descriptor);
+  const rawBuffer = toArrayBuffer(raw);
   try {
     return await globalThis.crypto.subtle.importKey(
       'raw',
-      toArrayBuffer(raw),
+      rawBuffer,
       { name: 'AES-GCM' },
       false,
       ['encrypt', 'decrypt']
     );
   } finally {
     raw.fill(0);
+    new Uint8Array(rawBuffer).fill(0);
   }
 }
 
