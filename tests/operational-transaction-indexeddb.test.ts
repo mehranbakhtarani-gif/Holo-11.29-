@@ -68,7 +68,7 @@ async function run() {
     const invoice = { id: 'invoice-1' };
 
     assert.equal(await commitInvoiceOperationalTx({
-      updatedProducts: [product],
+      updatedProducts: [product as never],
       voucher: voucher as never,
       cheque: cheque as never,
       invoice: invoice as never,
@@ -82,7 +82,7 @@ async function run() {
 
     await assert.rejects(
       () => commitInvoiceOperationalTx({
-        updatedProducts: [{ id: 'product-rollback', stock: 2 }],
+        updatedProducts: [{ id: 'product-rollback', stock: 2 } as never],
         voucher: {
           id: 'unbalanced-voucher',
           lines: [
