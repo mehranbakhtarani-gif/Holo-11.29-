@@ -91,8 +91,9 @@ Object.defineProperty(globalThis, 'window', {
   value: { indexedDB },
 });
 const operationalDb = await import('../src/lib/operationalDb');
-await operationalDb.enqueueSyncOutboxOperation(operation);
-await operationalDb.enqueueSyncOutboxOperation({
+const { operationalSyncPersistencePort } = await import('../src/lib/repositoryAbstraction');
+await operationalSyncPersistencePort.enqueueOutbox(operation);
+await operationalSyncPersistencePort.enqueueOutbox({
   operationId: 'supabase_pending_1',
   target: 'supabase',
   workspaceId: 'workspace-user-1',
@@ -103,12 +104,39 @@ await operationalDb.enqueueSyncOutboxOperation({
   retryCount: 0,
   status: 'pending',
 });
-await operationalDb.clearPendingSyncOutboxOperations();
-const pendingAfterCloudCleanup = await operationalDb.listPendingSyncOutboxOperations();
+assert.deepEqual(
+  (await operationalSyncPersistencePort.listPendingOutbox()).map((item) => item.operationId),
+  [operation.operationId, 'supabase_pending_1'],
+  'the typed port must expose durable pending operations'
+);
+await operationalSyncPersistencePort.markOutboxStatus('supabase_pending_1', 'conflict');
+assert.deepEqual(
+  (await operationalSyncPersistencePort.listPendingOutbox()).map((item) => item.operationId),
+  [operation.operationId],
+  'conflict operations must not be replayed as pending'
+);
+await operationalSyncPersistencePort.clearPendingOutbox();
+const pendingAfterCloudCleanup = await operationalSyncPersistencePort.listPendingOutbox();
 assert.deepEqual(
   pendingAfterCloudCleanup.map((item) => item.operationId),
   [operation.operationId],
   'generic cloud cleanup must preserve encrypted Firebase extension mutations'
 );
+await operationalSyncPersistencePort.markOutboxStatus(operation.operationId, 'conflict');
+assert.equal((await operationalSyncPersistencePort.listPendingOutbox()).length, 0);
+await operationalSyncPersistencePort.markOutboxStatus(operation.operationId, 'synced');
+assert.equal((await operationalSyncPersistencePort.listPendingOutbox()).length, 0);
+await operationalSyncPersistencePort.recordInbox({
+  operationId: 'inbound-duplicate-1',
+  sourceDeviceId: 'peer-1',
+  payloadHash: 'b'.repeat(64),
+  receivedAt: '2026-11-28T08:00:02.000Z',
+});
+assert.equal(await operationalSyncPersistencePort.hasProcessedInbox('inbound-duplicate-1'), true);
+assert.equal(await operationalSyncPersistencePort.hasProcessedInbox('unknown-inbound'), false);
+operationalDb.setOperationalRestoreBarrier(true);
+assert.equal(operationalSyncPersistencePort.isRestoreBarrierActive(), true);
+operationalDb.setOperationalRestoreBarrier(false);
+assert.equal(operationalSyncPersistencePort.isRestoreBarrierActive(), false);
 
 console.log('Encrypted workspace extension outbox tests passed');
