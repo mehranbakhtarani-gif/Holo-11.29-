@@ -7,7 +7,9 @@
  */
 import {
   assertBackupSessionLease,
+  assertBackupSessionGeneration,
   captureBackupSessionLease,
+  getBackupSessionGeneration,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
 import {
@@ -29,6 +31,7 @@ export interface OperationalDataKeyLease {
   key: CryptoKey;
   generation: number;
   workspaceId: string | null;
+  backupSessionGeneration: number;
 }
 
 function invalidateOperationalDataKey(): void {
@@ -98,12 +101,22 @@ export function captureOperationalDataKeyLease(): OperationalDataKeyLease {
     throw new Error('Operational data access is blocked while workspace restore is active.');
   }
   if (!activeKey) throw new Error('Operational data key is locked.');
-  return { key: activeKey, generation, workspaceId: activeWorkspaceId };
+  return {
+    key: activeKey,
+    generation,
+    workspaceId: activeWorkspaceId,
+    backupSessionGeneration: getBackupSessionGeneration(),
+  };
 }
 
 export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): void {
   if (isOperationalRestoreBarrierActive()) {
     throw new Error('Operational data access is blocked while workspace restore is active.');
+  }
+  try {
+    assertBackupSessionGeneration(lease.backupSessionGeneration);
+  } catch {
+    throw new Error('Operational data-key lease expired; discard the pending operation.');
   }
   if (
     !activeKey || lease.generation !== generation || lease.key !== activeKey ||
