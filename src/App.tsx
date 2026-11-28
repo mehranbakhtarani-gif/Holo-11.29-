@@ -143,6 +143,7 @@ import {
 import { formatCompactMoney, toPersianDigits } from './lib/format';
 import { computeChequeAlerts, useChequeAlertPreferences } from './lib/chequeAlerts';
 import { RBAC_ROLE_LABELS } from './lib/enterpriseAccounting';
+import { installBackupSessionAutoLock } from './lib/backupSessionLifecycle';
 
 // HOLOO_MENU_TREE is imported from ./lib/holooMenuTree (single source of truth for Sidebar + Smart Search)
 
@@ -369,6 +370,8 @@ export default function App() {
       // ignore storage quota errors
     }
   }, [darkMode]);
+
+  useEffect(() => installBackupSessionAutoLock(), []);
 
   useEffect(() => {
     setPresenceModule(activeModule);
@@ -2314,7 +2317,7 @@ export default function App() {
         onCreatePreUpdateBackup={async () => {
           const [
             { encryptBackupEnvelope },
-            { requireBackupSessionPassphrase },
+            { captureBackupSessionLease, assertBackupSessionLease },
             { OP_DB_VERSION, savePreUpdateSafetyBackup },
           ] = await Promise.all([
             import('./lib/offlineFirstCore'),
@@ -2322,7 +2325,9 @@ export default function App() {
             import('./lib/operationalDb'),
           ]);
           // A PWA update must never create a plaintext safety snapshot.
-          const envelope = await encryptBackupEnvelope(exportBackupJson(), requireBackupSessionPassphrase());
+          const lease = captureBackupSessionLease();
+          const envelope = await encryptBackupEnvelope(exportBackupJson(), lease.passphrase);
+          assertBackupSessionLease(lease);
           return savePreUpdateSafetyBackup({
             id: `pre_update_${Date.now()}`,
             reason: 'pwa_update',
