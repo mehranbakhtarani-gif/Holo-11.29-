@@ -17,16 +17,19 @@ import {
 } from './operationalKeyDescriptor';
 
 let activeKey: CryptoKey | null = null;
+let activeWorkspaceId: string | null = null;
 let generation = 0;
 
 export interface OperationalDataKeyLease {
   key: CryptoKey;
   generation: number;
+  workspaceId: string | null;
 }
 
 function invalidateOperationalDataKey(): void {
   generation += 1;
   activeKey = null;
+  activeWorkspaceId = null;
 }
 
 if (typeof window !== 'undefined') {
@@ -44,6 +47,7 @@ export async function unlockOperationalDataSession(salt: Uint8Array): Promise<vo
     throw new Error('Operational key derivation was superseded by another session change.');
   }
   activeKey = key;
+  activeWorkspaceId = null;
 }
 
 /**
@@ -67,6 +71,7 @@ export async function unlockOperationalDataSessionFromDescriptor(
     throw new Error('Operational key derivation was superseded by another session change.');
   }
   activeKey = key;
+  activeWorkspaceId = expectedWorkspaceId;
 }
 
 export function lockOperationalDataSession(): void {
@@ -79,11 +84,14 @@ export function isOperationalDataSessionUnlocked(): boolean {
 
 export function captureOperationalDataKeyLease(): OperationalDataKeyLease {
   if (!activeKey) throw new Error('Operational data key is locked.');
-  return { key: activeKey, generation };
+  return { key: activeKey, generation, workspaceId: activeWorkspaceId };
 }
 
 export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): void {
-  if (!activeKey || lease.generation !== generation || lease.key !== activeKey) {
+  if (
+    !activeKey || lease.generation !== generation || lease.key !== activeKey ||
+    lease.workspaceId !== activeWorkspaceId
+  ) {
     throw new Error('Operational data-key lease expired; discard the pending operation.');
   }
 }
