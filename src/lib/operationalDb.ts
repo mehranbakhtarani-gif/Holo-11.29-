@@ -634,9 +634,9 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains('encryptedOperationalRecords')) {
         const encryptedRecords = db.createObjectStore('encryptedOperationalRecords', {
-          keyPath: ['workspaceId', 'storeName', 'recordId'],
+          keyPath: ['workspaceId', 'migrationId', 'storeName', 'recordId'],
         });
-        encryptedRecords.createIndex('workspaceStore', ['workspaceId', 'storeName'], { unique: false });
+        encryptedRecords.createIndex('workspaceMigrationStore', ['workspaceId', 'migrationId', 'storeName'], { unique: false });
       }
       for (const storeName of OPERATIONAL_STORES) {
         let store: IDBObjectStore;
