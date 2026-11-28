@@ -305,3 +305,37 @@ The three legacy loaders and corresponding save helpers are defined in `src/lib/
 - This is a source-level inventory of the four named keys, not proof that every dynamically constructed key or indirect access in the entire repository has been found. Before retiring localStorage, perform a repository-wide search for `localStorage`, the exact key strings, and the exported smartIntelligence helper names, then review every result on the target branch.
 
 No code, data, IndexedDB schema, or runtime behavior was changed by this inventory.
+
+
+## Migration protocol and compatibility gates — 2026-11-28
+
+The four-key inventory is intentionally not treated as a complete repository-wide proof. Before implementation, the exact-key search and a full source scan must be repeated against the migration commit, including dynamically accessed storage wrappers and tests.
+
+### Deterministic legacy import policy
+
+The migration must be a one-way, journaled import into a dedicated IndexedDB extension aggregate. It must not perform a blind object spread across all four legacy values.
+
+1. Read and retain the raw value and parse/validation result for each legacy key. Distinguish absent, valid, malformed, and inaccessible storage; do not collapse these states into an empty object.
+2. Validate the aggregate record and each of its fields independently. A valid aggregate field wins over a compatibility mirror. If that field is absent or invalid, a valid corresponding legacy mirror may be used as a fallback. This preserves the current bootstrap intent without allowing a stale mirror to overwrite valid aggregate data.
+3. If the aggregate JSON itself is malformed, record a recoverable migration diagnostic and construct only those fields that can be safely recovered from individually valid mirrors. Never silently delete or overwrite the raw legacy values during this phase.
+4. Apply existing domain limits and validators before commit (including reserved-invoice and product metadata bounds); do not truncate or coerce financial/business records without an explicit domain rule.
+5. In one IndexedDB readwrite transaction, write the normalized aggregate, its schema version, generation 1 (or a formally specified initial generation), and a migration journal state that proves the payload and marker committed together.
+6. On restart, if no committed marker exists, rerun validation/import idempotently. If the marker exists, verify the target record and schema before treating migration as complete. A marker without a valid aggregate must be impossible by transaction design and treated as corruption if observed.
+7. Keep the original localStorage values unchanged until migration verification and a defined rollback/downgrade window have passed. Compatibility mirrors, if retained, are derived writes after the IndexedDB commit and are never rollback authority.
+
+### Required conflict and compatibility decisions
+
+- Two tabs migrating simultaneously: use a single IndexedDB readwrite transaction and a compare-and-swap check on the migration marker/generation; the loser must read and validate the winner's committed record rather than overwrite it.
+- Old and new application versions running concurrently: an older build that continues writing localStorage can reintroduce stale values. A rollout gate or explicit cross-version protocol is required; storage events alone do not provide atomic ordering.
+- Existing aggregate plus disagreeing mirrors: aggregate field wins when valid; emit diagnostics for disagreements. A mirror may only fill a missing/invalid aggregate field under the policy above.
+- Quota/security failure: abort the IndexedDB transaction and leave all legacy values untouched. Never claim migration complete.
+- IndexedDB blocked/versionchange: surface a retryable migration state; do not clear legacy data or repeatedly force reloads.
+- Rollback to an older build: retain a tested downgrade bridge or block downgrade after the authority switch. Merely continuing to mirror writes is not enough unless stale-write ordering is defined and verified.
+- Restore in progress: the existing restore barrier takes precedence. Migration must not run concurrently with restore staging/commit, and recovery must be journal-idempotent.
+- Encryption: the imported aggregate remains subject to the separate encryption-at-rest cutover gates. Moving extension data into IndexedDB does not itself encrypt it.
+
+### Minimum migration test matrix
+
+Tests must cover: missing all keys; aggregate-only; mirror-only; valid aggregate with stale mirrors; partial aggregate with valid per-field mirrors; malformed aggregate with recoverable mirrors; malformed individual mirrors; disagreement diagnostics; duplicate migration; two tabs racing; crash before transaction commit; restart after commit but before UI hydration; blocked database upgrade; quota failure; restore barrier active; cloud hydration racing a local edit; outbox replay racing migration; old-version writer racing the new build; downgrade/rollback behavior.
+
+No migration code or schema change is authorized by this document alone. The next implementation gate is a complete branch-pinned storage-access inventory and a reviewed compatibility decision for old application versions.
