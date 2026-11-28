@@ -6,6 +6,11 @@
  */
 
 import type { FinancialCollectionKind } from './offlineFirstCore';
+import {
+  createOperationalKeyDescriptor,
+  isOperationalKeyDescriptor,
+  type OperationalKeyDescriptor,
+} from './operationalKeyDescriptor';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
 import { assertBackupSessionLease, captureBackupSessionLease } from './backupSession';
 import { importAllBankReconciliationSessions } from './bankReconciliationEngine';
@@ -2835,3 +2840,87 @@ export function clearHolooLocalStorageKeys(options?: { preserveTheme?: boolean }
   return removed;
 }
 
+
+
+const OPERATIONAL_KEY_DESCRIPTOR_PREFIX = 'operational_key_descriptor:';
+
+/** Read the passphrase-wrapped workspace data-key envelope from the existing meta store. */
+export async function loadOperationalKeyDescriptor(workspaceId: string): Promise<OperationalKeyDescriptor | null> {
+  const cleanWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : '';
+  if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) throw new Error('شناسه فضای کاری برای بازیابی کلید عملیاتی معتبر نیست.');
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای خواندن کلید عملیاتی در دسترس نیست.');
+  const db = await openOperationalDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(['meta'], 'readonly');
+      const request = tx.objectStore('meta').get(OPERATIONAL_KEY_DESCRIPTOR_PREFIX + cleanWorkspaceId);
+      let descriptor: OperationalKeyDescriptor | null = null;
+      request.onsuccess = () => {
+        if (request.result === undefined) { descriptor = null; return; }
+        const candidate = (request.result as { value?: unknown }).value;
+        if (!isOperationalKeyDescriptor(candidate) || candidate.workspaceId !== cleanWorkspaceId) {
+          reject(new Error('فراداده کلید عملیاتی ذخیره‌شده خراب یا متعلق به فضای کاری دیگری است.'));
+          return;
+        }
+        descriptor = candidate;
+      };
+      request.onerror = () => reject(request.error ?? new Error('خواندن کلید عملیاتی ناموفق بود.'));
+      tx.oncomplete = () => resolve(descriptor);
+      tx.onerror = () => reject(tx.error ?? new Error('تراکنش خواندن کلید عملیاتی ناموفق بود.'));
+      tx.onabort = () => reject(tx.error ?? new Error('تراکنش خواندن کلید عملیاتی لغو شد.'));
+    });
+  } finally { db.close(); }
+}
+
+/**
+ * Initialize a workspace key exactly once. The descriptor is committed only
+ * after wrapping and revalidating the backup-session lease.
+ */
+export async function initializeOperationalKeyDescriptor(workspaceId: string): Promise<OperationalKeyDescriptor> {
+  const cleanWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : '';
+  if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) throw new Error('شناسه فضای کاری برای ایجاد کلید عملیاتی معتبر نیست.');
+  if (isOperationalRestoreBarrierActive()) throw new Error('ایجاد کلید عملیاتی تا پایان بازیابی مسدود است.');
+  if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای ذخیره کلید عملیاتی در دسترس نیست.');
+  const sessionLease = captureBackupSessionLease();
+  const randomId = globalThis.crypto.getRandomValues(new Uint8Array(18));
+  const keyId = Array.from(randomId, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const descriptor = await createOperationalKeyDescriptor(cleanWorkspaceId, keyId, sessionLease.passphrase);
+  assertBackupSessionLease(sessionLease);
+  const db = await openOperationalDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(['meta'], 'readwrite');
+      const store = tx.objectStore('meta');
+      const key = OPERATIONAL_KEY_DESCRIPTOR_PREFIX + cleanWorkspaceId;
+      const existingRequest = store.get(key);
+      let settled = false;
+      const cleanup = () => {
+        if (typeof window !== 'undefined') window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        try { tx.abort(); } catch { /* transaction may already be inactive */ }
+        cleanup();
+        reject(error);
+      };
+      const abortOnSessionChange = () => fail(new Error('نشست رمزگذاری تغییر کرد؛ کلید عملیاتی ذخیره نشد.'));
+      if (typeof window !== 'undefined') window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      existingRequest.onsuccess = () => {
+        try {
+          assertBackupSessionLease(sessionLease);
+          if (isOperationalRestoreBarrierActive()) { fail(new Error('ذخیره کلید عملیاتی تا پایان بازیابی مسدود است.')); return; }
+          if (existingRequest.result !== undefined) { fail(new Error('برای این فضای کاری کلید عملیاتی از قبل ثبت شده است؛ جایگزینی خودکار ممنوع است.')); return; }
+          store.add({ key, value: descriptor, createdAt: descriptor.createdAt });
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error('اعتبار نشست رمزگذاری تأیید نشد.'));
+        }
+      };
+      existingRequest.onerror = () => fail(existingRequest.error ?? new Error('بررسی کلید عملیاتی موجود ناموفق بود.'));
+      tx.oncomplete = () => { cleanup(); if (!settled) { settled = true; resolve(); } };
+      tx.onerror = () => { cleanup(); if (!settled) { settled = true; reject(tx.error ?? new Error('ذخیره کلید عملیاتی ناموفق بود.')); } };
+      tx.onabort = () => { cleanup(); if (!settled) { settled = true; reject(tx.error ?? new Error('تراکنش ذخیره کلید عملیاتی لغو شد.')); } };
+    });
+  } finally { db.close(); }
+  return descriptor;
+}
