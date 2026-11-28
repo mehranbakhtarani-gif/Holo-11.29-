@@ -1,7 +1,7 @@
 import { getTodayShamsi } from './format';
 import { computeDeterministicHash256 } from './moneyMath';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
-import { requireBackupSessionPassphrase } from './backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease } from './backupSession';
 
 export type LocalBackupReason = 'auto_change' | 'before_close' | 'manual' | 'pre_migration';
 
@@ -301,8 +301,9 @@ export async function saveLocalSnapshot(params: {
   payloadJson: string; reason: LocalBackupReason; companyName: string;
   voucherCount: number; invoiceCount: number; productCount: number;
 }): Promise<LocalBackupSnapshotMeta | null> {
-  const passphrase = requireBackupSessionPassphrase();
-  const encryptedEnvelope = await encryptBackupEnvelope(params.payloadJson, passphrase);
+  const lease = captureBackupSessionLease();
+  const encryptedEnvelope = await encryptBackupEnvelope(params.payloadJson, lease.passphrase);
+  assertBackupSessionLease(lease);
   const snap = buildSnapshotObject(params);
   const stored: LocalBackupSnapshot = {
     ...snap, payloadJson: undefined, encryptedEnvelope: JSON.stringify(encryptedEnvelope),
@@ -310,12 +311,23 @@ export async function saveLocalSnapshot(params: {
   };
   const db = await openBackupDb();
   try {
+    assertBackupSessionLease(lease);
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
+      const onSessionChanged = () => {
+        try { assertBackupSessionLease(lease); } catch { try { tx.abort(); } catch { /* transaction already settled */ } }
+      };
+      if (typeof window !== 'undefined') window.addEventListener('holoo:backup-session-changed', onSessionChanged);
+      const cleanup = () => {
+        if (typeof window !== 'undefined') window.removeEventListener('holoo:backup-session-changed', onSessionChanged);
+      };
       tx.objectStore(STORE_NAME).put(stored);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error('Encrypted backup transaction aborted.'));
+      tx.oncomplete = () => {
+        cleanup();
+        try { assertBackupSessionLease(lease); resolve(); } catch (error) { reject(error); }
+      };
+      tx.onerror = () => { cleanup(); reject(tx.error); };
+      tx.onabort = () => { cleanup(); reject(tx.error || new Error('Encrypted backup transaction aborted.')); };
     });
     const all = await listLocalSnapshotsRaw(db);
     if (all.length > MAX_SNAPSHOTS) {
@@ -393,7 +405,9 @@ export async function loadLocalSnapshotPayload(
   const syncSnap = readSyncCloseSnapshot();
   if (syncSnap && syncSnap.id === snapshotId) {
     if (syncSnap.encryptedEnvelope) {
-      const result = await decryptAndVerifyBackupEnvelope(syncSnap.encryptedEnvelope, requireBackupSessionPassphrase());
+      const lease = captureBackupSessionLease();
+      const result = await decryptAndVerifyBackupEnvelope(syncSnap.encryptedEnvelope, lease.passphrase);
+      assertBackupSessionLease(lease);
       return result.ok ? result.snapshotJson ?? null : null;
     }
     return allowLegacyPlaintext ? syncSnap.payloadJson ?? null : null;
@@ -409,7 +423,9 @@ export async function loadLocalSnapshotPayload(
     db.close();
     if (!found) return null;
     if (found.encryptedEnvelope) {
-      const result = await decryptAndVerifyBackupEnvelope(found.encryptedEnvelope, requireBackupSessionPassphrase());
+      const lease = captureBackupSessionLease();
+      const result = await decryptAndVerifyBackupEnvelope(found.encryptedEnvelope, lease.passphrase);
+      assertBackupSessionLease(lease);
       return result.ok ? result.snapshotJson ?? null : null;
     }
     return allowLegacyPlaintext ? found.payloadJson ?? null : null;
