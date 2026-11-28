@@ -97,6 +97,11 @@ async function run() {
     unlockBackupSession('ReplacementSession#1405');
     assert.throws(() => session.assertOperationalDataKeyLease(lease), /expired/);
     await session.unlockOperationalDataSession(createOperationalDataSalt());
+    await assert.rejects(
+      () => sessionCodec.encryptOperationalRecordForActiveSession(recordValue, recordContext),
+      /workspace does not match/,
+      'legacy workspace-agnostic key unlock must not authorize workspace record operations'
+    );
     const replacementLease = session.captureOperationalDataKeyLease();
     session.assertOperationalDataKeyLease(replacementLease);
 
@@ -119,7 +124,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 24 assertions passed');
+    console.log('Operational encryption session: 25 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
