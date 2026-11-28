@@ -433,9 +433,10 @@ service cloud.firestore {
     }
 
     function isValidAuditLog(data) {
-      return data.keys().hasAll(['ownerId', 'timestamp', 'operatorName', 'operatorRole', 'module', 'action', 'details', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'timestamp', 'operatorName', 'operatorRole', 'module', 'action', 'details', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['ownerId', 'actorUid', 'timestamp', 'operatorName', 'operatorRole', 'module', 'action', 'details', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'actorUid', 'timestamp', 'operatorName', 'operatorRole', 'module', 'action', 'details', 'createdAt', 'updatedAt'])
         && data.ownerId == request.auth.uid
+        && data.actorUid == request.auth.uid
         && isValidId(data.ownerId)
         && isNonEmptyString(data.timestamp, 40)
         && isNonEmptyString(data.operatorName, 120)
