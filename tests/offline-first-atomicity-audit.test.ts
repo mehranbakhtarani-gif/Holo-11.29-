@@ -592,7 +592,7 @@ async function runTests() {
   assert.ok(updateChequeStatusIdx !== -1, 'updateChequeStatus must exist');
   assert.match(
     accountingCtxSrc.slice(updateChequeStatusIdx, updateChequeStatusIdx + 14000),
-    /await commitChequeStatusOperationalTx\(/,
+    /await operationalTransactionPort\.transitionChequeStatus\(/,
     'offline cheque status changes must atomically persist cheque and ledger voucher'
   );
 
