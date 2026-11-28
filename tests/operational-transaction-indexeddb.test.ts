@@ -10,11 +10,14 @@ import {
 
 let databaseSequence = 0;
 
-async function createDatabase(stores: Array<{ name: string; keyPath: string }>): Promise<IDBDatabase> {
+async function createDatabase(stores: Array<{ name: string; keyPath: string; uniqueIndexes?: Array<{ name: string; keyPath: string }> }>): Promise<IDBDatabase> {
   const name = `operational-atomicity-test-${++databaseSequence}`;
   const request = indexedDB.open(name, 1);
   request.onupgradeneeded = () => {
-    for (const store of stores) request.result.createObjectStore(store.name, { keyPath: store.keyPath });
+    for (const store of stores) {
+      const objectStore = request.result.createObjectStore(store.name, { keyPath: store.keyPath });
+      for (const index of store.uniqueIndexes ?? []) objectStore.createIndex(index.name, index.keyPath, { unique: true });
+    }
   };
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -104,6 +107,49 @@ async function run() {
     assert.equal((await readRecord<{ localRevision: number }>(invoiceDb, 'meta', 'workspace_meta'))?.localRevision, 5);
   } finally {
     invoiceDb.close();
+  }
+
+  // Inject a real IndexedDB ConstraintError after the product write has been queued.
+  // The unique index forces the later voucher put to fail asynchronously, exercising tx abort.
+  const failureDb = await createDatabase([
+    { name: 'meta', keyPath: 'key' },
+    { name: 'products', keyPath: 'id' },
+    { name: 'vouchers', keyPath: 'id', uniqueIndexes: [{ name: 'failureKey', keyPath: 'failureKey' }] },
+    { name: 'cheques', keyPath: 'id' },
+    { name: 'invoices', keyPath: 'id' },
+  ]);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = failureDb.transaction(['meta', 'vouchers'], 'readwrite');
+      tx.objectStore('meta').put({ key: 'workspace_meta', localRevision: 50 });
+      tx.objectStore('vouchers').put({ id: 'existing-voucher', failureKey: 'duplicate-index-value' });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Failure-injection seed aborted'));
+    });
+
+    await assert.rejects(
+      () => commitInvoiceOperationalTx({
+        updatedProducts: [{ id: 'product-must-rollback', stock: 7 } as never],
+        voucher: {
+          id: 'voucher-constraint-failure',
+          failureKey: 'duplicate-index-value',
+          lines: [{ debit: 700, credit: 0 }, { debit: 0, credit: 700 }],
+        } as never,
+        invoice: { id: 'invoice-must-rollback' } as never,
+      }, { dbOverride: failureDb }),
+      undefined,
+      'a unique-index ConstraintError must reject the atomic invoice transaction'
+    );
+    assert.equal(await readRecord(failureDb, 'products', 'product-must-rollback'), undefined);
+    assert.equal(await readRecord(failureDb, 'vouchers', 'voucher-constraint-failure'), undefined);
+    assert.equal(await readRecord(failureDb, 'invoices', 'invoice-must-rollback'), undefined);
+    assert.deepEqual(await readRecord(failureDb, 'vouchers', 'existing-voucher'), {
+      id: 'existing-voucher', failureKey: 'duplicate-index-value',
+    });
+    assert.equal((await readRecord<{ localRevision: number }>(failureDb, 'meta', 'workspace_meta'))?.localRevision, 50);
+  } finally {
+    failureDb.close();
   }
 
   const chequeDb = await createDatabase([
