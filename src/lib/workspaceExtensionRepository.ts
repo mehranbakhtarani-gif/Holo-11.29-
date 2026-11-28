@@ -53,6 +53,7 @@ export function validateWorkspaceExtensionRecord<T>(
 
 /** Pure CAS decision. The adapter must execute this decision and row write in one IDB transaction. */
 export function decideWorkspaceExtensionCommit<T>(params: {
+  workspaceId: string;
   current: WorkspaceExtensionRecord<T> | null;
   expectedGeneration: number;
   payload: T;
@@ -68,9 +69,12 @@ export function decideWorkspaceExtensionCommit<T>(params: {
   if (!Number.isFinite(Date.parse(params.now))) {
     throw new Error('Workspace-extension commit timestamp is invalid.');
   }
-  const workspaceId = params.current?.workspaceId;
-  if (!workspaceId) {
-    throw new Error('A workspaceId is required when creating the initial extension record.');
+  const workspaceId = params.workspaceId;
+  if (!workspaceId.trim() || workspaceId.length > 180) {
+    throw new Error('A valid workspaceId is required for an extension commit.');
+  }
+  if (params.current && params.current.workspaceId !== workspaceId) {
+    throw new Error('Current extension record belongs to a different workspace.');
   }
   return {
     status: 'committed',
