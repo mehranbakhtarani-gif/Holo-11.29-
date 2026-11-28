@@ -203,18 +203,32 @@ export async function decryptOperationalRecord<T>(
   if (iv.byteLength !== IV_BYTES || ciphertext.byteLength < GCM_TAG_BYTES) {
     throw new Error('Operational encrypted record has invalid IV or authentication tag length.');
   }
-  const plaintext = await requireWebCrypto().subtle.decrypt(
-    { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(additionalData(expectedContext)), tagLength: 128 },
-    key,
-    toArrayBuffer(ciphertext)
-  );
-  let serialized: string | undefined;
+  const ivBuffer = toArrayBuffer(iv);
+  const ciphertextBuffer = toArrayBuffer(ciphertext);
+  const aad = additionalData(expectedContext);
+  const aadBuffer = toArrayBuffer(aad);
   try {
-    serialized = new TextDecoder().decode(plaintext);
-    return JSON.parse(serialized) as T;
+    const plaintext = await requireWebCrypto().subtle.decrypt(
+      { name: 'AES-GCM', iv: ivBuffer, additionalData: aadBuffer, tagLength: 128 },
+      key,
+      ciphertextBuffer
+    );
+    let serialized: string | undefined;
+    try {
+      serialized = new TextDecoder().decode(plaintext);
+      return JSON.parse(serialized) as T;
+    } finally {
+      // Do not leave decrypted record bytes resident after parsing or a parse failure.
+      new Uint8Array(plaintext).fill(0);
+      serialized = undefined;
+    }
   } finally {
-    // Do not leave decrypted record bytes resident after parsing or a parse failure.
-    new Uint8Array(plaintext).fill(0);
-    serialized = undefined;
+    // Clear decoded and copied encrypted buffers even when authentication or parsing fails.
+    iv.fill(0);
+    ciphertext.fill(0);
+    aad.fill(0);
+    new Uint8Array(ivBuffer).fill(0);
+    new Uint8Array(ciphertextBuffer).fill(0);
+    new Uint8Array(aadBuffer).fill(0);
   }
 }
