@@ -135,7 +135,7 @@ async function run() {
     const originalEncoder = globalThis.TextEncoder;
     const observedPlaintextBuffers: Uint8Array[] = [];
     class TrackingTextEncoder extends originalEncoder {
-      encode(input?: string): Uint8Array {
+      encode(input?: string): Uint8Array<ArrayBuffer> {
         const bytes = super.encode(input);
         observedPlaintextBuffers.push(bytes);
         return bytes;
@@ -168,7 +168,7 @@ async function run() {
     const kdfEncoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'TextEncoder');
     const kdfObservedBuffers: Uint8Array[] = [];
     class KdfTrackingTextEncoder extends originalEncoder {
-      encode(input?: string): Uint8Array {
+      encode(input?: string): Uint8Array<ArrayBuffer> {
         const bytes = super.encode(input);
         kdfObservedBuffers.push(bytes);
         return bytes;
