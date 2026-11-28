@@ -1478,6 +1478,9 @@ export const SettingsView: React.FC<{
             </form>
           ) : (
             <div className="space-y-2">
+              <p className="text-[11px] leading-5 text-amber-800 dark:text-amber-300">
+                فایل‌ها و snapshotهای پشتیبانِ ساخته‌شده با رمز قبلی همچنان به همان رمز نیاز دارند. رمز قبلی را برای بازیابی نسخه‌های قدیمی نگه دارید و پس از تغییر، یک پشتیبان تازه بسازید.
+              </p>
               <form className="flex flex-col sm:flex-row gap-2" onSubmit={(e) => {
                 e.preventDefault();
                 void rotateBackupSessionPassphrase(newBackupPassphraseInput).then((ok) => {
