@@ -48,11 +48,23 @@ async function run() {
         tx.onabort = () => reject(tx.error);
       });
 
-      const initial = journalModule.createOperationalMigrationJournalRecord({
+      const incomplete = journalModule.createOperationalMigrationJournalRecord({
         ...binding,
         sourceSchemaVersion: 7,
         targetFormatVersion: 1,
         storeNames: ['accounts'],
+      });
+      await assert.rejects(
+        () => runner.runOperationalShadowMigration(binding, incomplete),
+        /every required business store exactly once/i,
+        'a partial store list must never be certified as a complete migration'
+      );
+
+      const initial = journalModule.createOperationalMigrationJournalRecord({
+        ...binding,
+        sourceSchemaVersion: 7,
+        targetFormatVersion: 1,
+        storeNames: runner.OPERATIONAL_MIGRATION_STORES,
       });
       await persistence.createOperationalMigrationJournal(initial);
       const completed = await runner.runOperationalShadowMigration(binding, initial);
