@@ -64,7 +64,7 @@ if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
 }
 
 const OP_DB_NAME = 'holoo_apex_operational_db_v1';
-export const OP_DB_VERSION = 6;
+export const OP_DB_VERSION = 7;
 
 export const OPERATIONAL_STORES = [
   'meta',
@@ -631,6 +631,12 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(OPERATIONAL_MIGRATION_JOURNAL_STORE)) {
         db.createObjectStore(OPERATIONAL_MIGRATION_JOURNAL_STORE, { keyPath: 'migrationId' });
+      }
+      if (!db.objectStoreNames.contains('encryptedOperationalRecords')) {
+        const encryptedRecords = db.createObjectStore('encryptedOperationalRecords', {
+          keyPath: ['workspaceId', 'storeName', 'recordId'],
+        });
+        encryptedRecords.createIndex('workspaceStore', ['workspaceId', 'storeName'], { unique: false });
       }
       for (const storeName of OPERATIONAL_STORES) {
         let store: IDBObjectStore;
