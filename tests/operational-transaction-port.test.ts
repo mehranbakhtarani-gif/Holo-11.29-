@@ -13,7 +13,7 @@ import {
   clearPendingSyncOutboxOperations, enqueueSyncOutboxOperation, getActiveOperationalRestoreJournal,
   isInboxOperationProcessed, isOperationalRestoreBarrierActive, listPendingSyncOutboxOperations,
   loadOperationalWorkspace,
-  markSyncOutboxOperationStatus, recordInboxOperation, loadOperationalWorkspace,
+  markSyncOutboxOperationStatus, recordInboxOperation,
   OP_DB_VERSION, savePreUpdateSafetyBackup, saveOperationalWorkspaceTx,
 } from '../src/lib/operationalDb';
 
