@@ -34,6 +34,12 @@ export interface OperationalRecordEnvelope extends OperationalRecordContext {
   ciphertextB64: string;
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function requireWebCrypto(): Crypto {
   if (!globalThis.crypto?.subtle || !globalThis.crypto?.getRandomValues) {
     throw new Error('Web Crypto is required for operational data encryption.');
@@ -91,10 +97,10 @@ export async function deriveOperationalDataKey(
     throw new Error('Operational encryption KDF work factor is outside the accepted range.');
   }
   const material = await cryptoApi.subtle.importKey(
-    'raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']
+    'raw', toArrayBuffer(new TextEncoder().encode(passphrase)), 'PBKDF2', false, ['deriveKey']
   );
   return cryptoApi.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: toArrayBuffer(salt), iterations, hash: 'SHA-256' },
     material,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -119,9 +125,9 @@ export async function encryptOperationalRecord<T>(
   const plaintext = new TextEncoder().encode(JSON.stringify(value));
   const iv = requireWebCrypto().getRandomValues(new Uint8Array(IV_BYTES));
   const ciphertext = await requireWebCrypto().subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: additionalData(context), tagLength: 128 },
+    { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(additionalData(context)), tagLength: 128 },
     key,
-    plaintext
+    toArrayBuffer(plaintext)
   );
   return {
     format: OPERATIONAL_RECORD_ENVELOPE_FORMAT,
@@ -159,9 +165,9 @@ export async function decryptOperationalRecord<T>(
     throw new Error('Operational encrypted record has invalid IV or authentication tag length.');
   }
   const plaintext = await requireWebCrypto().subtle.decrypt(
-    { name: 'AES-GCM', iv, additionalData: additionalData(expectedContext), tagLength: 128 },
+    { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(additionalData(expectedContext)), tagLength: 128 },
     key,
-    ciphertext
+    toArrayBuffer(ciphertext)
   );
   return JSON.parse(new TextDecoder().decode(plaintext)) as T;
 }
