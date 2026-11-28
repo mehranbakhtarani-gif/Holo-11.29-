@@ -130,6 +130,7 @@ import {
 } from '../lib/holoMigrationEngine';
 import { emitVoucherNotificationEvent } from '../lib/nativeNotifications';
 import { unlockBackupSession as unlockBackupVault, lockBackupSession as lockBackupVault, isBackupSessionUnlocked } from '../lib/backupSession';
+import { lockOperationalDataSession, unlockOperationalDataSessionForWorkspace } from '../lib/operationalEncryptionSession';
 
 interface AccountingContextValue {
   user: User | null;
@@ -7104,6 +7105,34 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     auditLogs,
     backupSessionUnlocked,
   ]);
+
+  // Keep the operational DEK scoped to the active company workspace and backup-vault session.
+  useEffect(() => {
+    if (!backupSessionUnlocked) {
+      lockOperationalDataSession();
+      return;
+    }
+    let cancelled = false;
+    const workspaceId = String(profile.uid || DEMO_OWNER).trim();
+    void unlockOperationalDataSessionForWorkspace(workspaceId)
+      .then(() => {
+        if (cancelled) lockOperationalDataSession();
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          showToast(
+            error instanceof Error
+              ? `قفل پشتیبان باز است، اما کلید رمزگذاری داده‌های عملیاتی آماده نشد: ${error.message}`
+              : 'کلید رمزگذاری داده‌های عملیاتی آماده نشد.',
+            'warning'
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+      lockOperationalDataSession();
+    };
+  }, [backupSessionUnlocked, profile.uid, showToast]);
 
   const unlockBackupSession = useCallback((passphrase: string): boolean => {
     try {
