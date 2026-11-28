@@ -426,3 +426,33 @@ The source scan confirms localStorage currently holds several distinct categorie
 Only categories 1 and selected, explicitly allowlisted items in category 2 are candidates for the proposed extension aggregate. Categories 3–6 require separate stores, retention policies, encryption decisions, or may remain local preferences/caches. No blanket "move every localStorage key into the encrypted operational workspace" operation is safe.
 
 No source behavior, database schema, migration marker, or authority switch was changed by this scan.
+
+
+## Current implementation boundary and startup cutover implications
+
+A branch-pinned review of the operational database and extension provider confirms:
+
+- `OP_DB_VERSION` is currently 5. Its operational store allowlist includes `meta`, the accounting entities, `syncOutbox`, `syncInbox`, `localProfiles`, `preUpdateBackups`, and `secureWorkspace`; it has no dedicated `workspaceExtensions` store.
+- `WorkspaceExtensionsProvider` initializes React state synchronously with `useState(() => loadInitialExtensions())`. That loader reads the aggregate extension JSON directly from localStorage and falls back field-by-field to three legacy helper readers.
+- `persistLocalMirror` writes the aggregate and three mirrors to localStorage. It has rollback-on-error, but no atomic transaction or durable generation.
+- Firestore extension synchronization is a separate path using a Firestore transaction and the cloud document's `_version`. This version is not a local IndexedDB generation and cannot serve as its compare-and-swap token.
+- Offline extension writes are separately encrypted into the existing extension outbox after a backup session unlock. That outbox's operation identity and replay semantics must remain distinct from the local extension aggregate's generation.
+
+### Required application integration order
+
+A future migration cannot safely be added only inside `loadInitialExtensions`: the current provider expects a synchronous value and renders immediately. The application needs an explicit asynchronous persistence bootstrap/readiness boundary before the provider exposes extension state. That boundary must:
+
+1. Open/upgrade IndexedDB and verify the extension and migration stores exist.
+2. Respect the restore barrier before reading or writing migration state.
+3. Read the existing localStorage aggregate and mirrors, preserving raw values and classifying absent/valid/malformed/inaccessible separately.
+4. Execute the versioned, deterministic import protocol above in one IndexedDB transaction, with the aggregate generation and migration journal committed atomically.
+5. Read back and validate the committed IndexedDB aggregate before resolving provider readiness.
+6. Route every extension mutation through the same IndexedDB transaction/generation mechanism; localStorage mirrors, if retained, are post-commit compatibility output only.
+7. Keep Firestore `_version`, local IndexedDB generation, and encrypted outbox operation IDs separate.
+8. Prevent old application versions from writing localStorage after the new build becomes authoritative, or define and test an explicit compatibility lease/bridge. There is no safe default assumption that an old tab has stopped writing.
+
+The store addition requires a database version upgrade (currently version 5). The upgrade itself must be backward-compatible with existing operational stores and must handle blocked upgrades/versionchange events. A schema bump without the startup gate, writer redirection, cross-tab protocol, and rollback behavior would create a split-brain state where one build reads IndexedDB while another continues writing localStorage.
+
+### Implementation decision
+
+Do not introduce the new store, increment `OP_DB_VERSION`, or redirect extension reads/writes in this change set. The next code change must be a separately reviewable vertical slice: IndexedDB extension repository + generation CAS + migration journal + deterministic legacy importer + async provider bootstrap, with the complete two-tab, old/new build, restore-barrier, crash/restart, quota, blocked-upgrade, and downgrade tests in place before enabling the authority switch. Encryption-at-rest remains an independent gate and must not be implied by this storage relocation.
