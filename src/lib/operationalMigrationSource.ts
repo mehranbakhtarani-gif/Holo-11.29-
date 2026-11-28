@@ -5,6 +5,7 @@
  */
 import { openOperationalMigrationDbConnection } from './operationalDb';
 import { getOperationalRecordPrimaryKey } from './encryptedOperationalRecordAdapter';
+import { assertOperationalDataKeyLease, captureOperationalDataKeyLease } from './operationalEncryptionSession';
 import type { OperationalEncryptedStore } from './operationalRecordEncryption';
 import type { OperationalMigrationBinding } from './operationalMigrationJournal';
 
@@ -50,13 +51,26 @@ export async function readOperationalMigrationSourceBatch(
     throw new Error('Operational migration source batch limit must be between 1 and 1000.');
   }
 
+  const lease = captureOperationalDataKeyLease();
+  assertOperationalDataKeyLease(lease);
+  if (lease.workspaceId !== binding.workspaceId || lease.backupSessionGeneration !== binding.backupSessionGeneration) {
+    throw new Error('Operational migration source read belongs to another workspace or backup session.');
+  }
+  const assertSourceLease = () => {
+    assertOperationalDataKeyLease(lease);
+    if (lease.workspaceId !== binding.workspaceId || lease.backupSessionGeneration !== binding.backupSessionGeneration) {
+      throw new Error('Operational migration source lease expired or changed workspace.');
+    }
+  };
   const db = await openOperationalMigrationDbConnection();
   try {
     if (!db.objectStoreNames.contains(storeName) || !db.objectStoreNames.contains('meta')) {
       throw new Error('Operational migration source or metadata store is missing.');
     }
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction([storeName, 'meta'], 'readonly');
+      let tx: IDBTransaction;
+      try { assertSourceLease(); tx = db.transaction([storeName, 'meta'], 'readonly'); }
+      catch (error) { reject(error); return; }
       const sourceStore = tx.objectStore(storeName);
       const metaRequest = tx.objectStore('meta').get('workspace_meta');
       let sourceRevision: number | null = null;
@@ -73,6 +87,7 @@ export async function readOperationalMigrationSourceBatch(
       };
 
       metaRequest.onsuccess = () => {
+        try { assertSourceLease(); } catch (error) { fail(error); try { tx.abort(); } catch { /* inactive */ } return; }
         const meta = metaRequest.result as { localRevision?: unknown } | undefined;
         if (!meta || !Number.isSafeInteger(meta.localRevision) || meta.localRevision !== binding.sourceRevision) {
           fail(new Error('Operational source revision changed or is unavailable; migration batch was rejected.'));
@@ -86,6 +101,7 @@ export async function readOperationalMigrationSourceBatch(
       if (storeName === 'localProfiles') {
         const profileRequest = sourceStore.get(binding.workspaceId);
         profileRequest.onsuccess = () => {
+          try { assertSourceLease(); } catch (error) { fail(error); try { tx.abort(); } catch { /* inactive */ } return; }
           if (profileRequest.result === undefined) {
             sourceRecordCount = 0;
             return;
@@ -102,12 +118,16 @@ export async function readOperationalMigrationSourceBatch(
         profileRequest.onerror = () => fail(profileRequest.error ?? new Error('Local profile migration source read failed.'));
       } else {
         const countRequest = sourceStore.count();
-        countRequest.onsuccess = () => { sourceRecordCount = countRequest.result; };
+        countRequest.onsuccess = () => {
+          try { assertSourceLease(); sourceRecordCount = countRequest.result; }
+          catch (error) { fail(error); try { tx.abort(); } catch { /* inactive */ } }
+        };
         countRequest.onerror = () => fail(countRequest.error ?? new Error('Operational source record count failed.'));
 
         const range = sourceKeyRange(afterCursor);
         const cursorRequest = range ? sourceStore.openCursor(range) : sourceStore.openCursor();
         cursorRequest.onsuccess = () => {
+          try { assertSourceLease(); } catch (error) { fail(error); try { tx.abort(); } catch { /* inactive */ } return; }
           const cursor = cursorRequest.result;
           if (!cursor) return;
           if (records.length >= requestedLimit) {
@@ -136,6 +156,7 @@ export async function readOperationalMigrationSourceBatch(
 
       tx.oncomplete = () => {
         if (readFailed) return;
+        try { assertSourceLease(); } catch (error) { reject(error); return; }
         if (sourceRevision !== binding.sourceRevision || sourceRecordCount === null || !Number.isSafeInteger(sourceRecordCount)) {
           reject(new Error('Operational migration source snapshot was incomplete.'));
           return;
