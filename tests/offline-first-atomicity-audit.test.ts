@@ -365,7 +365,9 @@ async function runTests() {
   const pwaUpdateBackupEnd = appSrc.indexOf('        }}', pwaUpdateBackupStart);
   const pwaUpdateBackup = appSrc.slice(pwaUpdateBackupStart, pwaUpdateBackupEnd);
   assert.match(pwaUpdateBackup, /encryptBackupEnvelope/);
-  assert.match(pwaUpdateBackup, /requireBackupSessionPassphrase/);
+  assert.match(pwaUpdateBackup, /captureBackupSessionLease/);
+  assert.match(pwaUpdateBackup, /assertBackupSessionLease/);
+  assert.match(pwaUpdateBackup, /lease\\.passphrase/);
   assert.match(pwaUpdateBackup, /envelopeJson:/);
   assert.doesNotMatch(pwaUpdateBackup, /snapshotJson:/);
   const offlinePanelUpdateStart = offlinePanelSrc.indexOf('const handleSafePwaUpdate = async () =>');
