@@ -132,7 +132,7 @@ import {
   runHolo203Migration,
 } from '../lib/holoMigrationEngine';
 import { emitVoucherNotificationEvent } from '../lib/nativeNotifications';
-import { unlockBackupSession as unlockBackupVault, lockBackupSession as lockBackupVault, isBackupSessionUnlocked, requireBackupSessionPassphrase } from '../lib/backupSession';
+import { unlockBackupSession as unlockBackupVault, lockBackupSession as lockBackupVault, isBackupSessionUnlocked } from '../lib/backupSession';
 
 interface AccountingContextValue {
   user: User | null;
@@ -7166,7 +7166,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const list = await listLocalSnapshots();
       setLocalSnapshots(list);
       if (alsoDownload) {
-        await downloadEncryptedBackupFileToDevice(payloadJson, cur.fiscalYear, requireBackupSessionPassphrase());
+        await downloadEncryptedBackupFileToDevice(payloadJson, cur.fiscalYear);
         showToast('نسخه پشتیبان هم در حافظه داخلی دستگاه ذخیره و هم به صورت فایل دانلود شد.');
       } else {
         showToast('نسخه پشتیبان فوری با موفقیت در حافظه داخلی این دستگاه ذخیره شد.');
