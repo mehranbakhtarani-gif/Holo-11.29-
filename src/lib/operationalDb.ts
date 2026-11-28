@@ -9,6 +9,7 @@ import type { FinancialCollectionKind } from './offlineFirstCore';
 import {
   createOperationalKeyDescriptor,
   isOperationalKeyDescriptor,
+  rewrapOperationalKeyDescriptor,
   type OperationalKeyDescriptor,
 } from './operationalKeyDescriptor';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
@@ -2883,7 +2884,12 @@ export async function initializeOperationalKeyDescriptor(workspaceId: string): P
   if (!isIndexedDbAvailable()) throw new Error('IndexedDB برای ذخیره کلید عملیاتی در دسترس نیست.');
   const sessionLease = captureBackupSessionLease();
   const randomId = globalThis.crypto.getRandomValues(new Uint8Array(18));
-  const keyId = Array.from(randomId, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  let keyId: string;
+  try {
+    keyId = Array.from(randomId, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  } finally {
+    randomId.fill(0);
+  }
   const descriptor = await createOperationalKeyDescriptor(cleanWorkspaceId, keyId, sessionLease.passphrase);
   assertBackupSessionLease(sessionLease);
   const db = await openOperationalDb();
@@ -2923,4 +2929,99 @@ export async function initializeOperationalKeyDescriptor(workspaceId: string): P
     });
   } finally { db.close(); }
   return descriptor;
+}
+
+/**
+ * Re-wrap the existing workspace DEK under a new passphrase without changing
+ * the DEK or any encrypted records. The descriptor update uses compare-and-swap
+ * so a concurrent rotation cannot silently overwrite another key envelope.
+ * The caller must switch the in-memory backup session to nextPassphrase only
+ * after this function resolves successfully.
+ */
+export async function rewrapOperationalKeyDescriptorForWorkspace(
+  workspaceId: string,
+  nextPassphrase: string
+): Promise<OperationalKeyDescriptor> {
+  const cleanWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : '';
+  if (!cleanWorkspaceId || cleanWorkspaceId.length > 180) {
+    throw new Error('شناسه فضای کاری برای تغییر رمز کلید عملیاتی معتبر نیست.');
+  }
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('تغییر رمز کلید عملیاتی تا پایان بازیابی مسدود است.');
+  }
+  const sessionLease = captureBackupSessionLease();
+  const current = await loadOperationalKeyDescriptor(cleanWorkspaceId);
+  if (!current) throw new Error('برای این فضای کاری کلید عملیاتی ثبت نشده است.');
+  assertBackupSessionLease(sessionLease);
+  const updated = await rewrapOperationalKeyDescriptor(
+    current,
+    sessionLease.passphrase,
+    nextPassphrase
+  );
+  assertBackupSessionLease(sessionLease);
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('بازیابی هنگام تغییر رمز کلید عملیاتی آغاز شد؛ تغییر ذخیره نشد.');
+  }
+  const db = await openOperationalDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(['meta'], 'readwrite');
+      const store = tx.objectStore('meta');
+      const key = OPERATIONAL_KEY_DESCRIPTOR_PREFIX + cleanWorkspaceId;
+      let settled = false;
+      const cleanup = () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+        }
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        try { tx.abort(); } catch { /* transaction may already be inactive */ }
+        cleanup();
+        reject(error);
+      };
+      const abortOnSessionChange = () => fail(
+        new Error('نشست رمزگذاری هنگام تغییر رمز کلید عملیاتی تغییر کرد؛ تغییر ذخیره نشد.')
+      );
+      if (typeof window !== 'undefined') {
+        window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      }
+      const request = store.get(key);
+      request.onsuccess = () => {
+        try {
+          assertBackupSessionLease(sessionLease);
+          if (isOperationalRestoreBarrierActive()) {
+            fail(new Error('تغییر رمز کلید عملیاتی تا پایان بازیابی مسدود است.'));
+            return;
+          }
+          const row = request.result as { value?: unknown } | undefined;
+          if (!row || !isOperationalKeyDescriptor(row.value) ||
+              JSON.stringify(row.value) !== JSON.stringify(current)) {
+            fail(new Error('کلید عملیاتی هم‌زمان تغییر کرده است؛ تغییر رمز متوقف شد.'));
+            return;
+          }
+          store.put({ key, value: updated, createdAt: updated.createdAt });
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error('اعتبار نشست هنگام تغییر رمز تأیید نشد.'));
+        }
+      };
+      request.onerror = () => fail(request.error ?? new Error('خواندن کلید عملیاتی برای تغییر رمز ناموفق بود.'));
+      tx.oncomplete = () => {
+        cleanup();
+        if (!settled) { settled = true; resolve(); }
+      };
+      tx.onerror = () => {
+        cleanup();
+        if (!settled) { settled = true; reject(tx.error ?? new Error('ذخیره کلید عملیاتی جدید ناموفق بود.')); }
+      };
+      tx.onabort = () => {
+        cleanup();
+        if (!settled) { settled = true; reject(tx.error ?? new Error('تراکنش تغییر رمز کلید عملیاتی لغو شد.')); }
+      };
+    });
+  } finally {
+    db.close();
+  }
+  return updated;
 }
