@@ -54,4 +54,12 @@ assert.equal(done.state, 'committed');
 assert.throws(() => advanceWorkspaceExtensionMigration(done, 'staging', now), /backwards/);
 assert.throws(() => advanceWorkspaceExtensionMigration(journal, 'verified', 'invalid'), /timestamp/);
 
+assert.throws(() => decideWorkspaceExtensionCommit({
+  workspaceId: 'workspace-1',
+  current: { ...initial, generation: Number.MAX_SAFE_INTEGER },
+  expectedGeneration: Number.MAX_SAFE_INTEGER,
+  payload: { items: [] },
+  now,
+}), /exhausted/i);
+
 console.log('Workspace extension repository contract tests passed');
