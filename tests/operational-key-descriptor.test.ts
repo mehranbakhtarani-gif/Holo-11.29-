@@ -117,7 +117,7 @@ async function run() {
       /at least 10/
     );
 
-    console.log('Operational key descriptor: 31 assertions passed');
+    console.log('Operational key descriptor: 37 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
