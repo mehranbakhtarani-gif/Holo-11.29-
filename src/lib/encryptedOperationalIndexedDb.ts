@@ -97,9 +97,10 @@ export async function writeEncryptedOperationalStoresAtomically(
     };
     try {
       assertWorkspaceLease(lease, workspaceId);
-      tx = db.transaction(storeNames, 'readwrite');
+      const transaction = db.transaction(storeNames, 'readwrite');
+      tx = transaction;
       for (const batch of prepared) {
-        const store = tx.objectStore(batch.store);
+        const store = transaction.objectStore(batch.store);
         for (const row of batch.rows) {
           assertWorkspaceLease(lease, workspaceId);
           const request = store.put(row);
@@ -114,7 +115,7 @@ export async function writeEncryptedOperationalStoresAtomically(
           request.onerror = () => fail(request.error ?? new Error('Encrypted operational row write failed.'));
         }
       }
-      tx.oncomplete = () => {
+      transaction.oncomplete = () => {
         if (settled) return;
         try {
           assertWorkspaceLease(lease, workspaceId);
@@ -125,16 +126,16 @@ export async function writeEncryptedOperationalStoresAtomically(
           reject(error);
         }
       };
-      tx.onerror = () => {
+      transaction.onerror = () => {
         if (!settled) {
           settled = true;
-          reject(tx.error ?? new Error('Encrypted operational transaction failed.'));
+          reject(transaction.error ?? new Error('Encrypted operational transaction failed.'));
         }
       };
-      tx.onabort = () => {
+      transaction.onabort = () => {
         if (!settled) {
           settled = true;
-          reject(tx.error ?? new Error('Encrypted operational transaction aborted.'));
+          reject(transaction.error ?? new Error('Encrypted operational transaction aborted.'));
         }
       };
     } catch (error) {
@@ -197,7 +198,10 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
       throw new Error('Plaintext or malformed row encountered in encrypted operational store.');
     }
     const keyField = storeName === 'localProfiles' ? 'workspaceId' : 'id';
-    const recordId = (row as unknown as Record<string, string>)[keyField];
+    const recordId = (row as unknown as Record<string, unknown>)[keyField];
+    if (typeof recordId !== 'string' || recordId.length === 0) {
+      throw new Error('Encrypted operational row has an invalid primary key.');
+    }
     const decoded = await decryptOperationalRecord<T>(
       (row as EncryptedOperationalRow).encryptedRecord,
       { workspaceId, store: storeName, recordId },
