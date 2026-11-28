@@ -6,10 +6,7 @@
 import { openOperationalMigrationDbConnection } from './operationalDb';
 import { getOperationalRecordPrimaryKey } from './encryptedOperationalRecordAdapter';
 import type { OperationalEncryptedStore } from './operationalRecordEncryption';
-import {
-  assertOperationalMigrationBinding,
-  type OperationalMigrationBinding,
-} from './operationalMigrationJournal';
+import type { OperationalMigrationBinding } from './operationalMigrationJournal';
 
 export interface OperationalMigrationSourceBatch {
   workspaceId: string;
@@ -125,9 +122,6 @@ export async function readOperationalMigrationSourceBatch(
             if (typeof row.workspaceId === 'string' && row.workspaceId !== binding.workspaceId) {
               throw new Error('Operational migration source contains a cross-workspace record.');
             }
-            if (typeof row.ownerId === 'string' && row.ownerId !== binding.workspaceId) {
-              throw new Error('Operational migration source contains a cross-workspace owner record.');
-            }
             const recordId = getOperationalRecordPrimaryKey(storeName, row);
             records.push(row);
             nextCursor = recordId;
@@ -142,18 +136,10 @@ export async function readOperationalMigrationSourceBatch(
 
       tx.oncomplete = () => {
         if (readFailed) return;
-        if (sourceRevision !== binding.sourceRevision || sourceRecordCount === null) {
+        if (sourceRevision !== binding.sourceRevision || sourceRecordCount === null || !Number.isSafeInteger(sourceRecordCount)) {
           reject(new Error('Operational migration source snapshot was incomplete.'));
           return;
         }
-        try {
-          assertOperationalMigrationBinding({
-            migrationId: binding.migrationId,
-            workspaceId: binding.workspaceId,
-            sourceRevision: binding.sourceRevision,
-            backupSessionGeneration: binding.backupSessionGeneration,
-          } as never, binding);
-        } catch (error) { reject(error); return; }
         resolve({
           workspaceId: binding.workspaceId,
           migrationId: binding.migrationId,
