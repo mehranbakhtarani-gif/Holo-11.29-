@@ -104,3 +104,55 @@ Exit: full CI on the exact candidate commit plus real-browser/device evidence. C
 ## Release gate
 
 Primary-store encryption is complete only after all readers and writers use the encrypted repository, the active generation is encrypted, legacy data has a verified rollback path, and real-browser recovery tests pass. Until then, retain the current plaintext primary stores and the encrypted shadow as a non-authoritative checkpoint. Do not merge or deploy based solely on this audit.
+
+
+## Follow-up source-level inventory (branch audit)
+
+The following callable persistence APIs and transaction groups were confirmed by source inspection. This is a concrete implementation checklist for the repository refactor; it is not an exhaustive proof that no other module writes directly to IndexedDB.
+
+### Operational database API surface
+
+The active database module exports these durable-data boundaries:
+
+- Workspace CRUD: `saveOperationalWorkspaceTx`, `loadOperationalWorkspace`.
+- Invoice transaction: `commitInvoiceOperationalTx` — one transaction over `meta`, `products`, `vouchers`, `cheques`, and `invoices`.
+- Sales dispatch: `commitSalesOrderDispatchOperationalTx` — one transaction over `salesOrders` and `meta`.
+- Cheque lifecycle: `commitChequeStatusOperationalTx` — one transaction over `meta`, `cheques`, and `vouchers`.
+- Depreciation: `commitDepreciationOperationalTx` — one transaction over `meta`, `assets`, and `vouchers`.
+- Stock adjustment: `commitStockAdjustmentOperationalTx` — one transaction over `meta`, `products`, and `vouchers`.
+- Sync idempotency: `enqueueSyncOutboxOperation`, `listPendingSyncOutboxOperations`, `markSyncOutboxOperationStatus`, `clearPendingSyncOutboxOperations`, `recordInboxOperation`, `isInboxOperationProcessed`.
+- Restore and recovery: `createOperationalRestoreJournal`, `updateStagingOperationalRestoreJournal`, `applyOperationalRestoreJournalWorkspace`, `discardStagingOperationalRestoreJournal`, `transitionOperationalRestoreJournal`.
+- Backup/diagnostics: `writeEncryptedOperationalWorkspaceSnapshot`, `prepareEncryptedOperationalWorkspaceMigration`, `loadPreparedEncryptedOperationalWorkspace`, `savePreUpdateSafetyBackup`, paginated store reads, statistics, and wipe operations.
+
+The module has direct IndexedDB transactions beyond the generic repository adapter. These include specialized business commits, outbox/inbox writes, restore-journal operations, encrypted-shadow writes, pre-update backups, diagnostics, and destructive wipe. A future adapter must preserve the specialized transaction contracts rather than replacing them with separate per-record writes.
+
+### Current repository abstraction gap
+
+`src/lib/repositoryAbstraction.ts` exposes an `IndexedDbLocalRepository` and `SerializableLocalRepository`, but its IndexedDB adapter delegates the general workspace read/write path to `loadOperationalWorkspace` and `saveOperationalWorkspaceTx`. The specialized financial transaction APIs remain separate imports from `operationalDb.ts` in `AccountingContext.tsx`.
+
+Required action: extend the repository contract with explicit atomic commands for invoice commit, sales dispatch, cheque status, depreciation, stock adjustment, sync outbox/inbox, and restore. Keep transaction inputs typed and validate expected workspace revision inside the same final read-write transaction.
+
+### Persistence domains and required handling
+
+| Domain / source | Observed persistence | Required migration treatment |
+|---|---|---|
+| Operational entities | Plain object records in `holoo_apex_operational_db_v1` | Encrypted active generation; preserve indexes and multi-store atomic commands |
+| Operational sync outbox/inbox | Dedicated stores in operational DB | Encrypt payloads and preserve idempotency/status transitions |
+| Workspace extension aggregate | `holoo_apex96_workspace_extensions_v2` in localStorage plus legacy keys | Versioned extension envelope; explicit legacy precedence and surfaced write failures |
+| Supabase sync metadata | localStorage cursors, workspace locator, conflict preference, retry/diagnostic queue | Classify each as secret, preference, cursor, or business payload; never treat locator/cursor as authority |
+| Local backup | Separate `holoo_apex_local_backup_db_v1`-style store and legacy close-snapshot key | Keep encrypted backup envelope and migration-only legacy reader; do not confuse with primary-store encryption |
+| Document Vault | Separate `holoo_apex_document_vault_v1` database | Retain attachment envelope encryption and staged restore; separately encrypt or classify queryable metadata |
+| Profile photo and RBAC PIN hash | localStorage keys read/written by AccountingContext | Profile image is personal content requiring explicit policy; PIN hash is authentication material and must remain outside business backups |
+| Device identity/label and close-backup preference | localStorage in localBackup module | Device-scoped metadata/preferences; exclude from business snapshot unless a documented restore requirement exists |
+
+### Implementation order refined by the source inventory
+
+1. Add a typed repository command interface mirroring each specialized operational transaction, initially delegating to the existing functions with no behavior change.
+2. Move all AccountingContext imports/calls to the repository interface; add structural tests proving it no longer imports specialized functions directly from `operationalDb.ts`.
+3. Add a test-only IndexedDB adapter that can assert each command opens exactly one transaction with its complete store set and aborts all writes on any failure.
+4. Define an encrypted repository adapter that serializes and encrypts payloads before opening the commit transaction, then checks the live revision and atomically writes the encrypted records plus generation metadata.
+5. Route sync outbox/inbox through the same encrypted repository boundary while preserving deduplication and replay state.
+6. Only after the above is tested, add a parallel encrypted store generation and resumable migration journal. Do not alter the current active store names or database version as part of the adapter-only step.
+7. Migrate extension localStorage, backup metadata, and Document Vault as separate bounded workstreams with explicit ownership, recovery, and compatibility gates.
+
+No production code was changed by this follow-up inventory. The current plaintext operational stores remain authoritative, and the encrypted shadow remains non-authoritative until a separately reviewed cutover.
