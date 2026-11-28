@@ -208,15 +208,20 @@ export async function decryptOperationalRecord<T>(
     throw new Error('A valid operational AES decryption key is required.');
   }
   const iv = fromBase64(envelope.ivB64);
-  const ciphertext = fromBase64(envelope.ciphertextB64);
-  if (iv.byteLength !== IV_BYTES || ciphertext.byteLength < GCM_TAG_BYTES) {
-    throw new Error('Operational encrypted record has invalid IV or authentication tag length.');
-  }
-  const ivBuffer = toArrayBuffer(iv);
-  const ciphertextBuffer = toArrayBuffer(ciphertext);
-  const aad = additionalData(expectedContext);
-  const aadBuffer = toArrayBuffer(aad);
+  let ciphertext: Uint8Array | null = null;
+  let aad: Uint8Array | null = null;
+  let ivBuffer: ArrayBuffer | null = null;
+  let ciphertextBuffer: ArrayBuffer | null = null;
+  let aadBuffer: ArrayBuffer | null = null;
   try {
+    ciphertext = fromBase64(envelope.ciphertextB64);
+    if (iv.byteLength !== IV_BYTES || ciphertext.byteLength < GCM_TAG_BYTES) {
+      throw new Error('Operational encrypted record has invalid IV or authentication tag length.');
+    }
+    ivBuffer = toArrayBuffer(iv);
+    ciphertextBuffer = toArrayBuffer(ciphertext);
+    aad = additionalData(expectedContext);
+    aadBuffer = toArrayBuffer(aad);
     const plaintext = await requireWebCrypto().subtle.decrypt(
       { name: 'AES-GCM', iv: ivBuffer, additionalData: aadBuffer, tagLength: 128 },
       key,
@@ -232,12 +237,12 @@ export async function decryptOperationalRecord<T>(
       serialized = undefined;
     }
   } finally {
-    // Clear decoded and copied encrypted buffers even when authentication or parsing fails.
+    // Clear decoded and copied encrypted buffers even when decoding or authentication fails.
     iv.fill(0);
-    ciphertext.fill(0);
-    aad.fill(0);
-    new Uint8Array(ivBuffer).fill(0);
-    new Uint8Array(ciphertextBuffer).fill(0);
-    new Uint8Array(aadBuffer).fill(0);
+    ciphertext?.fill(0);
+    aad?.fill(0);
+    if (ivBuffer) new Uint8Array(ivBuffer).fill(0);
+    if (ciphertextBuffer) new Uint8Array(ciphertextBuffer).fill(0);
+    if (aadBuffer) new Uint8Array(aadBuffer).fill(0);
   }
 }
