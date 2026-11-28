@@ -99,10 +99,6 @@ import {
   setAudioFeedbackEnabled,
 } from '../lib/audioFeedback';
 import {
-  commitChequeStatusOperationalTx,
-  commitDepreciationOperationalTx,
-  commitInvoiceOperationalTx,
-  commitSalesOrderDispatchOperationalTx,
   getOperationalDbStats,
   isOperationalRestoreBarrierActive,
   loadOperationalWorkspace,
@@ -112,6 +108,7 @@ import {
   getPreparedEncryptedOperationalWorkspaceMeta,
   type EncryptedOperationalWorkspaceMeta,
 } from '../lib/operationalDb';
+import { operationalTransactionPort } from '../lib/repositoryAbstraction';
 import {
   deleteLocalSnapshot,
   downloadEncryptedBackupFileToDevice,
@@ -3054,7 +3051,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           : null;
         const updatedCheque: Cheque = { ...chq, status: newStatus };
         try {
-          await commitChequeStatusOperationalTx({
+          await operationalTransactionPort.transitionChequeStatus({
             cheque: updatedCheque,
             expectedStatus: chq.status,
             voucher: localVoucher,
@@ -3612,7 +3609,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         assertSaleReturnRequiresAtomicCloud();
         // Local Operational Mode: Single atomic 4-store IndexedDB transaction (products + voucher + cheque + invoice)
         try {
-          await commitInvoiceOperationalTx({
+          await operationalTransactionPort.commitInvoice({
             updatedProducts: plan.updatedProducts,
             voucher: plan.voucher,
             cheque: plan.cheque,
@@ -3927,7 +3924,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               : [];
 
           try {
-            await commitInvoiceOperationalTx({
+            await operationalTransactionPort.commitInvoice({
               updatedProducts,
               voucher: preparedReversalVoucher ?? undefined,
               cheques: cancelledCheques,
@@ -3996,7 +3993,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             _version: (inv._version ?? 1) + 1,
           };
           try {
-            await commitInvoiceOperationalTx({
+            await operationalTransactionPort.commitInvoice({
               updatedProducts: [],
               invoice: cancelledProforma,
             });
@@ -4333,7 +4330,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       } else {
         // Local Operational Mode: Single atomic 4-store IndexedDB transaction before mutating React state
         try {
-          await commitInvoiceOperationalTx({
+          await operationalTransactionPort.commitInvoice({
             updatedProducts: updatedProductList,
             voucher: preparedVoucher ?? undefined,
             cheque: plan.cheque ?? undefined,
@@ -5115,7 +5112,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           ...voucherBase,
           integrityHash: computeVoucherIntegrityHash(voucherBase),
         };
-        const committed = await commitDepreciationOperationalTx({ assetUpdates, voucher: sealedVoucher });
+        const committed = await operationalTransactionPort.commitDepreciation({ assetUpdates, voucher: sealedVoucher });
         if (!committed) {
           throw new Error('پایگاه عملیاتی محلی در دسترس نیست؛ هیچ تغییری در دارایی‌ها یا سند استهلاک اعمال نشد.');
         }
@@ -6145,7 +6142,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
         } else {
           try {
-            const committedOrder = await commitSalesOrderDispatchOperationalTx({
+            const committedOrder = await operationalTransactionPort.dispatchSalesOrder({
               orderId,
               ownerId,
               dispatchNumber,
