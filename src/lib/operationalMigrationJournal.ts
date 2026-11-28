@@ -100,7 +100,11 @@ function isPositiveSafeInteger(value: unknown): value is number {
 }
 
 function isIsoDate(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+  if (typeof value !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(value)) {
+    return false;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
@@ -121,6 +125,7 @@ export function isValidOperationalMigrationJournalRecord(
     !isNonNegativeSafeInteger(value.backupSessionGeneration) ||
     !ALLOWED_PHASES.includes(String(value.phase)) ||
     !isIsoDate(value.createdAt) || !isIsoDate(value.updatedAt) ||
+    Date.parse(String(value.updatedAt)) < Date.parse(String(value.createdAt)) ||
     !Array.isArray(value.stores) || value.stores.length === 0
   ) return false;
 
@@ -140,8 +145,15 @@ export function isValidOperationalMigrationJournalRecord(
       !(raw.sourceDigest === null || (typeof raw.sourceDigest === 'string' && DIGEST_PATTERN.test(raw.sourceDigest))) ||
       !(raw.targetDigest === null || (typeof raw.targetDigest === 'string' && DIGEST_PATTERN.test(raw.targetDigest)))
     ) return false;
-    if (raw.state === 'pending' && (raw.batchSequence !== 0 || raw.copiedRecordCount !== 0)) return false;
-    if (raw.state === 'copying' && (raw.batchSequence < 1 || typeof raw.sourceDigest !== 'string')) return false;
+    if (raw.state === 'pending' && (
+      raw.cursor !== null || raw.batchSequence !== 0 ||
+      raw.sourceRecordCount !== 0 || raw.copiedRecordCount !== 0 ||
+      raw.sourceDigest !== null || raw.targetDigest !== null
+    )) return false;
+    if (raw.state === 'copying' && (
+      raw.batchSequence < 1 || typeof raw.sourceDigest !== 'string' ||
+      raw.targetDigest !== null
+    )) return false;
     if (raw.state === 'verified' || raw.state === 'committed') {
       if (
         raw.copiedRecordCount !== raw.sourceRecordCount ||
