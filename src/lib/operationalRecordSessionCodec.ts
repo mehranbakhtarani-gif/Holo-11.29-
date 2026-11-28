@@ -25,6 +25,9 @@ export async function encryptOperationalRecordForActiveSession<T>(
 ): Promise<OperationalRecordEnvelope> {
   const lease = captureOperationalDataKeyLease();
   assertOperationalDataKeyLease(lease);
+  if (lease.workspaceId && lease.workspaceId !== context.workspaceId) {
+    throw new Error('Operational record workspace does not match the active key session.');
+  }
   const envelope = await encryptOperationalRecord(value, context, lease.key);
   assertOperationalDataKeyLease(lease);
   return envelope;
@@ -36,6 +39,9 @@ export async function decryptOperationalRecordForActiveSession<T>(
 ): Promise<T> {
   const lease = captureOperationalDataKeyLease();
   assertOperationalDataKeyLease(lease);
+  if (lease.workspaceId && lease.workspaceId !== expectedContext.workspaceId) {
+    throw new Error('Operational record workspace does not match the active key session.');
+  }
   const value = await decryptOperationalRecord<T>(envelope, expectedContext, lease.key);
   assertOperationalDataKeyLease(lease);
   return value;
