@@ -59,6 +59,29 @@ async function run() {
     assert.equal(sessionChangeEvents, 4,
       'lock and unlock transitions must notify the UI');
 
+    const operationalDb = readFileSync(
+      new URL('../src/lib/operationalDb.ts', import.meta.url),
+      'utf8'
+    );
+    const restoreApply = operationalDb.match(/export async function applyOperationalRestoreJournalWorkspace([\\s\\S]*?)\\n}\\n\\n\\/\\*\\* Remove only an uncommitted/)?.[1];
+    assert.ok(restoreApply, 'operational restore apply must remain discoverable');
+    assert.ok(
+      restoreApply.includes('captureBackupSessionLease()') &&
+      restoreApply.includes('assertBackupSessionLease(lease)') &&
+      restoreApply.includes("holoo:backup-session-changed") &&
+      restoreApply.includes('tx.abort()'),
+      'restore writes must be bound to a live session lease and abort when the session changes'
+    );
+    const safetyBackup = operationalDb.match(/export async function savePreUpdateSafetyBackup([\\s\\S]*?)\\n}\\n\\nexport async function listPreUpdateSafetyBackups/)?.[1];
+    assert.ok(safetyBackup, 'pre-update safety backup writer must remain discoverable');
+    assert.ok(
+      safetyBackup.includes('captureBackupSessionLease()') &&
+      safetyBackup.includes('assertBackupSessionLease(lease)') &&
+      safetyBackup.includes("holoo:backup-session-changed") &&
+      safetyBackup.includes('tx.abort()'),
+      'safety backup writes must be bound to a live session lease and abort when the session changes'
+    );
+
     const accountingContext = readFileSync(
       new URL('../src/context/AccountingContext.tsx', import.meta.url),
       'utf8'
