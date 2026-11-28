@@ -52,7 +52,8 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 function decodeBase64(value: string, expectedBytes: number, label: string): Uint8Array {
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) {
+  const expectedEncodedLength = Math.ceil(expectedBytes / 3) * 4;
+  if (value.length !== expectedEncodedLength || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) {
     throw new Error(`Operational key descriptor ${label} encoding is invalid.`);
   }
   const decoded = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
