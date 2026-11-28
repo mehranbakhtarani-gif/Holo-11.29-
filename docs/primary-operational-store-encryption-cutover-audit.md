@@ -156,3 +156,16 @@ Required action: extend the repository contract with explicit atomic commands fo
 7. Migrate extension localStorage, backup metadata, and Document Vault as separate bounded workstreams with explicit ownership, recovery, and compatibility gates.
 
 No production code was changed by this follow-up inventory. The current plaintext operational stores remain authoritative, and the encrypted shadow remains non-authoritative until a separately reviewed cutover.
+
+
+## Follow-up implementation status — 2026-11-28
+
+The first repository-command seam has now been introduced:
+
+- `operationalTransactionPort` in `src/lib/repositoryAbstraction.ts` delegates invoice commits, sales-order dispatch, cheque transitions, depreciation, and stock adjustments to the existing specialized IndexedDB transaction functions.
+- `AccountingContext.tsx` now calls the port for invoice creation/cancellation/proforma conversion, cheque status transitions, depreciation, and sales-order dispatch. It no longer imports those five specialized transaction functions directly from `operationalDb.ts`.
+- The generic workspace load/save, operational DB statistics, restore barrier, and encrypted migration preparation APIs are still imported directly by AccountingContext. This is an intentional incomplete boundary, not a claim that all persistence access is abstracted.
+- `tests/operational-transaction-port.test.ts` verifies that all five port members are the exact existing transaction implementations. The test is included in the main test script.
+- The atomicity audit now expects the port call for the three invoice lifecycle paths. The full CI run must pass before treating this seam as validated.
+
+Remaining before an encrypted adapter is eligible for implementation: route the remaining operational DB access through a typed repository boundary; add IndexedDB transaction-store-set/abort tests for each command; specify encrypted record envelopes, key unlock/rotation/recovery and schema/index strategy; and implement a parallel generation with resumable migration and rollback. The authoritative operational stores are still plaintext. No cutover or database-version migration has been activated.
