@@ -184,8 +184,8 @@ export async function decryptOperationalRecord<T>(
     envelope.workspaceId !== expectedContext.workspaceId ||
     envelope.store !== expectedContext.store ||
     envelope.recordId !== expectedContext.recordId ||
-    typeof envelope.ivB64 !== 'string' || typeof envelope.ciphertextB64 !== 'string' ||
-    envelope.ciphertextB64.length > MAX_ENVELOPE_BYTES
+    typeof envelope.ivB64 !== 'string' || envelope.ivB64.length !== 16 ||
+    typeof envelope.ciphertextB64 !== 'string' || envelope.ciphertextB64.length > MAX_ENVELOPE_BYTES
   ) throw new Error('Operational encrypted record metadata or identity is invalid.');
   if (!key || key.type !== 'secret' || !key.usages.includes('decrypt')) {
     throw new Error('A valid operational AES decryption key is required.');
