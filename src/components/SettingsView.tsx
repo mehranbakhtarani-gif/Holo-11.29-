@@ -53,7 +53,7 @@ import { fuzzyFilterAndRank } from '../lib/fuzzySearch';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
 import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
-import { requireBackupSessionPassphrase } from '../lib/backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease } from '../lib/backupSession';
 import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
 import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, loadOperationalWorkspace, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
 import { captureBusinessLocalStateSnapshot } from '../lib/businessLocalStateSnapshot';
@@ -515,6 +515,7 @@ export const SettingsView: React.FC<{
         showToast('برای پشتیبان یکپارچه، ابتدا قفل پشتیبان رمزگذاری‌شده را باز کنید.', 'error');
         return;
       }
+      const lease = captureBackupSessionLease();
       const baseWorkspace = JSON.parse(exportBackupJson()) as Record<string, unknown>;
       const operationalWorkspace = await loadOperationalWorkspace();
       const workspaceJson = JSON.stringify({
@@ -531,8 +532,10 @@ export const SettingsView: React.FC<{
         showToast('حجم اطلاعات حسابداری از سقف ۸ مگابایت مسیر بازیابی فعلی بیشتر است؛ خروجی یکپارچه متوقف شد.', 'error');
         return;
       }
-      const workspaceEnvelope = await encryptBackupEnvelope(workspaceJson, requireBackupSessionPassphrase());
+      const workspaceEnvelope = await encryptBackupEnvelope(workspaceJson, lease.passphrase);
+      assertBackupSessionLease(lease);
       const attachmentBundle = JSON.parse(await exportEncryptedDocumentAttachmentBundle()) as Record<string, unknown>;
+      assertBackupSessionLease(lease);
       const packageJson = JSON.stringify({
         format: 'holoo-apex-complete-backup',
         schemaVersion: 2,
