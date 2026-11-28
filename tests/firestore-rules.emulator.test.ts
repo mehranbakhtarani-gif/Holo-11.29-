@@ -245,6 +245,7 @@ async function run() {
       assert.equal(productSnap.exists(), true);
       assert.equal(extensionSnap.exists(), true);
       const currentExtension = extensionSnap.data();
+      assert.ok(currentExtension);
       const currentTransfers = currentExtension.warehouseTransfers as Array<Record<string, unknown>>;
       assert.equal(currentTransfers.some((item) => item.id === 'trf_001' && item.status === 'in_transit'), true);
       transaction.update(productDoc, {
