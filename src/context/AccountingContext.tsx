@@ -7155,9 +7155,14 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return false;
     }
     const workspaceId = String(profile.uid || DEMO_OWNER).trim();
+    const cleanNextPassphrase = typeof nextPassphrase === 'string' ? nextPassphrase.trim() : '';
+    if (cleanNextPassphrase.length < 10) {
+      showToast('رمز جدید باید حداقل ۱۰ کاراکتر داشته باشد.', 'warning');
+      return false;
+    }
     let descriptor: Awaited<ReturnType<typeof rewrapOperationalKeyDescriptorForWorkspace>>;
     try {
-      descriptor = await rewrapOperationalKeyDescriptorForWorkspace(workspaceId, nextPassphrase);
+      descriptor = await rewrapOperationalKeyDescriptorForWorkspace(workspaceId, cleanNextPassphrase);
     } catch (error) {
       showToast(
         error instanceof Error ? error.message : 'تغییر رمز کلید عملیاتی ناموفق بود.',
@@ -7168,7 +7173,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     // The durable descriptor is now wrapped with nextPassphrase. Replace the
     // in-memory vault secret only after the compare-and-swap write has committed.
     try {
-      unlockBackupVault(nextPassphrase);
+      unlockBackupVault(cleanNextPassphrase);
       setBackupSessionUnlocked(true);
       await unlockOperationalDataSessionFromDescriptor(descriptor, workspaceId);
       showToast('رمز پشتیبان و کلید عملیاتی با موفقیت تغییر کرد.');
