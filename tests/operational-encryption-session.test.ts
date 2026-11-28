@@ -29,6 +29,18 @@ async function run() {
     const descriptor = await operationalDb.initializeOperationalKeyDescriptor('workspace-session-01');
     const persistedDescriptor = await operationalDb.loadOperationalKeyDescriptor('workspace-session-01');
     assert.deepEqual(persistedDescriptor, descriptor);
+    const staleWorkspaceBootstrap = session.unlockOperationalDataSessionForWorkspace('workspace-session-01');
+    session.lockOperationalDataSession();
+    await assert.rejects(
+      staleWorkspaceBootstrap,
+      /superseded by another session change/,
+      'locking during descriptor loading must fence the entire asynchronous workspace bootstrap'
+    );
+    assert.equal(
+      session.isOperationalDataSessionUnlocked(),
+      false,
+      'a stale workspace bootstrap must not reopen a key after cleanup'
+    );
     operationalDb.setOperationalRestoreBarrier(true);
     await assert.rejects(
       () => session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01'),
@@ -182,7 +194,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 35 assertions passed');
+    console.log('Operational encryption session: 37 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
