@@ -456,3 +456,43 @@ The store addition requires a database version upgrade (currently version 5). Th
 ### Implementation decision
 
 Do not introduce the new store, increment `OP_DB_VERSION`, or redirect extension reads/writes in this change set. The next code change must be a separately reviewable vertical slice: IndexedDB extension repository + generation CAS + migration journal + deterministic legacy importer + async provider bootstrap, with the complete two-tab, old/new build, restore-barrier, crash/restart, quota, blocked-upgrade, and downgrade tests in place before enabling the authority switch. Encryption-at-rest remains an independent gate and must not be implied by this storage relocation.
+
+
+## Extension persistence implementation readiness (branch-pinned source review)
+
+This section narrows the next code change to a separate, non-cutover vertical slice. It records implementation constraints observed in the current branch and the acceptance contract for an IndexedDB-backed extension repository. It does not authorize a schema bump or switch of authority.
+
+### Source facts that affect the implementation
+
+- `openOperationalDb` currently opens the database at the module-level `OP_DB_VERSION`, creates the restore journal and declared operational stores during upgrade, then checks the restore journal before returning a usable connection. The reviewed implementation has no explicit `IDBOpenDBRequest.onblocked` handler and no `IDBDatabase.onversionchange` close handler. A future version bump must add both and must expose a recoverable blocked-upgrade state rather than silently waiting.
+- The current `WorkspaceExtensionsProvider` constructs state synchronously with `useState(() => loadInitialExtensions())`. That initializer reads the aggregate localStorage key and falls back to three legacy helper readers. React children can therefore observe extension state before any durable asynchronous repository bootstrap exists.
+- `persistLocalMirror` writes four localStorage keys sequentially and attempts reverse rollback on failure. This is compensating behavior, not an atomic commit.
+- `updateExtensions` currently computes the next state, persists localStorage synchronously, updates the ref and React state, then starts cloud propagation. The API is synchronous and has multiple specialized mutation paths (including transfer-state persistence); converting only this one callback would leave bypasses.
+- `AccountingContext` hydrates the financial workspace asynchronously in its own effect. `main.tsx` currently composes `AccountingProvider` and `WorkspaceExtensionsProvider` directly; any extension readiness gate must not block restore-journal recovery or cause accounting fallback/demo data to become authoritative.
+
+### Required first-slice contract
+
+1. Introduce a typed `WorkspaceExtensionRepository` behind `repositoryAbstraction`; keep IndexedDB implementation details in the repository adapter. Its initial API should be limited to `bootstrap(workspaceId)`, `read(workspaceId)`, and `commit(workspaceId, expectedGeneration, nextSnapshot)`. The commit result returns the committed generation and timestamp. Do not add cloud sync, encryption-at-rest, or a mirror writer to this first contract.
+2. Add a dedicated `workspaceExtensions` object store with `keyPath: 'workspaceId'`. A row contains only the workspace identity, extension schema version, monotonically increasing generation, validated snapshot, and commit timestamp. The snapshot and generation must be written in the same readwrite transaction. Use a conditional compare-and-swap: read the existing generation inside that transaction and abort unless it equals `expectedGeneration`; do not rely on a React ref, localStorage counter, BroadcastChannel message, or pre-transaction read for concurrency control.
+3. Persist the migration journal in the same operational database and transaction boundary. It must distinguish at least `not_started`, `staging`, `verified`, and `committed`; record the source-key presence/parse status, source digest, target generation, schema version, record counts, and timestamps. Never mark migration committed before a read-back from IndexedDB passes structural validation and generation verification.
+4. The legacy importer must read the four known keys without collapsing distinct outcomes: absent, valid, malformed, and inaccessible (e.g. SecurityError). Preserve the current field-level fallback semantics for the three legacy helper keys, but make precedence deterministic: a valid aggregate field wins; an absent or invalid aggregate field may be filled by a valid legacy field/default; a malformed aggregate must not mask valid legacy data. Record import diagnostics without copying credentials, mesh secrets, device IDs, sync cursors, or unrelated localStorage categories into the business extension row.
+5. Bootstrap must be asynchronous and fail closed. The provider must expose an explicit readiness/error state and must not publish default or partially imported extension state to consumers until the repository read and validation finish. If IndexedDB is unavailable, blocked, quota-failed, or corrupt, surface a recoverable error; do not silently fall back to writable localStorage authority.
+6. Convert every extension mutation path, including `updateExtensions`, transfer persistence, initial dye-lot seeding, and any direct state setter, to one serialized repository commit path. UI optimism may be retained only with a defined rollback/error surface. A failed commit must not be reported as durable success and must not be followed by cloud propagation as if local persistence succeeded.
+7. Keep cloud `_version`, local IndexedDB generation, encrypted extension outbox operation IDs, and financial `localRevision` as separate monotonic domains. A successful local commit is not evidence of cloud acknowledgement; an outbox replay is not a local-generation increment unless it changes the local snapshot.
+8. During this first slice, keep the legacy localStorage keys read-only migration inputs. Do not keep writing them as mirrors until a separately tested old/new-client compatibility protocol exists. An older app tab can otherwise overwrite imported data after a newer app has taken authority.
+
+### Required test matrix before authority switch
+
+- Fresh install with no legacy keys; valid aggregate only; each legacy key independently; aggregate plus partial legacy keys; empty-but-valid arrays; malformed aggregate with valid legacy values; malformed individual legacy JSON; inaccessible localStorage; unknown/extra fields; prototype-pollution keys.
+- IndexedDB transaction abort after snapshot put but before journal transition; process termination/reload during import; retry after interrupted import; repeated bootstrap idempotency; read-back mismatch; unsupported schema version.
+- Two tabs committing the same expected generation: exactly one succeeds and the other receives a generation conflict. Verify snapshot and generation remain paired after every abort.
+- Two tabs racing bootstrap/import: exactly one migration commits; the other reads the committed generation and does not re-import stale legacy values.
+- Blocked upgrade while an older tab holds a connection; old tab receives `versionchange` and closes; user-visible recovery if the old tab does not close.
+- Restore barrier active before bootstrap, activated during bootstrap, and active during commit: no normal extension read/write may bypass the barrier; restore recovery itself remains possible.
+- Quota exhaustion, storage unavailable, malformed IndexedDB row, database deletion/recreation, reload after commit, and browser restart.
+- Cloud mutation only after local commit; cloud failure leaves a durable local state plus explicit retry/outbox behavior; replay idempotency does not duplicate the extension mutation.
+- Compatibility tests for the minimum supported old client version. Until these pass, do not activate the new store as authoritative for mixed-version deployments.
+
+### Explicit non-goals for this slice
+
+No `OP_DB_VERSION` change, no production reader redirection, no deletion of legacy keys, no encrypted-store cutover, no automatic shadow-refresh scheduler, and no merge/deploy. First land the repository and migration primitives with isolated tests; only a later reviewed change may enable the new provider bootstrap after the complete compatibility matrix passes.
