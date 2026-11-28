@@ -45,7 +45,7 @@ import {
   type OfflineSwSnapshot,
 } from '../lib/offlineStatus';
 import { toPersianDigits } from '../lib/format';
-import { requireBackupSessionPassphrase } from '../lib/backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease } from '../lib/backupSession';
 
 const LOCAL_CRED_STORAGE_PREFIX = 'local_offline_credential_v1';
 
@@ -288,10 +288,12 @@ export const OfflineFirstControlPanel: React.FC<{
         return;
       }
       const res = await safeApplySwUpdateWithBackup(async () => {
+        const lease = captureBackupSessionLease();
         const envelope = await encryptBackupEnvelope(
           exportBackupJson(),
-          requireBackupSessionPassphrase()
+          lease.passphrase
         );
+        assertBackupSessionLease(lease);
         return savePreUpdateSafetyBackup({
           id: `pre_update_${Date.now()}`,
           reason: 'pwa_update',
