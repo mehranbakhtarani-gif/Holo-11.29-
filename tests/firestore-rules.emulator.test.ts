@@ -158,6 +158,32 @@ async function run() {
       totalCredit: Number.MAX_SAFE_INTEGER + 1,
     })));
 
+    // Audit actor identity is bound to Firebase Auth; display name/role remain contextual labels.
+    await assertSucceeds(setDoc(doc(ownerA, 'auditLogs', 'authenticated_actor'), {
+      ownerId: 'company_a',
+      actorUid: 'company_a',
+      timestamp: '1405/01/01 · 10:00',
+      operatorName: 'Accountant',
+      operatorRole: 'accountant',
+      module: 'vouchers',
+      action: 'create',
+      details: 'Created a draft voucher',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(ownerA, 'auditLogs', 'forged_actor'), {
+      ownerId: 'company_a',
+      actorUid: 'company_b',
+      timestamp: '1405/01/01 · 10:00',
+      operatorName: 'Administrator',
+      operatorRole: 'finance_manager',
+      module: 'vouchers',
+      action: 'delete',
+      details: 'Forged actor identity',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+
     // Invoice amount fields must be non-negative safe integers.
     await assertSucceeds(setDoc(doc(ownerA, 'invoices', 'valid_invoice'), makeInvoice('company_a')));
     await assertFails(setDoc(doc(ownerA, 'invoices', 'negative_invoice'), makeInvoice('company_a', {
