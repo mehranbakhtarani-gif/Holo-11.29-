@@ -33,8 +33,14 @@ async function main() {
     () => true,
     'wrong mesh passphrases must not decrypt state'
   );
-  const tamperedPayload = encryptedPayload.slice(0, -3) +
-    (encryptedPayload.at(-3) === 'A' ? 'B' : 'A') + encryptedPayload.slice(-2);
+  const [encryptedPrefix, encryptedBody] = encryptedPayload.split(':');
+  const tamperedBody = encryptedBody.split('');
+  // The first 28 bytes are salt + IV (40 base64 chars); mutate ciphertext,
+  // not trailing base64 padding bits that can decode to the original bytes.
+  const ciphertextBase64Offset = 40;
+  const originalCiphertextChar = tamperedBody[ciphertextBase64Offset];
+  tamperedBody[ciphertextBase64Offset] = originalCiphertextChar === 'A' ? 'B' : 'A';
+  const tamperedPayload = `${encryptedPrefix}:${tamperedBody.join('')}`;
   await assert.rejects(
     () => decryptMeshPayloadAesGcm('test-only-holoo-mesh-secret', tamperedPayload),
     () => true,
