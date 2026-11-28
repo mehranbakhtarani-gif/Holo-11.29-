@@ -1,5 +1,5 @@
 import {
-  computeSnapshotDigest256Sync,
+  computeSnapshotSha256Hex,
   decryptAndVerifyBackupEnvelope,
   encryptBackupEnvelope,
 } from './offlineFirstCore';
@@ -54,7 +54,7 @@ export async function createEncryptedWorkspaceExtensionOutboxOperation(params: {
     throw new Error('Workspace extension change is too large for the encrypted offline queue.');
   }
 
-  const payloadHash = computeSnapshotDigest256Sync(plaintext);
+  const payloadHash = await computeSnapshotSha256Hex(plaintext);
   const envelope = await encryptBackupEnvelope(plaintext, params.passphrase);
   const safeWorkspaceId = params.workspaceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
   return {
