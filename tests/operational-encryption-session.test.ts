@@ -112,6 +112,27 @@ async function run() {
       /metadata or identity is invalid/
     );
 
+    await assert.rejects(
+      () => operationalDb.rewrapOperationalKeyDescriptorForWorkspace('workspace-session-01', 'short'),
+      /at least 10/,
+      'weak replacement passphrases must not rotate the operational key'
+    );
+    assert.deepEqual(
+      await operationalDb.loadOperationalKeyDescriptor('workspace-session-01'),
+      descriptor,
+      'failed key rotation must preserve the existing descriptor'
+    );
+    operationalDb.setOperationalRestoreBarrier(true);
+    await assert.rejects(
+      () => operationalDb.rewrapOperationalKeyDescriptorForWorkspace(
+        'workspace-session-01',
+        'ReplacementSession#1405'
+      ),
+      /blocked while workspace restore is active/,
+      'restore barrier must prevent operational key rotation'
+    );
+    operationalDb.setOperationalRestoreBarrier(false);
+
     // Re-wrap the same DEK under a new passphrase using a durable compare-and-swap.
     const rotatedDescriptor = await operationalDb.rewrapOperationalKeyDescriptorForWorkspace(
       'workspace-session-01',
@@ -156,7 +177,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 32 assertions passed');
+    console.log('Operational encryption session: 34 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
