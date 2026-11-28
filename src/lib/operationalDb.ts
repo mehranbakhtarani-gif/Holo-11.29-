@@ -1409,6 +1409,9 @@ export async function writeEncryptedOperationalWorkspaceSnapshot(
   if (!Number.isSafeInteger(expectedSourceRevision) || expectedSourceRevision < 1) {
     throw new Error('شماره بازبینی مبنا برای ذخیره رمزگذاری‌شده معتبر نیست.');
   }
+  if (!Number.isSafeInteger(workspace.localRevision) || workspace.localRevision !== expectedSourceRevision) {
+    throw new Error('شماره بازبینی داده‌های snapshot با بازبینی مبنای رمزگذاری مطابقت ندارد.');
+  }
   const snapshotJson = JSON.stringify(workspace);
   const validatedWorkspace = parseOperationalWorkspaceSnapshot(snapshotJson);
   if (validatedWorkspace.profile.uid.trim() !== cleanWorkspaceId) {
@@ -1575,6 +1578,9 @@ export async function loadPreparedEncryptedOperationalWorkspace(
     throw new Error('اثر انگشت نسخه عملیاتی رمزگذاری‌شده با فراداده آن مطابقت ندارد.');
   }
   const workspace = parseOperationalWorkspaceSnapshot(result.snapshotJson);
+  if (workspace.localRevision !== record.sourceRevision) {
+    throw new Error('شماره بازبینی داخل snapshot رمزگذاری‌شده با فراداده آن مطابقت ندارد.');
+  }
   if (workspace.profile.uid.trim() !== cleanWorkspaceId) {
     throw new Error('شناسه پروفایل نسخه رمزگذاری‌شده با فضای کاری درخواستی مطابقت ندارد.');
   }

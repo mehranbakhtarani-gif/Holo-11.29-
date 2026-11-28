@@ -156,6 +156,13 @@ async function run() {
       /شناسه فضای کاری با شناسه پروفایل/,
       'an encrypted snapshot must not be written under a different workspace identity'
     );
+    await assert.rejects(
+      () => writeEncryptedOperationalWorkspaceSnapshot(
+        'workspace-1', { ...loadedSource, localRevision: saved!.localRevision + 1 }, saved!.localRevision
+      ),
+      /شماره بازبینی داده‌های snapshot/,
+      'snapshot payload revision must match the revision being encrypted'
+    );
     const writtenMeta = await writeEncryptedOperationalWorkspaceSnapshot(
       'workspace-1', loadedSource, saved!.localRevision
     );
