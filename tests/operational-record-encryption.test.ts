@@ -67,6 +67,12 @@ async function run() {
       'modified ciphertext must fail authentication'
     );
 
+    await assert.rejects(
+      () => decryptOperationalRecord({ ...envelope, ivB64: 'A'.repeat(1_000_000) }, context, key),
+      /metadata or identity is invalid/,
+      'oversized IV metadata must be rejected before base64 decoding'
+    );
+
     const freshEnvelope = await encryptOperationalRecord(record, context, key);
     assert.notEqual(envelope.ivB64, freshEnvelope.ivB64, 'every record encryption must use a fresh random IV');
     assert.notEqual(envelope.ciphertextB64, freshEnvelope.ciphertextB64);
@@ -78,7 +84,7 @@ async function run() {
       /work factor/
     );
 
-    console.log('Operational record encryption codec: 18 assertions passed');
+    console.log('Operational record encryption codec: 19 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
