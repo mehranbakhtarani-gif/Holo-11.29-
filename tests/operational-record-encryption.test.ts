@@ -13,7 +13,27 @@ async function run() {
   try {
     const salt = createOperationalDataSalt();
     assert.equal(salt.byteLength, 16);
+    const originalDeriveKey = webcrypto.subtle.deriveKey.bind(webcrypto.subtle);
+    let observedKdfSalt: Uint8Array | null = null;
+    Object.defineProperty(webcrypto.subtle, 'deriveKey', {
+      configurable: true,
+      value: (algorithm: AlgorithmIdentifier | Pbkdf2Params | HkdfParams, baseKey: CryptoKey, derivedKeyType: AesKeyGenParams | HmacKeyGenParams, extractable: boolean, keyUsages: KeyUsage[]) => {
+        if (typeof algorithm === 'object' && 'name' in algorithm && algorithm.name === 'PBKDF2') {
+          observedKdfSalt = new Uint8Array((algorithm as Pbkdf2Params).salt as ArrayBuffer);
+        }
+        return originalDeriveKey(algorithm, baseKey, derivedKeyType, extractable, keyUsages);
+      },
+    });
     const key = await deriveOperationalDataKey('OperationalEncryption#1405', salt);
+    assert.ok(observedKdfSalt, 'PBKDF2 must receive an owned salt buffer');
+    assert.ok(
+      observedKdfSalt!.every((byte) => byte === 0),
+      'the temporary PBKDF2 salt buffer must be zeroed after derivation'
+    );
+    Object.defineProperty(webcrypto.subtle, 'deriveKey', {
+      configurable: true,
+      value: originalDeriveKey,
+    });
     assert.equal(key.type, 'secret');
     assert.equal(key.extractable, false);
     assert.deepEqual(key.usages, ['encrypt', 'decrypt']);
@@ -110,7 +130,7 @@ async function run() {
       /work factor/
     );
 
-    console.log('Operational record encryption codec: 22 assertions passed');
+    console.log('Operational record encryption codec: 24 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
