@@ -41,7 +41,7 @@
     };
 
     const readAccountId = async () => {
-      const db = await openDb('holoo_apex_operational_db_v1', 5);
+      const db = await openDb('holoo_apex_operational_db_v1', 6);
       try {
         return await new Promise((resolve, reject) => {
           const tx = db.transaction(['accounts'], 'readonly');
