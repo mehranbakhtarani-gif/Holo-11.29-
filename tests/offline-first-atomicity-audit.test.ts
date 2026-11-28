@@ -617,7 +617,7 @@ async function runTests() {
   const offlineDepreciationBranch = depreciationBody.slice(depreciationBody.lastIndexOf('} else {'));
   assert.match(
     offlineDepreciationBranch,
-    /commitDepreciationOperationalTx/,
+    /operationalTransactionPort\.commitDepreciation\(/,
     'offline depreciation must use one IndexedDB transaction for asset balances and the permanent voucher'
   );
   const cloudDepreciationIdx = accountingCtxSrc.indexOf('const postDepreciationVoucher');
