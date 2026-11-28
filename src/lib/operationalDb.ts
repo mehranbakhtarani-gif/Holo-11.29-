@@ -43,8 +43,15 @@ import {
 
 let forcedOperationalRestoreBarrier = false;
 
+function notifyOperationalRestoreBarrierChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('holoo:operational-restore-barrier-changed'));
+  }
+}
+
 export function setOperationalRestoreBarrier(active: boolean): void {
   forcedOperationalRestoreBarrier = active;
+  notifyOperationalRestoreBarrierChanged();
 }
 
 export function isOperationalRestoreBarrierActive(): boolean {
@@ -56,10 +63,12 @@ if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
   restoreBarrierChannel.onmessage = (event) => {
     if (event.data?.reload === true) {
       forcedOperationalRestoreBarrier = true;
+      notifyOperationalRestoreBarrierChanged();
       window.location.reload();
       return;
     }
     forcedOperationalRestoreBarrier = event.data?.active !== false;
+    notifyOperationalRestoreBarrierChanged();
   };
 }
 
