@@ -141,6 +141,7 @@ export function isValidOperationalMigrationJournalRecord(
       !(raw.targetDigest === null || (typeof raw.targetDigest === 'string' && DIGEST_PATTERN.test(raw.targetDigest)))
     ) return false;
     if (raw.state === 'pending' && (raw.batchSequence !== 0 || raw.copiedRecordCount !== 0)) return false;
+    if (raw.state === 'copying' && (raw.batchSequence < 1 || typeof raw.sourceDigest !== 'string')) return false;
     if (raw.state === 'verified' || raw.state === 'committed') {
       if (
         raw.copiedRecordCount !== raw.sourceRecordCount ||
@@ -258,8 +259,9 @@ export function advanceOperationalMigrationStoreCheckpoint(
     patch.batchSequence !== current.batchSequence + 1 ||
     patch.sourceRecordCount < current.sourceRecordCount ||
     patch.copiedRecordCount < current.copiedRecordCount ||
-    (current.sourceRecordCount !== 0 && patch.sourceRecordCount !== current.sourceRecordCount) ||
-    (current.sourceDigest !== null && patch.sourceDigest !== current.sourceDigest)
+    (current.batchSequence > 0 && patch.sourceRecordCount !== current.sourceRecordCount) ||
+    (current.sourceDigest !== null && patch.sourceDigest !== current.sourceDigest) ||
+    (patch.state === 'copying' && (typeof patch.sourceDigest !== 'string' || !DIGEST_PATTERN.test(patch.sourceDigest)))
   ) {
     throw new Error('Operational migration checkpoint is non-monotonic or source-bound data changed.');
   }
