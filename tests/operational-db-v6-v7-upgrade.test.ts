@@ -61,8 +61,8 @@ async function run() {
       assert.equal(db.version, 7);
       assert.equal(db.objectStoreNames.contains('encryptedOperationalRecords'), true);
       const shadow = db.transaction(['encryptedOperationalRecords']).objectStore('encryptedOperationalRecords');
-      assert.deepEqual(shadow.keyPath, ['workspaceId', 'storeName', 'recordId']);
-      assert.equal(shadow.indexNames.contains('workspaceStore'), true);
+      assert.deepEqual(shadow.keyPath, ['workspaceId', 'migrationId', 'storeName', 'recordId']);
+      assert.equal(shadow.indexNames.contains('workspaceMigrationStore'), true);
       assert.deepEqual(await readRecord(db, 'meta', 'schema-v6'), { key: 'schema-v6', revision: 31 });
       assert.deepEqual(await readRecord(db, 'accounts', 'account-v6'), {
         id: 'account-v6', title: 'Legacy plaintext source',
