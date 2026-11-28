@@ -47,6 +47,12 @@ async function run() {
       'ciphertext must not be moved between object stores'
     );
 
+    assert.rejects(
+      () => encryptOperationalRecord(record, { ...context, store: 'meta' as typeof context.store }, key),
+      /context is invalid/,
+      'runtime callers cannot encrypt into stores outside the approved encrypted-store allowlist'
+    );
+
     const otherKey = await deriveOperationalDataKey('DifferentEncryption#1405', salt);
     await assert.rejects(
       () => decryptOperationalRecord(envelope, context, otherKey),
@@ -72,7 +78,7 @@ async function run() {
       /work factor/
     );
 
-    console.log('Operational record encryption codec: 17 assertions passed');
+    console.log('Operational record encryption codec: 18 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
