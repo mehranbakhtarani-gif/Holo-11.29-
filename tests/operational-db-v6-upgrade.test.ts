@@ -79,12 +79,12 @@ async function run() {
     const operationalDb = await import('../src/lib/operationalDb');
 
     const heldV5 = await openAtVersion(5);
-    heldV5.onversionchange = () => heldV5.close();
     await assert.rejects(
       () => operationalDb.loadOperationalKeyDescriptor('migration-schema-test-workspace'),
       /blocked by another open tab\/connection/,
       'the production opener must fail closed when a legacy tab blocks schema upgrade'
     );
+    heldV5.close();
 
     // The production open request resumes after the old connection closes and creates v6.
     const v6 = await openAtVersion(6);
