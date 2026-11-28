@@ -8,7 +8,6 @@
 import {
   assertBackupSessionLease,
   captureBackupSessionLease,
-  isBackupSessionUnlocked,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
 
@@ -26,9 +25,7 @@ function invalidateOperationalDataKey(): void {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('holoo:backup-session-changed', () => {
-    if (!isBackupSessionUnlocked()) invalidateOperationalDataKey();
-  });
+  window.addEventListener('holoo:backup-session-changed', invalidateOperationalDataKey);
 }
 
 /** Derive the operational key once after the backup session has been unlocked. */
