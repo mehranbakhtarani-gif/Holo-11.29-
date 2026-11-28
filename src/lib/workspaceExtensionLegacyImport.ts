@@ -95,3 +95,26 @@ export function readLegacyAggregateField<T>(
     return { status: 'malformed', reason: 'invalid_shape' };
   }
 }
+
+export type LegacyFieldSelection<T> =
+  | { status: 'selected'; source: 'aggregate' | 'mirror'; value: T }
+  | { status: 'unavailable'; aggregate: LegacyStorageRead<T>; mirror: LegacyStorageRead<T> };
+
+/**
+ * Deterministic field-level precedence for a future importer:
+ * a valid aggregate field wins even when empty; otherwise a valid independent
+ * mirror is used. If neither is valid, both source states remain observable.
+ * This function deliberately supplies no defaults and performs no writes.
+ */
+export function selectLegacyWorkspaceExtensionField<T>(
+  aggregate: LegacyStorageRead<T>,
+  mirror: LegacyStorageRead<T>
+): LegacyFieldSelection<T> {
+  if (aggregate.status === 'valid') {
+    return { status: 'selected', source: 'aggregate', value: aggregate.value };
+  }
+  if (mirror.status === 'valid') {
+    return { status: 'selected', source: 'mirror', value: mirror.value };
+  }
+  return { status: 'unavailable', aggregate, mirror };
+}

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   readLegacyAggregateField, readLegacyJson, readWorkspaceExtensionLegacySources,
+  selectLegacyWorkspaceExtensionField,
   type LegacyStorageReader,
 } from '../src/lib/workspaceExtensionLegacyImport';
 
@@ -70,5 +71,28 @@ assert.deepEqual(partlyDenied.favoriteMenus, { status: 'absent' },
 assert.deepEqual(readLegacyJson(
   new MemoryStorage({ key: '{"__proto__":{"polluted":true}}' }), 'key', isRecord
 ), { status: 'malformed', reason: 'invalid_shape' });
+
+// A valid aggregate field wins over a stale mirror, including an explicit empty value.
+assert.deepEqual(selectLegacyWorkspaceExtensionField(
+  { status: 'valid', value: [] }, { status: 'valid', value: ['stale'] }
+), { status: 'selected', source: 'aggregate', value: [] });
+
+// Missing or malformed aggregate fields fall back to a valid independent mirror.
+assert.deepEqual(selectLegacyWorkspaceExtensionField(
+  { status: 'absent' }, { status: 'valid', value: ['legacy'] }
+), { status: 'selected', source: 'mirror', value: ['legacy'] });
+assert.deepEqual(selectLegacyWorkspaceExtensionField(
+  { status: 'malformed', reason: 'invalid_shape' }, { status: 'valid', value: ['legacy'] }
+), { status: 'selected', source: 'mirror', value: ['legacy'] });
+
+// No valid source means no invented default; both diagnostic states survive.
+assert.deepEqual(selectLegacyWorkspaceExtensionField(
+  { status: 'inaccessible', errorName: 'SecurityError' },
+  { status: 'malformed', reason: 'invalid_json' }
+), {
+  status: 'unavailable',
+  aggregate: { status: 'inaccessible', errorName: 'SecurityError' },
+  mirror: { status: 'malformed', reason: 'invalid_json' },
+});
 
 console.log('Workspace extension legacy source classification tests passed');
