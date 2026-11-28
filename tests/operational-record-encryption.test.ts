@@ -24,6 +24,11 @@ async function run() {
       voucherNumber: 'V-1405-0042',
       lines: [{ accountId: '101', debit: 2500, credit: 0 }, { accountId: '201', debit: 0, credit: 2500 }],
     };
+    await assert.rejects(
+      () => encryptOperationalRecord(undefined, context, key),
+      /serialize to a JSON value/,
+      'undefined root values must not produce undecryptable ciphertext envelopes'
+    );
     const envelope = await encryptOperationalRecord(record, context, key);
     assert.equal(envelope.workspaceId, context.workspaceId);
     assert.equal(envelope.store, context.store);
@@ -84,7 +89,7 @@ async function run() {
       /work factor/
     );
 
-    console.log('Operational record encryption codec: 19 assertions passed');
+    console.log('Operational record encryption codec: 20 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
