@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { indexedDB } from 'fake-indexeddb';
 import { createOperationalDataSalt } from '../src/lib/operationalRecordEncryption';
+import { queryEncryptedOperationalStore, writeEncryptedOperationalStoresAtomically } from '../src/lib/encryptedOperationalIndexedDb';
 import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
 
 const previous = {
@@ -129,6 +130,65 @@ async function run() {
       await sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, recordContext),
       recordValue
     );
+
+    // Exercise the opt-in encrypted IndexedDB adapter against the real v5 keyPaths.
+    const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('holoo_apex_operational_db_v1', 5);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const written = await writeEncryptedOperationalStoresAtomically(
+        rawDb,
+        'workspace-session-01',
+        [
+          { store: 'vouchers', records: [{ id: 'enc-voucher-1', voucherNumber: 101, date: '1405/01/01', status: 'draft' }] },
+          { store: 'products', records: [{ id: 'enc-product-1', sku: 'SECRET-SKU-1', stock: 12 }] },
+        ]
+      );
+      assert.equal(written, 2, 'encrypted multi-store write must commit every prepared record');
+      const rawVoucher = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const tx = rawDb.transaction(['vouchers'], 'readonly');
+        const req = tx.objectStore('vouchers').get('enc-voucher-1');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      assert.deepEqual(Object.keys(rawVoucher).sort(), ['encryptedRecord', 'id']);
+      assert.equal(rawVoucher.id, 'enc-voucher-1');
+      assert.equal('date' in rawVoucher, false, 'business date must not leak into the encrypted row wrapper');
+      const filtered = await queryEncryptedOperationalStore(
+        rawDb,
+        'vouchers',
+        'workspace-session-01',
+        { predicate: (record) => record.status === 'draft', limit: 10, maxScan: 20 }
+      );
+      assert.deepEqual(filtered.items, [{ id: 'enc-voucher-1', voucherNumber: 101, date: '1405/01/01', status: 'draft' }]);
+      assert.equal(filtered.scanned, 1);
+      const products = await queryEncryptedOperationalStore(
+        rawDb,
+        'products',
+        'workspace-session-01',
+        { predicate: (record) => record.sku === 'SECRET-SKU-1' }
+      );
+      assert.equal(products.items.length, 1);
+      assert.equal(products.items[0].stock, 12);
+      await assert.rejects(
+        () => writeEncryptedOperationalStoresAtomically(rawDb, 'workspace-session-01', [
+          { store: 'vouchers', records: [{ id: 'duplicate', amount: 1 }, { id: 'duplicate', amount: 2 }] },
+        ]),
+        /duplicate primary key/,
+        'duplicate primary keys must be rejected before opening a write transaction'
+      );
+      const absentDuplicate = await new Promise<unknown>((resolve, reject) => {
+        const tx = rawDb.transaction(['vouchers'], 'readonly');
+        const req = tx.objectStore('vouchers').get('duplicate');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      assert.equal(absentDuplicate, undefined, 'a rejected batch must not write partial records');
+    } finally {
+      rawDb.close();
+    }
     await assert.rejects(
       () => sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, {
         ...recordContext,
