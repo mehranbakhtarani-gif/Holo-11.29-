@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   commitChequeStatusOperationalTx,
   commitDepreciationOperationalTx,
@@ -6,11 +8,11 @@ import {
   commitSalesOrderDispatchOperationalTx,
   commitStockAdjustmentOperationalTx,
 } from '../src/lib/operationalDb';
-import { operationalSyncPersistencePort, operationalTransactionPort } from '../src/lib/repositoryAbstraction';
+import { operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort } from '../src/lib/repositoryAbstraction';
 import {
   clearPendingSyncOutboxOperations, enqueueSyncOutboxOperation, getActiveOperationalRestoreJournal,
   isInboxOperationProcessed, isOperationalRestoreBarrierActive, listPendingSyncOutboxOperations,
-  markSyncOutboxOperationStatus, recordInboxOperation,
+  markSyncOutboxOperationStatus, recordInboxOperation, loadOperationalWorkspace,
 } from '../src/lib/operationalDb';
 
 // The port must remain a transparent delegation layer. Replacing an implementation
@@ -29,6 +31,14 @@ assert.equal(operationalSyncPersistencePort.recordInbox, recordInboxOperation);
 assert.equal(operationalSyncPersistencePort.hasProcessedInbox, isInboxOperationProcessed);
 assert.equal(operationalSyncPersistencePort.getActiveRestoreJournal, getActiveOperationalRestoreJournal);
 assert.equal(operationalSyncPersistencePort.isRestoreBarrierActive, isOperationalRestoreBarrierActive);
+assert.equal(operationalRecoveryPort.getActiveRestoreJournal, getActiveOperationalRestoreJournal);
+assert.equal(operationalRecoveryPort.isRestoreBarrierActive, isOperationalRestoreBarrierActive);
+assert.equal(operationalRecoveryPort.loadWorkspace, loadOperationalWorkspace);
+assert.deepEqual(Object.keys(operationalRecoveryPort).sort(), ['getActiveRestoreJournal','isRestoreBarrierActive','loadWorkspace'].sort());
+
+const settingsViewSource = fs.readFileSync(path.join(process.cwd(), 'src/components/SettingsView.tsx'), 'utf8');
+assert.match(settingsViewSource, /operationalRecoveryPort/);
+assert.doesNotMatch(settingsViewSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
 assert.deepEqual(Object.keys(operationalSyncPersistencePort).sort(), [
   'clearPendingOutbox','enqueueOutbox','getActiveRestoreJournal','hasProcessedInbox',
   'isRestoreBarrierActive','listPendingOutbox','markOutboxStatus','recordInbox',
