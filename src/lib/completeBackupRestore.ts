@@ -146,8 +146,8 @@ async function restoreCompleteBackupPackageUnlocked(
       updatedAt: now,
     };
     await createOperationalRestoreJournal(journal);
-    assertBackupSessionLease(lease);
     journalCreated = true;
+    assertBackupSessionLease(lease);
     // Re-broadcast after the durable write: tabs opened during DB initialization
     // may have missed the initial transient announcement but are now already listening.
     announceRestoreBarrier(true);
