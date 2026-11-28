@@ -12,6 +12,7 @@ import {
   getDoc,
   getDocs,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   where,
@@ -228,6 +229,41 @@ async function run() {
       updatedByDevice: 'device_a',
       updatedAt: serverTimestamp(),
     }, { merge: true }));
+
+    // A tracked transfer must commit product cost layers and its workspace ledger atomically.
+    await assertSucceeds(runTransaction(ownerA, async (transaction) => {
+      const [productSnap, extensionSnap] = await Promise.all([
+        transaction.get(productDoc),
+        transaction.get(transferDoc),
+      ]);
+      assert.equal(productSnap.exists(), true);
+      assert.equal(extensionSnap.exists(), true);
+      const currentExtension = extensionSnap.data();
+      const currentTransfers = currentExtension.warehouseTransfers as Array<Record<string, unknown>>;
+      assert.equal(currentTransfers.some((item) => item.id === 'trf_001' && item.status === 'received'), true);
+      transaction.update(productDoc, {
+        stock: 10,
+        costLayers: [{ layerId: 'opening-1', remainingQty: 8, totalCostIrr: 8000 }],
+        inventoryValueIrr: 10000,
+        _version: 3,
+        updatedByDevice: 'device_a',
+        updatedAt: serverTimestamp(),
+      });
+      transaction.update(transferDoc, {
+        warehouseTransfers: currentTransfers.map((item) =>
+          item.id === 'trf_001' ? { ...item, status: 'received' } : item
+        ),
+        _version: 3,
+        updatedByDevice: 'device_a',
+        updatedAt: serverTimestamp(),
+      });
+    }));
+    const [committedProduct, committedExtensions] = await Promise.all([
+      getDoc(productDoc),
+      getDoc(transferDoc),
+    ]);
+    assert.equal(committedProduct.data()?.costLayers?.[0]?.remainingQty, 8);
+    assert.equal(committedExtensions.data()?.warehouseTransfers?.[0]?.status, 'received');
 
     // New cloud backups must contain an encrypted envelope, never a plaintext snapshot map.
     const encryptedCloudBackup = {
