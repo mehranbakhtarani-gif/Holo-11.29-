@@ -44,7 +44,7 @@ import {
 let forcedOperationalRestoreBarrier = false;
 
 function notifyOperationalRestoreBarrierChanged(): void {
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
     window.dispatchEvent(new Event('holoo:operational-restore-barrier-changed'));
   }
 }
