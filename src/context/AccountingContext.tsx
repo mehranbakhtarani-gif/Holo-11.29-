@@ -99,13 +99,13 @@ import {
   setAudioFeedbackEnabled,
 } from '../lib/audioFeedback';
 import {
-  getOperationalDbStats,
-  OperationalDbStats,
-  prepareEncryptedOperationalWorkspaceMigration as prepareEncryptedOperationalWorkspaceMigrationInDb,
-  getPreparedEncryptedOperationalWorkspaceMeta,
+  operationalDiagnosticsPort,
+  operationalEncryptionPreparationPort,
+  operationalTransactionPort,
+  operationalWorkspacePersistencePort,
+  type OperationalDbStats,
   type EncryptedOperationalWorkspaceMeta,
-} from '../lib/operationalDb';
-import { operationalTransactionPort, operationalWorkspacePersistencePort } from '../lib/repositoryAbstraction';
+} from '../lib/repositoryAbstraction';
 import {
   deleteLocalSnapshot,
   downloadEncryptedBackupFileToDevice,
@@ -866,7 +866,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           } else {
             hydrateFallbackLocal();
           }
-          return getOperationalDbStats().then((st) => {
+          return operationalDiagnosticsPort.getStats().then((st) => {
             if (!cancelledLocal) setOperationalDbStats(st);
           });
         })
@@ -3064,7 +3064,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (localVoucher) {
           setVouchers((prev) => [localVoucher, ...prev.filter((v) => v.id !== localVoucher.id)]);
         }
-        void getOperationalDbStats().then(setOperationalDbStats).catch(() => {});
+        void operationalDiagnosticsPort.getStats().then(setOperationalDbStats).catch(() => {});
       }
 
       showToast(
@@ -3637,7 +3637,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setCheques((prev) => [c, ...prev]);
         }
         setInvoices((prev) => [plan.invoice, ...prev]);
-        void getOperationalDbStats()
+        void operationalDiagnosticsPort.getStats()
           .then(setOperationalDbStats)
           .catch(() => {});
       }
@@ -4361,7 +4361,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setCheques((prev) => [plan.cheque!, ...prev]);
         }
         setInvoices((prev) => prev.map((i) => (i.id === invoiceId ? finalInvoice : i)));
-        void getOperationalDbStats()
+        void operationalDiagnosticsPort.getStats()
           .then(setOperationalDbStats)
           .catch(() => {});
       }
@@ -7015,7 +7015,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           rbacOperators,
           auditLogs,
         });
-        const stats = await getOperationalDbStats();
+        const stats = await operationalDiagnosticsPort.getStats();
         setOperationalDbStats(stats);
       } catch {
         // Ignore transient IndexedDB quota/lock issues
@@ -7068,7 +7068,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
           try {
             const workspaceId = String(profile.uid || DEMO_OWNER).trim();
-            const encryptedMeta = await prepareEncryptedOperationalWorkspaceMigrationInDb(workspaceId);
+            const encryptedMeta = await operationalEncryptionPreparationPort.prepareShadowSnapshot(workspaceId);
             setEncryptedOperationalWorkspaceMeta(encryptedMeta);
           } catch (error) {
             console.error('[EncryptedWorkspace] Shadow mirror refresh failed:', error);
@@ -7129,7 +7129,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
     try {
       const workspaceId = String(profile.uid || DEMO_OWNER).trim();
-      const meta = await prepareEncryptedOperationalWorkspaceMigrationInDb(workspaceId);
+      const meta = await operationalEncryptionPreparationPort.prepareShadowSnapshot(workspaceId);
       setEncryptedOperationalWorkspaceMeta(meta);
       showToast('نسخه رمزگذاری‌شده فضای کاری آماده و صحت‌سنجی شد. داده اصلی هنوز حذف یا جایگزین نشده است.');
       return true;
