@@ -93,6 +93,24 @@ export interface WorkspaceExtensionsState {
   warehouseTransfers: TrackedWarehouseTransfer[];
 }
 
+function isWorkspaceExtensionsStateSnapshot(value: unknown): value is WorkspaceExtensionsState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const arrayKeys = [
+    'reservedInvoices', 'favoriteMenus', 'pettyCashItems', 'recurringTemplates',
+    'bankLoans', 'dyeLots', 'warehouseSlips', 'bomFormulas', 'installmentPlans',
+    'volumeDiscountRules', 'fiscalArchives', 'warehouseTransfers',
+  ];
+  if (!arrayKeys.every((key) => Array.isArray(candidate[key]))) return false;
+  if (
+    !candidate.productMetaMap || typeof candidate.productMetaMap !== 'object' || Array.isArray(candidate.productMetaMap) ||
+    !candidate.moadianLinks || typeof candidate.moadianLinks !== 'object' || Array.isArray(candidate.moadianLinks) ||
+    typeof candidate.pettyCashCeilingIrr !== 'number' ||
+    !Number.isFinite(candidate.pettyCashCeilingIrr) || candidate.pettyCashCeilingIrr < 0
+  ) return false;
+  return true;
+}
+
 function stripUndefinedDeep<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((v) => stripUndefinedDeep(v)) as unknown as T;
@@ -469,16 +487,16 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             user.uid,
             requireBackupSessionPassphrase()
           );
-          if (!payload) {
+          if (
+            !payload ||
+            !isWorkspaceExtensionsStateSnapshot(payload.next) ||
+            !isWorkspaceExtensionsStateSnapshot(payload.previous)
+          ) {
             await markSyncOutboxOperationStatus(operation.operationId, 'conflict');
-            showToast('یک تغییر آفلاین رمزگذاری‌شده قابل تأیید نیست؛ برای جلوگیری از اعمال داده خراب، در صف تعارض نگه داشته شد.');
+            showToast('ساختار تغییر آفلاین رمزگذاری‌شده معتبر نیست؛ برای جلوگیری از اعمال داده ناقص، در صف تعارض نگه داشته شد.');
             continue;
           }
-          await pushToCloud(
-            payload.next as WorkspaceExtensionsState,
-            payload.previous as WorkspaceExtensionsState,
-            operation.operationId
-          );
+          await pushToCloud(payload.next, payload.previous, operation.operationId);
         }
       } catch {
         // Keep pending records intact; the next online/unlock event retries them.
