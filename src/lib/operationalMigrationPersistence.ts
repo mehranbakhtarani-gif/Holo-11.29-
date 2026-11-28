@@ -5,6 +5,7 @@
  * This module deliberately does not switch readers/writers or alter source data.
  */
 import { assertBackupSessionLease, captureBackupSessionLease } from './backupSession';
+import { openOperationalMigrationDbConnection } from './operationalDb';
 import {
   assertOperationalMigrationBinding,
   isValidOperationalMigrationJournalRecord,
@@ -14,85 +15,6 @@ import {
   type OperationalMigrationPhase,
 } from './operationalMigrationJournal';
 
-const DB_NAME = 'holoo_apex_operational_db_v1';
-const DB_VERSION = 6;
-const STORE_NAME = 'operationalMigrationJournal';
-
-function openMigrationDb(): Promise<IDBDatabase> {
-  if (typeof window === 'undefined' || !window.indexedDB) {
-    return Promise.reject(new Error('IndexedDB is unavailable for operational migration journal access.'));
-  }
-  return new Promise((resolve, reject) => {
-    let blocked = false;
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains('restoreJournal')) {
-        db.createObjectStore('restoreJournal', { keyPath: 'restoreId' });
-      }
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'migrationId' });
-      }
-      const stores = [
-        'meta', 'accounts', 'parties', 'products', 'vouchers', 'invoices', 'cheques',
-        'employees', 'assets', 'costCenters', 'currencies', 'exchangeRates',
-        'importDossiers', 'salesOrders', 'subcontractJobs', 'rbacOperators', 'auditLogs',
-        'syncOutbox', 'syncInbox', 'localProfiles', 'warehouses', 'taxReports',
-        'preUpdateBackups', 'secureWorkspace',
-      ];
-      for (const name of stores) {
-        if (!db.objectStoreNames.contains(name)) {
-          const keyPath = name === 'meta' ? 'key'
-            : name === 'syncOutbox' || name === 'syncInbox' ? 'operationId'
-            : name === 'localProfiles' || name === 'secureWorkspace' ? 'workspaceId' : 'id';
-          const store = db.createObjectStore(name, { keyPath });
-          const addIndex = (indexName: string, indexKeyPath: string) =>
-            store.createIndex(indexName, indexKeyPath, { unique: false });
-          if (name === 'syncOutbox') {
-            addIndex('status', 'status');
-            addIndex('createdAt', 'createdAt');
-            addIndex('nextRetryAt', 'nextRetryAt');
-          } else if (name === 'syncInbox') {
-            addIndex('receivedAt', 'receivedAt');
-          } else if (name === 'vouchers') {
-            addIndex('date', 'date');
-            addIndex('status', 'status');
-            addIndex('voucherNumber', 'voucherNumber');
-          } else if (name === 'invoices') {
-            addIndex('date', 'date');
-            addIndex('partyId', 'partyId');
-            addIndex('status', 'status');
-          } else if (name === 'products') {
-            addIndex('warehouse', 'warehouse');
-            addIndex('sku', 'sku');
-          } else if (name === 'cheques') {
-            addIndex('dueDate', 'dueDate');
-            addIndex('status', 'status');
-          } else if (name === 'preUpdateBackups') {
-            addIndex('createdAt', 'createdAt');
-          } else if (name === 'taxReports') {
-            addIndex('period', 'period');
-          }
-        }
-      }
-    };
-    request.onblocked = () => {
-      blocked = true;
-      reject(new Error('Operational IndexedDB upgrade is blocked by another open connection.'));
-    };
-    request.onerror = () => { if (!blocked) reject(request.error ?? new Error('Could not open operational IndexedDB.')); };
-    request.onsuccess = () => {
-      if (blocked) { request.result.close(); return; }
-      request.result.onversionchange = () => request.result.close();
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.close();
-        reject(new Error('Operational migration journal store is missing.'));
-        return;
-      }
-      resolve(request.result);
-    };
-  });
-}
 
 function assertValidJournal(value: unknown): OperationalMigrationJournalRecord {
   if (!isValidOperationalMigrationJournalRecord(value)) {
@@ -108,11 +30,11 @@ export async function readOperationalMigrationJournal(
   if (typeof migrationId !== 'string' || !/^[a-zA-Z0-9_-]{12,100}$/.test(migrationId)) {
     throw new Error('Operational migration id is invalid.');
   }
-  const db = await openMigrationDb();
+  const db = await openOperationalMigrationDbConnection();
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction([STORE_NAME], 'readonly');
-      const request = tx.objectStore(STORE_NAME).get(migrationId);
+      const tx = db.transaction(['operationalMigrationJournal'], 'readonly');
+      const request = tx.objectStore('operationalMigrationJournal').get(migrationId);
       let result: OperationalMigrationJournalRecord | null = null;
       request.onsuccess = () => {
         if (request.result === undefined) return;
@@ -138,11 +60,11 @@ export async function listOperationalMigrationJournals(
   if (typeof workspaceId !== 'string' || !workspaceId.trim() || workspaceId.length > 180) {
     throw new Error('Operational migration workspace identity is invalid.');
   }
-  const db = await openMigrationDb();
+  const db = await openOperationalMigrationDbConnection();
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction([STORE_NAME], 'readonly');
-      const request = tx.objectStore(STORE_NAME).getAll();
+      const tx = db.transaction(['operationalMigrationJournal'], 'readonly');
+      const request = tx.objectStore('operationalMigrationJournal').getAll();
       request.onsuccess = () => {
         try {
           const rows = ((request.result as unknown[]) ?? []).map(assertValidJournal);
@@ -168,11 +90,11 @@ export async function createOperationalMigrationJournal(
   if (lease.generation !== record.backupSessionGeneration) {
     throw new Error('Operational migration journal belongs to a stale backup session.');
   }
-  const db = await openMigrationDb();
+  const db = await openOperationalMigrationDbConnection();
   try {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction([STORE_NAME], 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
+      const tx = db.transaction(['operationalMigrationJournal'], 'readwrite');
+      const store = tx.objectStore('operationalMigrationJournal');
       const request = store.getAll();
       request.onsuccess = () => {
         try {
@@ -209,11 +131,11 @@ export async function persistOperationalMigrationPhase(
   if (lease.generation !== binding.backupSessionGeneration) {
     throw new Error('Operational migration session binding is stale.');
   }
-  const db = await openMigrationDb();
+  const db = await openOperationalMigrationDbConnection();
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction([STORE_NAME], 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
+      const tx = db.transaction(['operationalMigrationJournal'], 'readwrite');
+      const store = tx.objectStore('operationalMigrationJournal');
       let updated: OperationalMigrationJournalRecord | null = null;
       const request = store.get(binding.migrationId);
       request.onsuccess = () => {
