@@ -73,17 +73,9 @@ assert.throws(() => advanceOperationalMigrationStoreCheckpoint(
   current, 'accounts', {
     ...copying(3, 2, 'account-2'),
     state: 'verified',
-    targetDigest: 'b'.repeat(64),
-  }, binding, now
-), /invalid/);
-
-current = advanceOperationalMigrationStoreCheckpoint(
-  current, 'accounts', {
-    ...copying(3, 2, 'account-2'),
-    state: 'verified',
     targetDigest: sourceDigest,
   }, binding, now
-);
+), /not allowed during phase copying/);
 current = advanceOperationalMigrationStoreCheckpoint(
   current, 'vouchers', {
     state: 'copying',
@@ -93,6 +85,22 @@ current = advanceOperationalMigrationStoreCheckpoint(
     copiedRecordCount: 0,
     sourceDigest,
     targetDigest: null,
+  }, binding, now
+);
+assert.throws(() => transitionOperationalMigrationPhase(current, 'verifying', now), /finish copying/);
+current = transitionOperationalMigrationPhase(current, 'verifying', now);
+assert.throws(() => advanceOperationalMigrationStoreCheckpoint(
+  current, 'accounts', {
+    ...copying(3, 2, 'account-2'),
+    state: 'verified',
+    targetDigest: 'b'.repeat(64),
+  }, binding, now
+), /invalid/);
+current = advanceOperationalMigrationStoreCheckpoint(
+  current, 'accounts', {
+    ...copying(3, 2, 'account-2'),
+    state: 'verified',
+    targetDigest: sourceDigest,
   }, binding, now
 );
 current = advanceOperationalMigrationStoreCheckpoint(
@@ -106,7 +114,6 @@ current = advanceOperationalMigrationStoreCheckpoint(
     targetDigest: sourceDigest,
   }, binding, now
 );
-current = transitionOperationalMigrationPhase(current, 'verifying', now);
 current = transitionOperationalMigrationPhase(current, 'ready_to_cutover', now);
 assert.equal(current.phase, 'ready_to_cutover');
 
