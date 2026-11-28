@@ -101,6 +101,20 @@ async function run() {
       assert.equal(storedFirst.workspaceId, workspaceId);
       assert.equal(storedFirst.storeName, 'accounts');
       assert.equal(storedFirst.migrationId, binding.migrationId);
+      const migrationRead = await (await import('../src/lib/encryptedOperationalIndexedDb')).queryEncryptedOperationalStore(
+        db,
+        'accounts',
+        workspaceId,
+        { migrationId: binding.migrationId, limit: 10, maxScan: 10 }
+      );
+      assert.deepEqual(migrationRead.items, [{ id: 'account-atomic-1', name: 'Encrypted account' }]);
+      const unrelatedMigrationRead = await (await import('../src/lib/encryptedOperationalIndexedDb')).queryEncryptedOperationalStore(
+        db,
+        'accounts',
+        workspaceId,
+        { migrationId: 'migration_other_0001', limit: 10, maxScan: 10 }
+      );
+      assert.deepEqual(unrelatedMigrationRead.items, [], 'shadow rows from another migration run must remain isolated');
       assert.equal(storedFirst.recordId, 'account-atomic-1');
       assert.deepEqual(
         await readRow(db, 'accounts', 'account-atomic-1'),
