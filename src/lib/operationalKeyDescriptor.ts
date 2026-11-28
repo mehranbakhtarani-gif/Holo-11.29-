@@ -58,6 +58,7 @@ function decodeBase64(value: string, expectedBytes: number, label: string): Uint
   }
   const decoded = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
   if (decoded.byteLength !== expectedBytes || encodeBase64(decoded) !== value) {
+    decoded.fill(0);
     throw new Error(`Operational key descriptor ${label} must be canonical base64 for ${expectedBytes} bytes.`);
   }
   return decoded;
