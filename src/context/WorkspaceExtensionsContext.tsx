@@ -206,6 +206,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   const versionRef = useRef(1);
   const cloudWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const extensionOutboxReplayRef = useRef(false);
+  const extensionOutboxTimestampRef = useRef(0);
   const activeCloudUidRef = useRef<string | null>(isCloudMode ? user?.uid ?? null : null);
   const pendingCloudMutationsRef = useRef(0);
   activeCloudUidRef.current = isCloudMode ? user?.uid ?? null : null;
@@ -395,6 +396,9 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
               if (!isBackupSessionUnlocked()) {
                 throw new Error('برای نگهداری امن تغییرات آفلاین، ابتدا قفل رمزگذاری پشتیبان را باز کنید.');
               }
+              const now = Date.now();
+              const orderedTimestamp = Math.max(now, extensionOutboxTimestampRef.current + 1);
+              extensionOutboxTimestampRef.current = orderedTimestamp;
               const operation = await createEncryptedWorkspaceExtensionOutboxOperation({
                 workspaceId: cloudUid,
                 deviceId,
@@ -402,6 +406,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
                 previous: previous as unknown as Record<string, unknown>,
                 next: next as unknown as Record<string, unknown>,
                 passphrase: requireBackupSessionPassphrase(),
+                createdAt: new Date(orderedTimestamp).toISOString(),
               });
               await enqueueSyncOutboxOperation(operation);
               showToast('اتصال ابری قطع است؛ تغییرات افزونه با رمزگذاری در صف پایدار ذخیره شد و پس از اتصال دوباره ارسال می‌شود.');
