@@ -105,6 +105,14 @@ export const operationalRecoveryPort = {
 };
 export type OperationalRecoveryPort = typeof operationalRecoveryPort;
 
+/** Primary workspace read/write boundary used by application state hydration and persistence. */
+export const operationalWorkspacePersistencePort = {
+  loadWorkspace: loadOperationalWorkspace,
+  saveWorkspace: saveOperationalWorkspaceTx,
+  isRestoreBarrierActive: isOperationalRestoreBarrierActive,
+};
+export type OperationalWorkspacePersistencePort = typeof operationalWorkspacePersistencePort;
+
 /** Backup and schema maintenance boundary for offline/PWA lifecycle workflows. */
 export const operationalBackupMaintenancePort = {
   databaseVersion: OP_DB_VERSION,
