@@ -338,14 +338,14 @@ export function isWeakMeshPassphrase(passphrase: string): boolean {
 }
 
 export function generateSecureMeshPassphrase(): string {
-  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
-    const bytes = new Uint8Array(16);
-    globalThis.crypto.getRandomValues(bytes);
-    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-    return `hx-${hex.slice(0, 8)}-${hex.slice(8, 16)}-${hex.slice(16, 24)}-${hex.slice(24, 32)}`;
+  if (typeof globalThis === 'undefined' || !globalThis.crypto ||
+      typeof globalThis.crypto.getRandomValues !== 'function') {
+    throw new Error('Cryptographically secure randomness is unavailable; mesh pairing cannot be initialized safely.');
   }
-  const rand = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
-  return `hx-${rand}`;
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `hx-${hex.slice(0, 8)}-${hex.slice(8, 16)}-${hex.slice(16, 24)}-${hex.slice(24, 32)}`;
 }
 
 export function loadMeshPassphrase(): string {
