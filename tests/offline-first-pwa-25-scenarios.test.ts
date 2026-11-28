@@ -428,7 +428,7 @@ async function main() {
     assert.ok(backupFailure.error?.includes('پشتیبان ایمنی'));
 
     // 21. IndexedDB v6 operational schema includes all required stores non-destructively
-    assert.equal(OP_DB_VERSION, 6);
+    assert.equal(OP_DB_VERSION, 7);
     assert.ok(!OPERATIONAL_STORES.includes('restoreJournal' as never), 'Restore journal must stay outside entity stores');
     for (const requiredStore of [
       'accounts',
