@@ -76,15 +76,18 @@ async function run() {
       const first = await writeEncryptedOperationalMigrationBatchAtomically(
         db,
         workspaceId,
-        [{ store: 'accounts', records: [{ id: 'account-atomic-1', name: 'Encrypted account' }] }],
+        [{ store: 'accounts', records: [
+          { id: 'account-atomic-1', name: 'Encrypted account' },
+          { id: 'account-atomic-2', name: 'Encrypted account two' },
+        ] }],
         copying,
         binding,
         {
           state: 'copying',
-          cursor: 'account-atomic-1',
+          cursor: 'account-atomic-2',
           batchSequence: 1,
           sourceRecordCount: 2,
-          copiedRecordCount: 1,
+          copiedRecordCount: 2,
           sourceDigest,
           targetDigest: null,
           storeName: 'accounts',
@@ -108,7 +111,23 @@ async function run() {
         workspaceId,
         { migrationId: binding.migrationId, limit: 10, maxScan: 10 }
       );
-      assert.deepEqual(migrationRead.items, [{ id: 'account-atomic-1', name: 'Encrypted account' }]);
+      assert.deepEqual(migrationRead.items, [
+        { id: 'account-atomic-1', name: 'Encrypted account' },
+        { id: 'account-atomic-2', name: 'Encrypted account two' },
+      ]);
+      const firstPage = await (await import('../src/lib/encryptedOperationalIndexedDb')).queryEncryptedOperationalStore(
+        db, 'accounts', workspaceId,
+        { migrationId: binding.migrationId, limit: 1, maxScan: 10 }
+      );
+      assert.equal(firstPage.items.length, 1);
+      assert.equal(firstPage.nextCursor, 'account-atomic-1');
+      assert.equal(firstPage.hasMore, true);
+      const secondPage = await (await import('../src/lib/encryptedOperationalIndexedDb')).queryEncryptedOperationalStore(
+        db, 'accounts', workspaceId,
+        { migrationId: binding.migrationId, afterRecordId: firstPage.nextCursor, limit: 1, maxScan: 10 }
+      );
+      assert.deepEqual(secondPage.items, [{ id: 'account-atomic-2', name: 'Encrypted account two' }]);
+      assert.equal(secondPage.hasMore, false);
       const unrelatedMigrationRead = await (await import('../src/lib/encryptedOperationalIndexedDb')).queryEncryptedOperationalStore(
         db,
         'accounts',
