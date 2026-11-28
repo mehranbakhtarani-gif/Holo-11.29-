@@ -13,6 +13,8 @@ import {
   type OperationalMigrationBinding,
   type OperationalMigrationJournalRecord,
   type OperationalMigrationPhase,
+  advanceOperationalMigrationStoreCheckpoint,
+  type OperationalMigrationStoreCheckpoint,
 } from './operationalMigrationJournal';
 
 
@@ -157,6 +159,60 @@ export async function persistOperationalMigrationPhase(
       };
       tx.onerror = () => reject(tx.error ?? new Error('Operational migration phase update failed.'));
       tx.onabort = () => reject(tx.error ?? new Error('Operational migration phase update aborted.'));
+    });
+  } finally { db.close(); }
+}
+
+
+/**
+ * Persist verification/commit/rollback checkpoints. Copying checkpoints are
+ * intentionally excluded: during copying, the checkpoint must share the same
+ * transaction as its encrypted shadow-row writes.
+ */
+export async function persistOperationalMigrationStoreCheckpoint(
+  binding: OperationalMigrationBinding,
+  storeName: string,
+  patch: Omit<OperationalMigrationStoreCheckpoint, 'storeName'>
+): Promise<OperationalMigrationJournalRecord> {
+  const lease = captureBackupSessionLease();
+  assertBackupSessionLease(lease);
+  if (lease.generation !== binding.backupSessionGeneration) {
+    throw new Error('Operational migration checkpoint belongs to a stale backup session.');
+  }
+  const db = await openOperationalMigrationDbConnection();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(['operationalMigrationJournal'], 'readwrite');
+      const store = tx.objectStore('operationalMigrationJournal');
+      let updated: OperationalMigrationJournalRecord | null = null;
+      const request = store.get(binding.migrationId);
+      request.onsuccess = () => {
+        try {
+          assertBackupSessionLease(lease);
+          const current = assertValidJournal(request.result);
+          assertOperationalMigrationBinding(current, binding);
+          if (current.phase === 'copying') {
+            throw new Error('Copying checkpoints must be committed atomically with encrypted shadow rows.');
+          }
+          updated = advanceOperationalMigrationStoreCheckpoint(
+            current,
+            storeName,
+            { ...patch, storeName },
+            binding
+          );
+          store.put(updated);
+        } catch (error) {
+          try { tx.abort(); } catch { /* transaction may already be inactive */ }
+          reject(error);
+        }
+      };
+      request.onerror = () => reject(request.error ?? new Error('Operational migration checkpoint lookup failed.'));
+      tx.oncomplete = () => {
+        try { assertBackupSessionLease(lease); } catch (error) { reject(error); return; }
+        updated ? resolve(updated) : reject(new Error('Operational migration store checkpoint was not persisted.'));
+      };
+      tx.onerror = () => reject(tx.error ?? new Error('Operational migration store checkpoint update failed.'));
+      tx.onabort = () => reject(tx.error ?? new Error('Operational migration store checkpoint update aborted.'));
     });
   } finally { db.close(); }
 }
