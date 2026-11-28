@@ -91,11 +91,14 @@ function requireRandomBytes(length: number): Uint8Array {
 function isDescriptorIdentity(value: unknown): value is DescriptorIdentity {
   if (!value || typeof value !== 'object') return false;
   const row = value as Partial<DescriptorIdentity>;
+  let salt: Uint8Array | null = null;
   try {
     if (typeof row.saltB64 !== 'string') return false;
-    decodeSalt(row.saltB64);
+    salt = decodeSalt(row.saltB64);
   } catch {
     return false;
+  } finally {
+    salt?.fill(0);
   }
   return row.format === OPERATIONAL_KEY_DESCRIPTOR_FORMAT &&
     row.version === OPERATIONAL_KEY_DESCRIPTOR_VERSION &&
@@ -112,13 +115,18 @@ function isDescriptorIdentity(value: unknown): value is DescriptorIdentity {
 export function isOperationalKeyDescriptor(value: unknown): value is OperationalKeyDescriptor {
   if (!isDescriptorIdentity(value)) return false;
   const row = value as Partial<OperationalKeyDescriptor>;
+  let iv: Uint8Array | null = null;
+  let wrappedKey: Uint8Array | null = null;
   try {
     if (typeof row.wrapIvB64 !== 'string' || typeof row.wrappedKeyB64 !== 'string') return false;
-    decodeBase64(row.wrapIvB64, WRAP_IV_BYTES, 'wrapping IV');
-    decodeBase64(row.wrappedKeyB64, WRAPPED_KEY_BYTES, 'wrapped data key');
+    iv = decodeBase64(row.wrapIvB64, WRAP_IV_BYTES, 'wrapping IV');
+    wrappedKey = decodeBase64(row.wrappedKeyB64, WRAPPED_KEY_BYTES, 'wrapped data key');
     return true;
   } catch {
     return false;
+  } finally {
+    iv?.fill(0);
+    wrappedKey?.fill(0);
   }
 }
 
@@ -165,60 +173,86 @@ async function wrapRawDataKey(
   if (rawDataKey.byteLength !== DATA_KEY_BYTES) {
     throw new Error('Operational data key must be exactly 256 bits.');
   }
-  const kek = await deriveOperationalDataKey(
-    passphrase,
-    decodeSalt(identity.saltB64),
-    identity.iterations
-  );
+  const salt = decodeSalt(identity.saltB64);
+  let kek: CryptoKey;
+  try {
+    kek = await deriveOperationalDataKey(passphrase, salt, identity.iterations);
+  } finally {
+    salt.fill(0);
+  }
   const iv = requireRandomBytes(WRAP_IV_BYTES);
+  const aad = descriptorAad(identity);
+  const ivBuffer = toArrayBuffer(iv);
+  const aadBuffer = toArrayBuffer(aad);
   const rawBuffer = toArrayBuffer(rawDataKey);
-  let wrapped: ArrayBuffer;
+  let wrapped: ArrayBuffer | null = null;
   try {
     wrapped = await globalThis.crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(descriptorAad(identity)), tagLength: 128 },
+      { name: 'AES-GCM', iv: ivBuffer, additionalData: aadBuffer, tagLength: 128 },
       kek,
       rawBuffer
     );
+    const descriptor: OperationalKeyDescriptor = {
+      ...identity,
+      wrapIvB64: encodeBase64(iv),
+      wrappedKeyB64: encodeBase64(new Uint8Array(wrapped)),
+    };
+    if (!isOperationalKeyDescriptor(descriptor)) {
+      throw new Error('Operational key descriptor failed envelope validation.');
+    }
+    return descriptor;
   } finally {
-    // Clear the temporary copy as well as the caller-owned raw key buffer.
+    // Clear every caller-owned raw or derived byte buffer after Web Crypto returns.
+    iv.fill(0);
+    aad.fill(0);
+    new Uint8Array(ivBuffer).fill(0);
+    new Uint8Array(aadBuffer).fill(0);
     new Uint8Array(rawBuffer).fill(0);
+    if (wrapped) new Uint8Array(wrapped).fill(0);
   }
-  const descriptor: OperationalKeyDescriptor = {
-    ...identity,
-    wrapIvB64: encodeBase64(iv),
-    wrappedKeyB64: encodeBase64(new Uint8Array(wrapped)),
-  };
-  if (!isOperationalKeyDescriptor(descriptor)) {
-    throw new Error('Operational key descriptor failed envelope validation.');
-  }
-  return descriptor;
 }
 
 async function unwrapRawDataKey(
   passphrase: string,
   descriptor: OperationalKeyDescriptor
 ): Promise<Uint8Array> {
-  const kek = await deriveOperationalDataKey(
-    passphrase,
-    decodeSalt(descriptor.saltB64),
-    descriptor.iterations
-  );
-  const raw = await globalThis.crypto.subtle.decrypt(
-    {
-      name: 'AES-GCM',
-      iv: toArrayBuffer(decodeBase64(descriptor.wrapIvB64, WRAP_IV_BYTES, 'wrapping IV')),
-      additionalData: toArrayBuffer(descriptorAad(descriptor)),
-      tagLength: 128,
-    },
-    kek,
-    toArrayBuffer(decodeBase64(descriptor.wrappedKeyB64, WRAPPED_KEY_BYTES, 'wrapped data key'))
-  );
-  const bytes = new Uint8Array(raw);
-  if (bytes.byteLength !== DATA_KEY_BYTES) {
-    bytes.fill(0);
-    throw new Error('Unwrapped operational data key has an invalid length.');
+  const salt = decodeSalt(descriptor.saltB64);
+  let kek: CryptoKey;
+  try {
+    kek = await deriveOperationalDataKey(passphrase, salt, descriptor.iterations);
+  } finally {
+    salt.fill(0);
   }
-  return bytes;
+  const iv = decodeBase64(descriptor.wrapIvB64, WRAP_IV_BYTES, 'wrapping IV');
+  const wrappedKey = decodeBase64(descriptor.wrappedKeyB64, WRAPPED_KEY_BYTES, 'wrapped data key');
+  const aad = descriptorAad(descriptor);
+  const ivBuffer = toArrayBuffer(iv);
+  const wrappedKeyBuffer = toArrayBuffer(wrappedKey);
+  const aadBuffer = toArrayBuffer(aad);
+  let raw: ArrayBuffer | null = null;
+  try {
+    raw = await globalThis.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: ivBuffer, additionalData: aadBuffer, tagLength: 128 },
+      kek,
+      wrappedKeyBuffer
+    );
+    const bytes = new Uint8Array(raw);
+    if (bytes.byteLength !== DATA_KEY_BYTES) {
+      bytes.fill(0);
+      throw new Error('Unwrapped operational data key has an invalid length.');
+    }
+    // Ownership of this plaintext key buffer transfers to the caller, which must zero it.
+    raw = null;
+    return bytes;
+  } finally {
+    iv.fill(0);
+    wrappedKey.fill(0);
+    aad.fill(0);
+    new Uint8Array(ivBuffer).fill(0);
+    new Uint8Array(wrappedKeyBuffer).fill(0);
+    new Uint8Array(aadBuffer).fill(0);
+    if (raw) new Uint8Array(raw).fill(0);
+  }
 }
 
 /** Generate a random DEK and persist only its authenticated, passphrase-wrapped envelope. */
