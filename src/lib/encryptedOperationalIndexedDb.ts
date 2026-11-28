@@ -315,7 +315,7 @@ export async function queryEncryptedOperationalStore<T extends Record<string, un
     const keyRange = typeof window !== 'undefined' ? window.IDBKeyRange : globalThis.IDBKeyRange;
     if (!keyRange) { reject(new Error('IndexedDB key-range support is unavailable.')); return; }
     const lower = [workspaceId, migrationId, storeName, afterRecordId ?? ''];
-    const upper = [workspaceId, migrationId, storeName, '\\uffff'];
+    const upper = [workspaceId, migrationId, storeName, '\uffff'];
     const range = keyRange.bound(lower, upper, afterRecordId !== null, false);
     const request = target.openCursor(range);
     const result: EncryptedOperationalShadowRow[] = [];
