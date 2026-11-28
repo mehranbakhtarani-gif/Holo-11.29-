@@ -7,6 +7,10 @@ const values = new Map<string, string>([
     pettyCashCeilingIrr: 100, pettyCashItems: [], recurringTemplates: [],
     bankLoans: [], dyeLots: [], warehouseSlips: [], bomFormulas: [],
     installmentPlans: [], volumeDiscountRules: [], moadianLinks: {}, fiscalArchives: [],
+    warehouseTransfers: [{
+      id: 'tracked-1', productId: 'product-1', fromWarehouse: 'A',
+      toWarehouse: 'B', qty: 2, status: 'in_transit',
+    }],
   })],
   ['holoo_apex_voucher_templates_v1', JSON.stringify([{
     id: 'custom-1', name: 'Custom', lines: [{ accountCode: '101' }],
@@ -69,6 +73,21 @@ const malformed = {
 };
 assert.throws(() => validateBusinessLocalStateSnapshot(malformed));
 assert.deepEqual(values, before);
+
+// The tracked extension transfer collection is validated independently of the legacy transfer store.
+assert.throws(() => validateBusinessLocalStateSnapshot({
+  ...snapshot,
+  stores: {
+    ...snapshot.stores,
+    holoo_apex96_workspace_extensions_v2: JSON.stringify({
+      reservedInvoices: [], productMetaMap: {}, favoriteMenus: [],
+      warehouseTransfers: [{
+        id: 'bad-tracked-transfer', productId: 'p1', fromWarehouse: 'A',
+        toWarehouse: 'B', qty: -1, status: 'in_transit',
+      }],
+    }),
+  },
+}));
 
 // Numeric sync cursors must remain decimal integer strings; malformed metadata is rejected.
 assert.throws(() => validateBusinessLocalStateSnapshot({
