@@ -50,3 +50,15 @@ export function requireBackupSessionPassphrase(): string {
   }
   return activePassphrase;
 }
+
+/** Return the non-secret generation used to fence dependent in-memory sessions. */
+export function getBackupSessionGeneration(): number {
+  return sessionGeneration;
+}
+
+/** Reject dependent work after the backup vault is locked or replaced. */
+export function assertBackupSessionGeneration(expectedGeneration: number): void {
+  if (!activePassphrase || expectedGeneration !== sessionGeneration) {
+    throw new Error('Backup session lease expired; discard the pending operation.');
+  }
+}
