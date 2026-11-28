@@ -42,6 +42,11 @@ async function run() {
     assert.equal(session.isOperationalDataSessionUnlocked(), false);
     await session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01');
     assert.equal(session.isOperationalDataSessionUnlocked(), true);
+    const staleDerivation = session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01');
+    session.lockOperationalDataSession();
+    await assert.rejects(staleDerivation, /superseded by another session change/);
+    assert.equal(session.isOperationalDataSessionUnlocked(), false);
+    await session.unlockOperationalDataSessionFromDescriptor(descriptor, 'workspace-session-01');
     const lease = session.captureOperationalDataKeyLease();
     assert.equal(lease.key.extractable, false);
     session.assertOperationalDataKeyLease(lease);
@@ -72,7 +77,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 16 assertions passed');
+    console.log('Operational encryption session: 18 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
