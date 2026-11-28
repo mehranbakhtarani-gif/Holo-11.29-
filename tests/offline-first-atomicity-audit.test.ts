@@ -516,7 +516,7 @@ async function runTests() {
   assert.match(viteConfigSrc, /apex-local-assets-cache-v1/, 'Workbox local assets cache must be defined');
   assert.match(viteConfigSrc, /woff2/, 'Workbox precache must include local woff2 fonts');
 
-  // Verify all 3 local invoice lifecycle operations in AccountingContext.tsx use commitInvoiceOperationalTx
+  // Verify all 3 local invoice lifecycle operations in AccountingContext.tsx use the repository transaction port
   const createInvoiceIdx = accountingCtxSrc.indexOf('const createInvoice = useCallback');
   const cancelInvoiceIdx = accountingCtxSrc.indexOf('const cancelInvoice = useCallback');
   const convertProformaIdx = accountingCtxSrc.indexOf('const convertProformaToSale = useCallback');
