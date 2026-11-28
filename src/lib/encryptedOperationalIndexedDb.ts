@@ -20,6 +20,14 @@ import {
   captureOperationalDataKeyLease,
   type OperationalDataKeyLease,
 } from './operationalEncryptionSession';
+import {
+  advanceOperationalMigrationStoreCheckpoint,
+  isValidOperationalMigrationJournalRecord,
+  assertOperationalMigrationBinding,
+  type OperationalMigrationBinding,
+  type OperationalMigrationJournalRecord,
+  type OperationalMigrationStoreCheckpoint,
+} from './operationalMigrationJournal';
 
 export interface EncryptedOperationalWrite {
   store: OperationalEncryptedStore;
@@ -146,6 +154,158 @@ export async function writeEncryptedOperationalStoresAtomically(
         settled = true;
         reject(error instanceof Error ? error : new Error(String(error)));
       }
+    }
+  });
+}
+
+/**
+ * Atomically persist one encrypted migration batch and its durable checkpoint.
+ * All ciphertext and the next checkpoint are prepared before the IDB transaction.
+ * The current journal is compare-and-swapped inside that transaction; either all
+ * target rows and the checkpoint commit, or IndexedDB rolls the entire batch back.
+ */
+export async function writeEncryptedOperationalMigrationBatchAtomically(
+  db: IDBDatabase,
+  workspaceId: string,
+  writes: readonly EncryptedOperationalWrite[],
+  expectedJournal: OperationalMigrationJournalRecord,
+  binding: OperationalMigrationBinding,
+  checkpoint: Omit<OperationalMigrationStoreCheckpoint, 'storeName'> & { storeName: string }
+): Promise<{ written: number; journal: OperationalMigrationJournalRecord }> {
+  const journalStoreName = 'operationalMigrationJournal';
+  if (!db || !db.objectStoreNames || !Array.isArray(writes) || writes.length === 0 ||
+      !db.objectStoreNames.contains(journalStoreName)) {
+    throw new Error('Encrypted migration transaction input or journal store is invalid.');
+  }
+  if (!isValidOperationalMigrationJournalRecord(expectedJournal)) {
+    throw new Error('Expected operational migration journal is invalid.');
+  }
+  assertOperationalMigrationBinding(expectedJournal, binding);
+  if (expectedJournal.phase !== 'copying') {
+    throw new Error('Encrypted migration batches are permitted only during the copying phase.');
+  }
+  const total = writes.reduce((sum, write) => sum + write.records.length, 0);
+  if (total > MAX_BATCH_RECORDS) {
+    throw new Error('Encrypted migration batch exceeds the bounded record count.');
+  }
+  const storeNames = [...new Set(writes.map((write) => write.store))];
+  if (storeNames.length !== writes.length || storeNames.includes(journalStoreName as OperationalEncryptedStore)) {
+    throw new Error('Migration batch contains duplicate or reserved object stores.');
+  }
+  for (const storeName of storeNames) {
+    if (!db.objectStoreNames.contains(storeName)) {
+      throw new Error(`Operational object store ${storeName} does not exist.`);
+    }
+  }
+
+  const lease = captureOperationalDataKeyLease();
+  assertWorkspaceLease(lease, workspaceId);
+  if (lease.backupSessionGeneration !== binding.backupSessionGeneration ||
+      binding.workspaceId !== workspaceId) {
+    throw new Error('Migration batch is bound to another workspace or backup session.');
+  }
+  const prepared: Array<{ store: OperationalEncryptedStore; rows: EncryptedOperationalRow[] }> = [];
+  for (const write of writes) {
+    assertWorkspaceLease(lease, workspaceId);
+    prepared.push({
+      store: write.store,
+      rows: await prepareEncryptedOperationalRecordBatch(write.store, write.records, workspaceId),
+    });
+    assertWorkspaceLease(lease, workspaceId);
+  }
+  const nextJournal = advanceOperationalMigrationStoreCheckpoint(
+    expectedJournal,
+    checkpoint.storeName,
+    checkpoint,
+    binding
+  );
+  if (!isValidOperationalMigrationJournalRecord(nextJournal)) {
+    throw new Error('Prepared migration checkpoint failed validation.');
+  }
+
+  return new Promise((resolve, reject) => {
+    let tx: IDBTransaction | undefined;
+    let settled = false;
+    let written = 0;
+    const cleanup = () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      }
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { tx?.abort(); } catch { /* transaction may already be inactive */ }
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const abortOnSessionChange = () => {
+      try { assertWorkspaceLease(lease, workspaceId); }
+      catch (error) { fail(error); }
+    };
+    try {
+      assertWorkspaceLease(lease, workspaceId);
+      tx = db.transaction([...storeNames, journalStoreName], 'readwrite');
+      if (typeof window !== 'undefined') {
+        window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      }
+      const journalStore = tx.objectStore(journalStoreName);
+      const journalRequest = journalStore.get(binding.migrationId);
+      journalRequest.onsuccess = () => {
+        try {
+          assertWorkspaceLease(lease, workspaceId);
+          const current = journalRequest.result as unknown;
+          if (!isValidOperationalMigrationJournalRecord(current) ||
+              JSON.stringify(current) !== JSON.stringify(expectedJournal)) {
+            throw new Error('Operational migration journal changed; stale batch was rejected.');
+          }
+          assertOperationalMigrationBinding(current, binding);
+          for (const batch of prepared) {
+            const target = tx!.objectStore(batch.store);
+            for (const row of batch.rows) {
+              assertWorkspaceLease(lease, workspaceId);
+              const request = target.put(row);
+              request.onsuccess = () => {
+                try { assertWorkspaceLease(lease, workspaceId); written += 1; }
+                catch (error) { fail(error); }
+              };
+              request.onerror = () => fail(request.error ?? new Error('Encrypted migration row write failed.'));
+            }
+          }
+          assertWorkspaceLease(lease, workspaceId);
+          journalStore.put(nextJournal);
+        } catch (error) { fail(error); }
+      };
+      journalRequest.onerror = () => fail(journalRequest.error ?? new Error('Migration journal compare-and-swap read failed.'));
+      tx.oncomplete = () => {
+        if (settled) return;
+        try {
+          assertWorkspaceLease(lease, workspaceId);
+          settled = true;
+          cleanup();
+          resolve({ written, journal: nextJournal });
+        } catch (error) {
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      };
+      tx.onerror = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(tx?.error ?? new Error('Encrypted migration transaction failed.'));
+        }
+      };
+      tx.onabort = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(tx?.error ?? new Error('Encrypted migration transaction aborted.'));
+        }
+      };
+    } catch (error) {
+      fail(error);
     }
   });
 }
