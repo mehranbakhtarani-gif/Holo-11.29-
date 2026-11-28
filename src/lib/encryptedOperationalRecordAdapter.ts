@@ -43,9 +43,9 @@ const PRIMARY_KEY_FIELDS: Record<OperationalEncryptedStore, OperationalEncrypted
   localProfiles: 'workspaceId',
 };
 
-export type EncryptedOperationalRow<S extends OperationalEncryptedStore = OperationalEncryptedStore> =
+export type EncryptedOperationalRow =
   { encryptedRecord: OperationalRecordEnvelope } &
-  Record<OperationalEncryptedPrimaryKeyField, string>;
+  Partial<Record<OperationalEncryptedPrimaryKeyField, string>>;
 
 export function getOperationalRecordPrimaryKey(
   store: OperationalEncryptedStore,
@@ -142,7 +142,7 @@ export async function readEncryptedOperationalRecord<T extends Record<string, un
     throw new Error('Operational IndexedDB row is not a valid encrypted primary-store record.');
   }
   const keyField = PRIMARY_KEY_FIELDS[store];
-  const recordId = row[keyField];
+  const recordId = row[keyField] as string;
   const record = await decryptOperationalRecord<T>(row.encryptedRecord, {
     workspaceId,
     store,
