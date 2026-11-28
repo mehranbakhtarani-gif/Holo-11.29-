@@ -77,3 +77,42 @@ export async function computeOperationalMigrationDigest(
     bytes.fill(0);
   }
 }
+
+export interface OperationalMigrationDigestVerification {
+  storeName: OperationalEncryptedStore;
+  sourceRecordCount: number;
+  targetRecordCount: number;
+  sourceDigest: string;
+  targetDigest: string;
+  verified: true;
+}
+
+/**
+ * Verify an in-memory source snapshot against its decrypted shadow snapshot.
+ * This does not persist a checkpoint or authorize cutover; callers must first
+ * obtain both complete snapshots under the same source revision and key lease.
+ */
+export async function verifyOperationalMigrationStoreDigests(
+  storeName: OperationalEncryptedStore,
+  sourceRecords: readonly Record<string, unknown>[],
+  decryptedTargetRecords: readonly Record<string, unknown>[]
+): Promise<OperationalMigrationDigestVerification> {
+  if (sourceRecords.length !== decryptedTargetRecords.length) {
+    throw new Error('Operational migration verification failed: source and target record counts differ.');
+  }
+  const [sourceDigest, targetDigest] = await Promise.all([
+    computeOperationalMigrationDigest(storeName, sourceRecords),
+    computeOperationalMigrationDigest(storeName, decryptedTargetRecords),
+  ]);
+  if (sourceDigest !== targetDigest) {
+    throw new Error('Operational migration verification failed: source and target digests differ.');
+  }
+  return {
+    storeName,
+    sourceRecordCount: sourceRecords.length,
+    targetRecordCount: decryptedTargetRecords.length,
+    sourceDigest,
+    targetDigest,
+    verified: true,
+  };
+}
