@@ -66,8 +66,9 @@ async function run() {
     try {
       const plaintextSource = { id: 'account-atomic-1', name: 'Original source account' };
       await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(['accounts'], 'readwrite');
+        const tx = db.transaction(['accounts', 'meta'], 'readwrite');
         tx.objectStore('accounts').put(plaintextSource);
+        tx.objectStore('meta').put({ key: 'workspace_meta', localRevision: binding.sourceRevision });
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
         tx.onabort = () => reject(tx.error);
@@ -159,7 +160,90 @@ async function run() {
       assert.equal(await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-atomic-2']), undefined);
       const durable = await persistence.readOperationalMigrationJournal(binding.migrationId);
       assert.deepEqual(durable, first.journal, 'aborted target writes must not advance the durable checkpoint');
-      console.log('Encrypted migration batch: target ciphertext and checkpoint commit atomically; aborted transaction rolls back both');
+
+      // A restore barrier raised after the transaction opens must abort that transaction.
+      const barrierDb = new Proxy(db, {
+        get(target, property) {
+          if (property === 'transaction') {
+            return (...args: Parameters<IDBDatabase['transaction']>) => {
+              const tx = target.transaction(...args);
+              queueMicrotask(() => operationalDb.setOperationalRestoreBarrier(true));
+              return tx;
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      await assert.rejects(
+        () => writeEncryptedOperationalMigrationBatchAtomically(
+          barrierDb,
+          workspaceId,
+          [{ store: 'accounts', records: [{ id: 'account-restore-barrier', name: 'Must not commit' }] }],
+          first.journal,
+          binding,
+          {
+            state: 'copying',
+            cursor: 'account-restore-barrier',
+            batchSequence: 2,
+            sourceRecordCount: 2,
+            copiedRecordCount: 2,
+            sourceDigest,
+            targetDigest: null,
+            storeName: 'accounts',
+          }
+        ),
+        /restore|blocked|expired/i
+      );
+      operationalDb.setOperationalRestoreBarrier(false);
+      assert.equal(
+        await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-restore-barrier']),
+        undefined
+      );
+      assert.deepEqual(
+        await persistence.readOperationalMigrationJournal(binding.migrationId),
+        first.journal,
+        'restore barrier abort must roll back both shadow writes and journal checkpoint'
+      );
+
+      // A changed source revision fences subsequent batches before they can commit.
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(['meta'], 'readwrite');
+        tx.objectStore('meta').put({ key: 'workspace_meta', localRevision: binding.sourceRevision + 1 });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+      await assert.rejects(
+        () => writeEncryptedOperationalMigrationBatchAtomically(
+          db,
+          workspaceId,
+          [{ store: 'accounts', records: [{ id: 'account-stale-source', name: 'Must not commit' }] }],
+          first.journal,
+          binding,
+          {
+            state: 'copying',
+            cursor: 'account-stale-source',
+            batchSequence: 2,
+            sourceRecordCount: 2,
+            copiedRecordCount: 2,
+            sourceDigest,
+            targetDigest: null,
+            storeName: 'accounts',
+          }
+        ),
+        /source revision changed/i
+      );
+      assert.equal(
+        await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-stale-source']),
+        undefined
+      );
+      assert.deepEqual(
+        await persistence.readOperationalMigrationJournal(binding.migrationId),
+        first.journal,
+        'stale source revision must not advance the migration checkpoint'
+      );
+      console.log('Encrypted migration batch: atomic checkpoint, source revision fence, restore barrier abort and rollback passed');
     } finally {
       db.close();
       keySession.lockOperationalDataSession();
