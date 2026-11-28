@@ -8,11 +8,12 @@ import {
   commitSalesOrderDispatchOperationalTx,
   commitStockAdjustmentOperationalTx,
 } from '../src/lib/operationalDb';
-import { operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort } from '../src/lib/repositoryAbstraction';
+import { operationalBackupMaintenancePort, operationalRecoveryPort, operationalSyncPersistencePort, operationalTransactionPort } from '../src/lib/repositoryAbstraction';
 import {
   clearPendingSyncOutboxOperations, enqueueSyncOutboxOperation, getActiveOperationalRestoreJournal,
   isInboxOperationProcessed, isOperationalRestoreBarrierActive, listPendingSyncOutboxOperations,
   markSyncOutboxOperationStatus, recordInboxOperation, loadOperationalWorkspace,
+  OP_DB_VERSION, savePreUpdateSafetyBackup,
 } from '../src/lib/operationalDb';
 
 // The port must remain a transparent delegation layer. Replacing an implementation
@@ -35,10 +36,16 @@ assert.equal(operationalRecoveryPort.getActiveRestoreJournal, getActiveOperation
 assert.equal(operationalRecoveryPort.isRestoreBarrierActive, isOperationalRestoreBarrierActive);
 assert.equal(operationalRecoveryPort.loadWorkspace, loadOperationalWorkspace);
 assert.deepEqual(Object.keys(operationalRecoveryPort).sort(), ['getActiveRestoreJournal','isRestoreBarrierActive','loadWorkspace'].sort());
+assert.equal(operationalBackupMaintenancePort.databaseVersion, OP_DB_VERSION);
+assert.equal(operationalBackupMaintenancePort.savePreUpdateSafetyBackup, savePreUpdateSafetyBackup);
+assert.deepEqual(Object.keys(operationalBackupMaintenancePort).sort(), ['databaseVersion','savePreUpdateSafetyBackup'].sort());
 
 const settingsViewSource = fs.readFileSync(path.join(process.cwd(), 'src/components/SettingsView.tsx'), 'utf8');
 assert.match(settingsViewSource, /operationalRecoveryPort/);
 assert.doesNotMatch(settingsViewSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
+const offlinePanelSource = fs.readFileSync(path.join(process.cwd(), 'src/components/OfflineFirstControlPanel.tsx'), 'utf8');
+assert.match(offlinePanelSource, /operationalBackupMaintenancePort/);
+assert.doesNotMatch(offlinePanelSource, /from ['\"]\.\.\/lib\/operationalDb['\"]/);
 assert.deepEqual(Object.keys(operationalSyncPersistencePort).sort(), [
   'clearPendingOutbox','enqueueOutbox','getActiveRestoreJournal','hasProcessedInbox',
   'isRestoreBarrierActive','listPendingOutbox','markOutboxStatus','recordInbox',
