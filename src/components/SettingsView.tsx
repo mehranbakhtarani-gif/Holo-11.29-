@@ -104,6 +104,7 @@ export const SettingsView: React.FC<{
     encryptedOperationalWorkspaceMeta,
     prepareEncryptedOperationalWorkspaceMigration,
     unlockBackupSession,
+    rotateBackupSessionPassphrase,
     lockBackupSession,
     triggerLocalBackupNow,
     restoreFromLocalSnapshot,
@@ -227,6 +228,7 @@ export const SettingsView: React.FC<{
   const [currencyUnit, setCurrencyUnit] = useState(profile.currencyUnit);
   const [deviceNameInput, setDeviceNameInput] = useState(deviceLabel);
   const [backupPassphraseInput, setBackupPassphraseInput] = useState('');
+  const [newBackupPassphraseInput, setNewBackupPassphraseInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uiThemeRef = useRef<HTMLDivElement | null>(null);
   const offlineFirstRef = useRef<HTMLDivElement | null>(null);
@@ -1475,10 +1477,32 @@ export const SettingsView: React.FC<{
               </button>
             </form>
           ) : (
-            <button type="button" onClick={lockBackupSession}
-              className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200">
-              قفل‌کردن پشتیبان‌ها
-            </button>
+            <div className="space-y-2">
+              <form className="flex flex-col sm:flex-row gap-2" onSubmit={(e) => {
+                e.preventDefault();
+                void rotateBackupSessionPassphrase(newBackupPassphraseInput).then((ok) => {
+                  if (ok) setNewBackupPassphraseInput('');
+                });
+              }}>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={newBackupPassphraseInput}
+                  onChange={(e) => setNewBackupPassphraseInput(e.target.value)}
+                  minLength={10}
+                  placeholder="رمز جدید پشتیبان (حداقل ۱۰ کاراکتر)"
+                  className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                />
+                <button type="submit" disabled={newBackupPassphraseInput.trim().length < 10}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold">
+                  تغییر رمز و بازپیچی کلید
+                </button>
+              </form>
+              <button type="button" onClick={lockBackupSession}
+                className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200">
+                قفل‌کردن پشتیبان‌ها
+              </button>
+            </div>
           )}
         </div>
 
