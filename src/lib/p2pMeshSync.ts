@@ -367,7 +367,7 @@ export function loadMeshPassphrase(): string {
 export function saveMeshPassphrase(passphrase: string): void {
   try {
     const clean = passphrase.trim();
-    if (clean.length >= 4) {
+    if (clean.length >= 10 && clean !== LEGACY_INSECURE_MESH_PASSPHRASE) {
       localStorage.setItem(MESH_PASSPHRASE_KEY, clean);
     }
   } catch {
