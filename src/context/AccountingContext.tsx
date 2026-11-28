@@ -7155,7 +7155,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return false;
     }
     const workspaceId = String(profile.uid || DEMO_OWNER).trim();
-    let descriptor;
+    let descriptor: Awaited<ReturnType<typeof rewrapOperationalKeyDescriptorForWorkspace>>;
     try {
       descriptor = await rewrapOperationalKeyDescriptorForWorkspace(workspaceId, nextPassphrase);
     } catch (error) {
