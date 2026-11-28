@@ -32,12 +32,7 @@ import {
   OperationType,
 } from '../lib/firebase';
 import { useAccounting } from './AccountingContext';
-import {
-  enqueueSyncOutboxOperation,
-  isOperationalRestoreBarrierActive,
-  listPendingSyncOutboxOperations,
-  markSyncOutboxOperationStatus,
-} from '../lib/operationalDb';
+import { operationalSyncPersistencePort } from '../lib/repositoryAbstraction';
 import { isBackupSessionUnlocked, requireBackupSessionPassphrase } from '../lib/backupSession';
 import {
   createEncryptedWorkspaceExtensionOutboxOperation,
@@ -234,7 +229,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   // Seed default dye-lots once from existing products if user has none yet
   useEffect(() => {
-    if (isOperationalRestoreBarrierActive()) return;
+    if (operationalSyncPersistencePort.isRestoreBarrierActive()) return;
     if (stateRef.current.dyeLots.length === 0 && products.length > 0) {
       const seededLots: YarnDyeLot[] = products
         .filter((p) => p.lotNumber && p.stock > 0)
@@ -262,7 +257,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   // Persist local mirror whenever state changes
   const persistLocalMirror = useCallback((next: WorkspaceExtensionsState) => {
-    if (isOperationalRestoreBarrierActive()) return;
+    if (operationalSyncPersistencePort.isRestoreBarrierActive()) return;
     // Keep the four compatibility stores convergent if a quota/security error
     // interrupts the write sequence. localStorage has no multi-key transaction,
     // so capture previous values and roll back every key already written.
@@ -307,7 +302,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       previous: WorkspaceExtensionsState = next,
       outboxOperationId?: string
     ) => {
-      if (isOperationalRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
+      if (operationalSyncPersistencePort.isRestoreBarrierActive() || !isCloudMode || !user?.uid) return;
       const cloudUid = user.uid;
       if (activeCloudUidRef.current !== cloudUid) return;
 
@@ -332,7 +327,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
       });
 
       const write = async () => {
-        if (isOperationalRestoreBarrierActive() || activeCloudUidRef.current !== cloudUid) return;
+        if (operationalSyncPersistencePort.isRestoreBarrierActive() || activeCloudUidRef.current !== cloudUid) return;
         try {
           const committedVersion = await runTransaction(db, async (transaction) => {
             if (activeCloudUidRef.current !== cloudUid) throw new Error('Workspace account changed before cloud write');
@@ -403,7 +398,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
           versionRef.current = Math.max(versionRef.current, committedVersion);
           if (outboxOperationId) {
-            try { await markSyncOutboxOperationStatus(outboxOperationId, 'synced'); } catch {
+            try { await operationalSyncPersistencePort.markOutboxStatus(outboxOperationId, 'synced'); } catch {
               // The cloud commit is authoritative; a failed local acknowledgement is safely replayable by operation id.
             }
           }
@@ -426,7 +421,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
                 passphrase: requireBackupSessionPassphrase(),
                 createdAt: new Date(orderedTimestamp).toISOString(),
               });
-              await enqueueSyncOutboxOperation(operation);
+              await operationalSyncPersistencePort.enqueueOutbox(operation);
               showToast('اتصال ابری قطع است؛ تغییرات افزونه با رمزگذاری در صف پایدار ذخیره شد و پس از اتصال دوباره ارسال می‌شود.');
             } catch (queueError) {
               showToast(queueError instanceof Error
@@ -435,7 +430,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             }
           } else {
             if (outboxOperationId) {
-              try { await markSyncOutboxOperationStatus(outboxOperationId, 'conflict'); } catch { /* preserve the original cloud error */ }
+              try { await operationalSyncPersistencePort.markOutboxStatus(outboxOperationId, 'conflict'); } catch { /* preserve the original cloud error */ }
             }
             try {
               handleFirestoreError(err, OperationType.WRITE, `workspaceExtensions/${cloudUid}`);
@@ -466,15 +461,15 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         cancelled ||
         extensionOutboxReplayRef.current ||
         !isBackupSessionUnlocked() ||
-        isOperationalRestoreBarrierActive() ||
+        operationalSyncPersistencePort.isRestoreBarrierActive() ||
         (typeof navigator !== 'undefined' && !navigator.onLine)
       ) return;
 
       extensionOutboxReplayRef.current = true;
       try {
-        const pending = await listPendingSyncOutboxOperations();
+        const pending = await operationalSyncPersistencePort.listPendingOutbox();
         for (const operation of pending) {
-          if (cancelled || isOperationalRestoreBarrierActive()) break;
+          if (cancelled || operationalSyncPersistencePort.isRestoreBarrierActive()) break;
           if (
             operation.target !== 'firebase' ||
             operation.workspaceId !== user.uid ||
@@ -492,7 +487,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
             !isWorkspaceExtensionsStateSnapshot(payload.next) ||
             !isWorkspaceExtensionsStateSnapshot(payload.previous)
           ) {
-            await markSyncOutboxOperationStatus(operation.operationId, 'conflict');
+            await operationalSyncPersistencePort.markOutboxStatus(operation.operationId, 'conflict');
             showToast('ساختار تغییر آفلاین رمزگذاری‌شده معتبر نیست؛ برای جلوگیری از اعمال داده ناقص، در صف تعارض نگه داشته شد.');
             continue;
           }
@@ -525,7 +520,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     const unsub = onSnapshot(
       docRef,
       (snap) => {
-        if (isOperationalRestoreBarrierActive() || activeCloudUidRef.current !== user.uid) return;
+        if (operationalSyncPersistencePort.isRestoreBarrierActive() || activeCloudUidRef.current !== user.uid) return;
         if (pendingCloudMutationsRef.current > 0) return;
         if (!snap.exists()) {
           // Bootstrap cloud extensions from current local workspace
@@ -536,7 +531,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
         if (typeof data._version === 'number') {
           versionRef.current = Math.max(versionRef.current, data._version);
         }
-        if (isOperationalRestoreBarrierActive()) return;
+        if (operationalSyncPersistencePort.isRestoreBarrierActive()) return;
         const prev = stateRef.current;
           const merged: WorkspaceExtensionsState = {
             reservedInvoices: Array.isArray(data.reservedInvoices)
@@ -694,7 +689,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
 
   const updateExtensions = useCallback(
     (updater: (prev: WorkspaceExtensionsState) => WorkspaceExtensionsState) => {
-      if (isOperationalRestoreBarrierActive()) return;
+      if (operationalSyncPersistencePort.isRestoreBarrierActive()) return;
       // Avoid side effects inside a React state updater: React may replay updater
       // functions. Keep the ref in sync so rapid consecutive actions compose safely.
       const previous = stateRef.current;
@@ -783,7 +778,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
     productId: string; fromWarehouse: string; toWarehouse: string; qty: number;
     transferNumber: string; mode: 'immediate' | 'in_transit'; date: string;
   }): Promise<TrackedWarehouseTransfer> => {
-    if (isOperationalRestoreBarrierActive()) throw new Error('عملیات انتقال تا پایان بازیابی متوقف است.');
+    if (operationalSyncPersistencePort.isRestoreBarrierActive()) throw new Error('عملیات انتقال تا پایان بازیابی متوقف است.');
     if (!isPrivilegedOperator(activeOperator) && !activeOperator.permissions.canEditInventory) {
       throw new Error('مجوز ویرایش موجودی برای ثبت انتقال انبار کافی نیست.');
     }
@@ -860,7 +855,7 @@ export const WorkspaceExtensionsProvider: React.FC<{ children: React.ReactNode }
   const receiveTrackedWarehouseTransfer = useCallback(async (
     transferId: string, receivedDate: string
   ): Promise<TrackedWarehouseTransfer> => {
-    if (isOperationalRestoreBarrierActive()) throw new Error('عملیات دریافت تا پایان بازیابی متوقف است.');
+    if (operationalSyncPersistencePort.isRestoreBarrierActive()) throw new Error('عملیات دریافت تا پایان بازیابی متوقف است.');
     if (!isPrivilegedOperator(activeOperator) && !activeOperator.permissions.canEditInventory) {
       throw new Error('مجوز ویرایش موجودی برای دریافت انتقال انبار کافی نیست.');
     }
