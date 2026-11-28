@@ -204,7 +204,10 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
     let settled = false;
     let written = 0;
     const cleanup = () => {
-      if (typeof window !== 'undefined') window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('holoo:backup-session-changed', abortOnSessionChange);
+        window.removeEventListener('holoo:operational-restore-barrier-changed', abortOnSessionChange);
+      }
     };
     const fail = (error: unknown) => {
       if (settled) return;
@@ -219,7 +222,10 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
     try {
       assertWorkspaceLease(lease, workspaceId);
       tx = db.transaction([ENCRYPTED_SHADOW_STORE, journalStoreName], 'readwrite');
-      if (typeof window !== 'undefined') window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+      if (typeof window !== 'undefined') {
+        window.addEventListener('holoo:backup-session-changed', abortOnSessionChange);
+        window.addEventListener('holoo:operational-restore-barrier-changed', abortOnSessionChange);
+      }
       const shadowStore = tx.objectStore(ENCRYPTED_SHADOW_STORE);
       const journalStore = tx.objectStore(journalStoreName);
       const journalRequest = journalStore.get(binding.migrationId);
