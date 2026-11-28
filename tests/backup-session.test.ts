@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   isBackupSessionUnlocked,
   lockBackupSession,
@@ -49,7 +50,19 @@ async function run() {
     assert.equal(sessionChangeEvents, 4,
       'lock and unlock transitions must notify the UI');
 
-    console.log('Backup session lifecycle: 8 assertions passed');
+    const accountingContext = readFileSync(
+      new URL('../src/context/AccountingContext.tsx', import.meta.url),
+      'utf8'
+    );
+    const logoutBody = accountingContext.match(/const logout = useCallback\(async \(\) => \{([\s\S]*?)\n  \}, \[showToast\]\);/)?.[1];
+    assert.ok(logoutBody, 'account logout handler must remain discoverable');
+    assert.ok(
+      logoutBody.indexOf('lockBackupVault();') >= 0 &&
+      logoutBody.indexOf('lockBackupVault();') < logoutBody.indexOf('await signOutAccount();'),
+      'backup vault must lock before sign-out can fail'
+    );
+
+    console.log('Backup session lifecycle: 10 assertions passed');
   } finally {
     lockBackupSession();
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
