@@ -138,7 +138,7 @@ async function run() {
   // Exercise the actual OP_DB v5 secureWorkspace write/read path, not only envelope helpers.
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { indexedDB, localStorage: { getItem: () => null } },
+    value: { indexedDB, localStorage: { getItem: () => null }, dispatchEvent: () => true },
   });
   const operationalSeed = {
     ...workspace,
