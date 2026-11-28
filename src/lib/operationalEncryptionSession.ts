@@ -10,6 +10,10 @@ import {
   captureBackupSessionLease,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
+import {
+  deriveOperationalKeyFromDescriptor,
+  type OperationalKeyDescriptor,
+} from './operationalKeyDescriptor';
 
 let activeKey: CryptoKey | null = null;
 let generation = 0;
@@ -34,6 +38,29 @@ export async function unlockOperationalDataSession(salt: Uint8Array): Promise<vo
   const requestedGeneration = ++generation;
   activeKey = null;
   const key = await deriveOperationalDataKey(backupLease.passphrase, salt);
+  assertBackupSessionLease(backupLease);
+  if (requestedGeneration !== generation) {
+    throw new Error('Operational key derivation was superseded by another session change.');
+  }
+  activeKey = key;
+}
+
+/**
+ * Unlock using persisted, versioned workspace KDF metadata.
+ * Workspace identity is checked before deriving or exposing a session key.
+ */
+export async function unlockOperationalDataSessionFromDescriptor(
+  descriptor: OperationalKeyDescriptor,
+  expectedWorkspaceId: string
+): Promise<void> {
+  const backupLease = captureBackupSessionLease();
+  const requestedGeneration = ++generation;
+  activeKey = null;
+  const key = await deriveOperationalKeyFromDescriptor(
+    backupLease.passphrase,
+    descriptor,
+    expectedWorkspaceId
+  );
   assertBackupSessionLease(backupLease);
   if (requestedGeneration !== generation) {
     throw new Error('Operational key derivation was superseded by another session change.');
