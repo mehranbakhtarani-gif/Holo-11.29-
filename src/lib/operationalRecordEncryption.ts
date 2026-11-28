@@ -13,6 +13,7 @@ const SALT_BYTES = 16;
 const IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
 const MAX_ENVELOPE_BYTES = 32_000_000;
+const MAX_CIPHERTEXT_B64_CHARS = Math.ceil(MAX_ENVELOPE_BYTES / 3) * 4;
 const ENCRYPTED_STORES = new Set<OperationalEncryptedStore>([
   'accounts', 'parties', 'products', 'vouchers', 'invoices', 'cheques',
   'employees', 'assets', 'costCenters', 'currencies', 'exchangeRates',
@@ -208,7 +209,7 @@ export async function decryptOperationalRecord<T>(
     envelope.store !== expectedContext.store ||
     envelope.recordId !== expectedContext.recordId ||
     typeof envelope.ivB64 !== 'string' || envelope.ivB64.length !== 16 ||
-    typeof envelope.ciphertextB64 !== 'string' || envelope.ciphertextB64.length > MAX_ENVELOPE_BYTES
+    typeof envelope.ciphertextB64 !== 'string' || envelope.ciphertextB64.length > MAX_CIPHERTEXT_B64_CHARS
   ) throw new Error('Operational encrypted record metadata or identity is invalid.');
   if (!key || key.type !== 'secret' || !key.usages.includes('decrypt')) {
     throw new Error('A valid operational AES decryption key is required.');
