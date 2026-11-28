@@ -24,6 +24,14 @@ export interface WorkspaceExtensionIndexedDbOptions {
 export interface WorkspaceExtensionIndexedDbRepository<T> {
   read(workspaceId: string): Promise<WorkspaceExtensionRecord<T> | null>;
   readMigrationJournal(workspaceId: string, migrationId: string): Promise<WorkspaceExtensionMigrationJournal | null>;
+  advanceMigration(params: {
+    workspaceId: string;
+    migrationId: string;
+    sourceFingerprint: string;
+    targetGeneration: number;
+    nextState: WorkspaceExtensionMigrationState;
+    now: string;
+  }): Promise<WorkspaceExtensionMigrationJournal>;
   commit(params: {
     workspaceId: string;
     expectedGeneration: number;
@@ -71,25 +79,84 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
         if (!workspaceId.trim()) return rej(new Error('workspaceId is required.'));
         const tx = db.transaction(ROWS, 'readonly');
         const get = tx.objectStore(ROWS).get(workspaceId);
+        let value: WorkspaceExtensionRecord<T> | null = null;
+        let failure: Error | undefined;
         get.onsuccess = () => {
-          const value = get.result ?? null;
+          value = get.result ?? null;
           if (value !== null && !validateWorkspaceExtensionRecord<T>(value, workspaceId)) {
-            rej(new Error('Stored workspace extension record is invalid.'));
-            return;
+            failure = new Error('Stored workspace extension record is invalid.');
+            tx.abort();
           }
-          res(value);
         };
-        get.onerror = () => rej(get.error ?? new Error('Unable to read workspace extension record.'));
-        tx.onabort = () => rej(tx.error ?? new Error('Workspace extension read aborted.'));
+        get.onerror = () => { failure = get.error ?? new Error('Unable to read workspace extension record.'); tx.abort(); };
+        tx.oncomplete = () => failure ? rej(failure) : res(value);
+        tx.onabort = () => rej(failure ?? tx.error ?? new Error('Workspace extension read aborted.'));
       });
       const readMigrationJournal = (workspaceId: string, migrationId: string) =>
         new Promise<WorkspaceExtensionMigrationJournal | null>((res, rej) => {
           const tx = db.transaction(JOURNAL, 'readonly');
           const get = tx.objectStore(JOURNAL).get([workspaceId, migrationId]);
-          get.onsuccess = () => res((get.result as WorkspaceExtensionMigrationJournal | undefined) ?? null);
-          get.onerror = () => rej(get.error ?? new Error('Unable to read migration journal.'));
-          tx.onabort = () => rej(tx.error ?? new Error('Migration journal read aborted.'));
+          let value: WorkspaceExtensionMigrationJournal | null = null;
+          let failure: Error | undefined;
+          get.onsuccess = () => { value = (get.result as WorkspaceExtensionMigrationJournal | undefined) ?? null; };
+          get.onerror = () => { failure = get.error ?? new Error('Unable to read migration journal.'); tx.abort(); };
+          tx.oncomplete = () => failure ? rej(failure) : res(value);
+          tx.onabort = () => rej(failure ?? tx.error ?? new Error('Migration journal read aborted.'));
         });
+      const advanceMigration = (params: {
+        workspaceId: string;
+        migrationId: string;
+        sourceFingerprint: string;
+        targetGeneration: number;
+        nextState: WorkspaceExtensionMigrationState;
+        now: string;
+      }) => new Promise<WorkspaceExtensionMigrationJournal>((res, rej) => {
+        try {
+          ensureWritable();
+          const tx = db.transaction([ROWS, JOURNAL], 'readwrite');
+          const rows = tx.objectStore(ROWS);
+          const journals = tx.objectStore(JOURNAL);
+          let outcome: WorkspaceExtensionMigrationJournal | undefined;
+          let failure: Error | undefined;
+          const rowRequest = rows.get(params.workspaceId);
+          rowRequest.onerror = () => { failure = rowRequest.error ?? new Error('Unable to verify migration target row.'); tx.abort(); };
+          rowRequest.onsuccess = () => {
+            try {
+              ensureWritable();
+              const row = rowRequest.result as WorkspaceExtensionRecord<T> | undefined;
+              if (!row || !validateWorkspaceExtensionRecord<T>(row, params.workspaceId) ||
+                  row.generation !== params.targetGeneration) {
+                throw new Error('Migration target generation does not match the verified extension record.');
+              }
+              const journalRequest = journals.get([params.workspaceId, params.migrationId]);
+              journalRequest.onerror = () => { failure = journalRequest.error ?? new Error('Unable to read migration journal.'); tx.abort(); };
+              journalRequest.onsuccess = () => {
+                try {
+                  const current = journalRequest.result as WorkspaceExtensionMigrationJournal | undefined;
+                  if (!current) throw new Error('Migration journal does not exist.');
+                  if (current.sourceFingerprint !== params.sourceFingerprint ||
+                      current.targetGeneration !== params.targetGeneration) {
+                    throw new Error('Migration journal identity does not match the requested transition.');
+                  }
+                  const next = advanceWorkspaceExtensionMigration(current, params.nextState, params.now);
+                  journals.put(next);
+                  outcome = next;
+                } catch (error) {
+                  failure = error instanceof Error ? error : new Error(String(error));
+                  tx.abort();
+                }
+              };
+            } catch (error) {
+              failure = error instanceof Error ? error : new Error(String(error));
+              tx.abort();
+            }
+          };
+          tx.oncomplete = () => outcome ? res(outcome) : rej(failure ?? new Error('Migration transition completed without a result.'));
+          tx.onabort = () => rej(failure ?? tx.error ?? new Error('Migration transition aborted.'));
+        } catch (error) {
+          rej(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
       const commit = (params: {
         workspaceId: string;
         expectedGeneration: number;
@@ -133,6 +200,9 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
               }
               if (params.migration) {
                 const { journal, nextState } = params.migration;
+                if (nextState !== 'staging') {
+                  throw new Error('A migration journal must be created in staging; use advanceMigration for later states.');
+                }
                 if (journal.targetGeneration !== decision.record.generation) {
                   throw new Error('Migration target generation must equal the committed record generation.');
                 }
@@ -142,13 +212,8 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
                 journalRequest.onsuccess = () => {
                   try {
                     const existing = journalRequest.result as WorkspaceExtensionMigrationJournal | undefined;
-                    const next = existing
-                      ? advanceWorkspaceExtensionMigration(existing, nextState, params.now)
-                      : advanceWorkspaceExtensionMigration(journal, nextState, params.now);
-                    if (existing && (
-                      existing.sourceFingerprint !== journal.sourceFingerprint ||
-                      existing.targetGeneration !== journal.targetGeneration
-                    )) throw new Error('Migration journal identity cannot change during a transition.');
+                    if (existing) throw new Error('Migration journal already exists; use advanceMigration for later states.');
+                    const next = advanceWorkspaceExtensionMigration(journal, nextState, params.now);
                     journals.put(next);
                     rows.put(decision.record);
                     options.onWritesQueued?.(tx);
@@ -179,7 +244,7 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
           rej(error instanceof Error ? error : new Error(String(error)));
         }
       });
-      resolve({ read, readMigrationJournal, commit, close: () => db.close() });
+      resolve({ read, readMigrationJournal, advanceMigration, commit, close: () => db.close() });
     };
   });
 }
