@@ -47,7 +47,7 @@ async function run() {
       'ciphertext must not be moved between object stores'
     );
 
-    assert.rejects(
+    await assert.rejects(
       () => encryptOperationalRecord(record, { ...context, store: 'meta' as typeof context.store }, key),
       /context is invalid/,
       'runtime callers cannot encrypt into stores outside the approved encrypted-store allowlist'
