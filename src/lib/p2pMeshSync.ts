@@ -1460,6 +1460,11 @@ export class HolooPeerMeshManager {
       if (this.connections.get(remotePeerId) === conn) {
         this.clearPeerReconnectTimer(remotePeerId);
         this.connections.delete(remotePeerId);
+        try {
+          conn.close();
+        } catch {
+          // ignore failed connection cleanup; the peer-specific retry remains scheduled
+        }
         this.updatePeerState(remotePeerId, {
           status: 'offline',
           lastError: 'دستگاه همتا در دسترس نیست',
