@@ -76,6 +76,7 @@ assert.throws(() => advanceOperationalMigrationStoreCheckpoint(
     targetDigest: sourceDigest,
   }, binding, now
 ), /not allowed during phase copying/);
+assert.throws(() => transitionOperationalMigrationPhase(current, 'verifying', now), /finish copying/);
 current = advanceOperationalMigrationStoreCheckpoint(
   current, 'vouchers', {
     state: 'copying',
@@ -87,7 +88,6 @@ current = advanceOperationalMigrationStoreCheckpoint(
     targetDigest: null,
   }, binding, now
 );
-assert.throws(() => transitionOperationalMigrationPhase(current, 'verifying', now), /finish copying/);
 current = transitionOperationalMigrationPhase(current, 'verifying', now);
 assert.throws(() => advanceOperationalMigrationStoreCheckpoint(
   current, 'accounts', {
