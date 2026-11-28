@@ -13,6 +13,12 @@ const SALT_BYTES = 16;
 const IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
 const MAX_ENVELOPE_BYTES = 32_000_000;
+const ENCRYPTED_STORES = new Set<OperationalEncryptedStore>([
+  'accounts', 'parties', 'products', 'vouchers', 'invoices', 'cheques',
+  'employees', 'assets', 'costCenters', 'currencies', 'exchangeRates',
+  'importDossiers', 'salesOrders', 'subcontractJobs', 'rbacOperators',
+  'auditLogs', 'warehouses', 'taxReports', 'localProfiles',
+]);
 
 export type OperationalEncryptedStore =
   | 'accounts' | 'parties' | 'products' | 'vouchers' | 'invoices' | 'cheques'
@@ -51,7 +57,8 @@ function assertContext(context: OperationalRecordContext): void {
   if (
     !context || typeof context.workspaceId !== 'string' || !context.workspaceId.trim() ||
     typeof context.recordId !== 'string' || !context.recordId.trim() ||
-    typeof context.store !== 'string'
+    typeof context.store !== 'string' ||
+    !ENCRYPTED_STORES.has(context.store as OperationalEncryptedStore)
   ) throw new Error('Operational record encryption context is invalid.');
 }
 
@@ -66,7 +73,12 @@ function fromBase64(value: string): Uint8Array {
     throw new Error('Operational encrypted record has invalid base64 data.');
   }
   const binary = atob(value);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const decoded = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  if (toBase64(decoded) !== value) {
+    decoded.fill(0);
+    throw new Error('Operational encrypted record has non-canonical base64 data.');
+  }
+  return decoded;
 }
 
 function additionalData(context: OperationalRecordContext): Uint8Array {
