@@ -95,7 +95,7 @@ function collectTypeScriptFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) return collectTypeScriptFiles(entryPath);
-    return entry.isFile() && /\\.tsx?$/.test(entry.name) ? [entryPath] : [];
+    return entry.isFile() && /\.tsx?$/.test(entry.name) ? [entryPath] : [];
   });
 }
 const applicationLayerFiles = [
@@ -104,7 +104,7 @@ const applicationLayerFiles = [
     collectTypeScriptFiles(path.join(process.cwd(), directory))
   ),
 ];
-const operationalDbImportPattern = /(?:from\\s*|import\\s*\\()\\s*['"][^'"]*operationalDb(?:\\.[^'"]*)?['"]/;
+const operationalDbImportPattern = /(?:from\s*|import\s*\()\s*['"][^'"]*operationalDb(?:\.[^'"]*)?['"]/;
 for (const filePath of applicationLayerFiles) {
   const source = fs.readFileSync(filePath, 'utf8');
   assert.doesNotMatch(
