@@ -3,6 +3,7 @@ import { indexedDB } from 'fake-indexeddb';
 
 const DB_NAME = 'holoo_apex_operational_db_v1';
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+const previousBroadcastChannel = Object.getOwnPropertyDescriptor(globalThis, 'BroadcastChannel');
 
 async function openAtVersion(version: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -76,7 +77,7 @@ async function run() {
     const blockedUpgrade = await new Promise<{ blocked: boolean; completed: boolean }>((resolve, reject) => {
       let blocked = false;
       const request = indexedDB.open(DB_NAME, 6);
-      request.onblocked = () => { blocked = true; };
+      request.onblocked = () => { blocked = true; heldV5.close(); };
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const upgraded = request.result;
@@ -85,7 +86,6 @@ async function run() {
         upgraded.close();
         resolve({ blocked, completed });
       };
-      queueMicrotask(() => heldV5.close());
     });
     assert.deepEqual(blockedUpgrade, { blocked: true, completed: true },
       'a v5 connection must block the upgrade until it closes, then v6 must complete');
@@ -126,12 +126,15 @@ async function run() {
     // Exercise the production open path against the already-upgraded database.
     const fakeWindow = { indexedDB } as unknown as Window & { indexedDB: IDBFactory };
     Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
+    Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
     const operationalDb = await import('../src/lib/operationalDb');
     await operationalDb.loadOperationalKeyDescriptor('migration-schema-test-workspace');
     console.log('Operational IndexedDB v5→v6 upgrade: data, keyPaths, indexes, and blocked-tab behavior passed');
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
     else Reflect.deleteProperty(globalThis, 'window');
+    if (previousBroadcastChannel) Object.defineProperty(globalThis, 'BroadcastChannel', previousBroadcastChannel);
+    else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
   }
 }
 
