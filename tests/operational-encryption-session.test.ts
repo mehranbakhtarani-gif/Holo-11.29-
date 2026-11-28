@@ -53,6 +53,29 @@ async function run() {
     assert.equal(lease.key.extractable, false);
     session.assertOperationalDataKeyLease(lease);
 
+    const sessionCodec = await import('../src/lib/operationalRecordSessionCodec');
+    const recordContext = {
+      workspaceId: 'workspace-session-01',
+      store: 'vouchers' as const,
+      recordId: 'voucher-0001',
+    };
+    const recordValue = { number: 'V-1405-001', debit: 125000, credit: 125000 };
+    const encryptedRecord = await sessionCodec.encryptOperationalRecordForActiveSession(
+      recordValue,
+      recordContext
+    );
+    assert.deepEqual(
+      await sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, recordContext),
+      recordValue
+    );
+    await assert.rejects(
+      () => sessionCodec.decryptOperationalRecordForActiveSession(encryptedRecord, {
+        ...recordContext,
+        recordId: 'voucher-other',
+      }),
+      /metadata or identity is invalid/
+    );
+
     // Replacing the backup vault secret invalidates the old operational key too.
     unlockBackupSession('ReplacementSession#1405');
     assert.throws(() => session.assertOperationalDataKeyLease(lease), /expired/);
@@ -79,7 +102,7 @@ async function run() {
     lockBackupSession();
     assert.throws(() => session.assertOperationalDataKeyLease(thirdLease), /expired/);
 
-    console.log('Operational encryption session: 18 assertions passed');
+    console.log('Operational encryption session: 21 assertions passed');
   } finally {
     lockBackupSession();
     if (previous.crypto) Object.defineProperty(globalThis, 'crypto', previous.crypto);
