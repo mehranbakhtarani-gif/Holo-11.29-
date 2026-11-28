@@ -5687,6 +5687,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (user) {
         setDoc(doc(db, 'auditLogs', entry.id), {
           ownerId: entry.ownerId,
+          actorUid: user.uid,
           timestamp: entry.timestamp.slice(0, 40),
           operatorName: entry.operatorName.slice(0, 120),
           operatorRole: entry.operatorRole,
