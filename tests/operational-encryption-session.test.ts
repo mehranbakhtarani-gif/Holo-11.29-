@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { indexedDB } from 'fake-indexeddb';
 import { createOperationalDataSalt } from '../src/lib/operationalRecordEncryption';
-import { createOperationalKeyDescriptor } from '../src/lib/operationalKeyDescriptor';
 import { lockBackupSession, unlockBackupSession } from '../src/lib/backupSession';
 
 const previous = {
