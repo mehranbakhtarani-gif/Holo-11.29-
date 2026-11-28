@@ -133,6 +133,8 @@ async function run() {
       await decryptOperationalRecord(encrypted, context, key),
       { voucherNumber: 1, debit: 2500, credit: 2500 }
     );
+    // Exclude the record-encryption nonce from the later key-rewrap allocation assertion.
+    randomBuffers.length = 0;
 
     await assert.rejects(
       () => deriveOperationalKeyFromDescriptor(oldPassphrase, restored, 'workspace-other'),
