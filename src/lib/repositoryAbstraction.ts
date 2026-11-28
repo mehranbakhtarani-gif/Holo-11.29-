@@ -39,6 +39,7 @@ import {
   loadOperationalWorkspace,
   markSyncOutboxOperationStatus,
   recordInboxOperation,
+  type OperationalRestoreJournalRecord,
   saveOperationalWorkspaceTx,
   type OperationalWorkspaceData,
   type SyncInboxRecord,
@@ -93,6 +94,15 @@ export const operationalSyncPersistencePort = {
   isRestoreBarrierActive: isOperationalRestoreBarrierActive,
 };
 export type OperationalSyncPersistencePort = typeof operationalSyncPersistencePort;
+
+/** Recovery/read boundary for settings and restore orchestration. */
+export const operationalRecoveryPort = {
+  getActiveRestoreJournal: getActiveOperationalRestoreJournal,
+  isRestoreBarrierActive: isOperationalRestoreBarrierActive,
+  loadWorkspace: loadOperationalWorkspace,
+};
+export type OperationalRecoveryPort = typeof operationalRecoveryPort;
+export type { OperationalRestoreJournalRecord };
 
 export interface LocalRepositoryAdapter {
   readonly kind: 'indexeddb' | 'memory';
