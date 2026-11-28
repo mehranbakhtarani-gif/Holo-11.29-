@@ -10,7 +10,11 @@ import {
   captureBackupSessionLease,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
-import { initializeOperationalKeyDescriptor, loadOperationalKeyDescriptor } from './operationalDb';
+import {
+  initializeOperationalKeyDescriptor,
+  isOperationalRestoreBarrierActive,
+  loadOperationalKeyDescriptor,
+} from './operationalDb';
 import {
   deriveOperationalKeyFromDescriptor,
   type OperationalKeyDescriptor,
@@ -58,6 +62,9 @@ export async function unlockOperationalDataSessionFromDescriptor(
   descriptor: OperationalKeyDescriptor,
   expectedWorkspaceId: string
 ): Promise<void> {
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Operational key unlock is blocked while workspace restore is active.');
+  }
   const backupLease = captureBackupSessionLease();
   const requestedGeneration = ++generation;
   activeKey = null;
@@ -67,6 +74,9 @@ export async function unlockOperationalDataSessionFromDescriptor(
     expectedWorkspaceId
   );
   assertBackupSessionLease(backupLease);
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Workspace restore started while the operational key was being unlocked.');
+  }
   if (requestedGeneration !== generation) {
     throw new Error('Operational key derivation was superseded by another session change.');
   }
@@ -102,7 +112,13 @@ export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): v
  * the in-memory DEK under the currently active backup-session lease.
  */
 export async function unlockOperationalDataSessionForWorkspace(workspaceId: string): Promise<void> {
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Operational key unlock is blocked while workspace restore is active.');
+  }
   let descriptor = await loadOperationalKeyDescriptor(workspaceId);
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Workspace restore started while the operational key descriptor was loading.');
+  }
   if (!descriptor) {
     try {
       descriptor = await initializeOperationalKeyDescriptor(workspaceId);
@@ -112,6 +128,9 @@ export async function unlockOperationalDataSessionForWorkspace(workspaceId: stri
       if (!concurrentlyCreated) throw error;
       descriptor = concurrentlyCreated;
     }
+  }
+  if (isOperationalRestoreBarrierActive()) {
+    throw new Error('Operational key unlock is blocked while workspace restore is active.');
   }
   await unlockOperationalDataSessionFromDescriptor(descriptor, workspaceId);
 }
