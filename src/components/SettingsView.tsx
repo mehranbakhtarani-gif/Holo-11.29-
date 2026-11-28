@@ -55,7 +55,7 @@ import { exportEncryptedDocumentAttachmentBundle } from '../lib/documentVault';
 import { encryptBackupEnvelope } from '../lib/offlineFirstCore';
 import { assertBackupSessionLease, captureBackupSessionLease } from '../lib/backupSession';
 import { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } from '../lib/completeBackupRestore';
-import { getActiveOperationalRestoreJournal, isOperationalRestoreBarrierActive, loadOperationalWorkspace, type OperationalRestoreJournalRecord } from '../lib/operationalDb';
+import { operationalRecoveryPort, type OperationalRestoreJournalRecord } from '../lib/repositoryAbstraction';
 import { captureBusinessLocalStateSnapshot } from '../lib/businessLocalStateSnapshot';
 
 const PERMISSION_LABELS: { key: keyof RbacPermissions; label: string }[] = [
@@ -137,7 +137,7 @@ export const SettingsView: React.FC<{
 
   useEffect(() => {
     let active = true;
-    getActiveOperationalRestoreJournal()
+    operationalRecoveryPort.getActiveRestoreJournal()
       .then(async (journal) => {
         if (!active) return;
         setPendingRestoreJournal(journal);
@@ -161,7 +161,7 @@ export const SettingsView: React.FC<{
       window.location.reload();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'ادامه بازیابی ناموفق بود؛ داده‌ها قفل باقی می‌مانند.', 'error');
-      const journal = await getActiveOperationalRestoreJournal().catch(() => null);
+      const journal = await operationalRecoveryPort.getActiveRestoreJournal().catch(() => null);
       setPendingRestoreJournal(journal);
     } finally {
       setRestoreResumeBusy(false);
@@ -517,7 +517,7 @@ export const SettingsView: React.FC<{
       }
       const lease = captureBackupSessionLease();
       const baseWorkspace = JSON.parse(exportBackupJson()) as Record<string, unknown>;
-      const operationalWorkspace = await loadOperationalWorkspace();
+      const operationalWorkspace = await operationalRecoveryPort.loadWorkspace();
       const workspaceJson = JSON.stringify({
         ...baseWorkspace,
         warehouses: operationalWorkspace?.warehouses ?? [],
