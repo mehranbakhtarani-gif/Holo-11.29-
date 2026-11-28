@@ -745,6 +745,15 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
   });
 }
 
+/**
+ * Open the canonical operational database connection for migration-only APIs.
+ * Reuses the production schema upgrader, blocked-tab handling and restore barrier.
+ * Callers must close the returned connection.
+ */
+export async function openOperationalMigrationDbConnection(): Promise<IDBDatabase> {
+  return openOperationalDb();
+}
+
 function readAllFromStore<T>(tx: IDBTransaction, storeName: OperationalStoreName): Promise<T[]> {
   return new Promise((resolve, reject) => {
     const req = tx.objectStore(storeName).getAll();
