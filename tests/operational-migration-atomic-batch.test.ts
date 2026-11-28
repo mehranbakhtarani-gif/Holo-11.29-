@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { indexedDB } from 'fake-indexeddb';
+import { IDBKeyRange, indexedDB } from 'fake-indexeddb';
 import { lockBackupSession, unlockBackupSession, getBackupSessionGeneration } from '../src/lib/backupSession';
 import { createOperationalMigrationJournalRecord } from '../src/lib/operationalMigrationJournal';
 import { writeEncryptedOperationalMigrationBatchAtomically } from '../src/lib/encryptedOperationalIndexedDb';
@@ -13,13 +13,13 @@ const previous = {
 
 async function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('holoo_apex_operational_db_v1', 6);
+    const request = indexedDB.open('holoo_apex_operational_db_v1', 7);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function readRow(db: IDBDatabase, storeName: string, id: string): Promise<unknown> {
+async function readRow(db: IDBDatabase, storeName: string, id: IDBValidKey): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction([storeName], 'readonly');
     const request = tx.objectStore(storeName).get(id);
@@ -30,8 +30,9 @@ async function readRow(db: IDBDatabase, storeName: string, id: string): Promise<
 
 async function run() {
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
-  const fakeWindow = new EventTarget() as EventTarget & { indexedDB: IDBFactory };
+  const fakeWindow = new EventTarget() as EventTarget & { indexedDB: IDBFactory; IDBKeyRange: typeof IDBKeyRange };
   fakeWindow.indexedDB = indexedDB;
+  fakeWindow.IDBKeyRange = IDBKeyRange;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow });
   Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
   try {
@@ -63,6 +64,14 @@ async function run() {
     const sourceDigest = 'a'.repeat(64);
     const db = await openDb();
     try {
+      const plaintextSource = { id: 'account-atomic-1', name: 'Original source account' };
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(['accounts'], 'readwrite');
+        tx.objectStore('accounts').put(plaintextSource);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
       const first = await writeEncryptedOperationalMigrationBatchAtomically(
         db,
         workspaceId,
@@ -83,9 +92,20 @@ async function run() {
       assert.equal(first.written, 1);
       assert.equal(first.journal.stores[0].batchSequence, 1);
       assert.equal(first.journal.stores[0].copiedRecordCount, 1);
-      const storedFirst = await readRow(db, 'accounts', 'account-atomic-1') as Record<string, unknown>;
+      const storedFirst = await readRow(
+        db,
+        'encryptedOperationalRecords',
+        [workspaceId, 'accounts', 'account-atomic-1']
+      ) as Record<string, unknown>;
       assert.equal(typeof storedFirst.encryptedRecord, 'object');
-      assert.equal('name' in storedFirst, false, 'target store must not persist business fields in plaintext');
+      assert.equal(storedFirst.workspaceId, workspaceId);
+      assert.equal(storedFirst.storeName, 'accounts');
+      assert.equal(storedFirst.recordId, 'account-atomic-1');
+      assert.deepEqual(
+        await readRow(db, 'accounts', 'account-atomic-1'),
+        plaintextSource,
+        'encrypted migration must preserve the original plaintext source row until a separately approved cutover'
+      );
 
       // Abort the next readwrite transaction before its journal read can queue writes.
       const abortingDb = new Proxy(db, {
@@ -121,7 +141,7 @@ async function run() {
         ),
         /abort|Abort|transaction/i
       );
-      assert.equal(await readRow(db, 'accounts', 'account-atomic-2'), undefined);
+      assert.equal(await readRow(db, 'encryptedOperationalRecords', [workspaceId, 'accounts', 'account-atomic-2']), undefined);
       const durable = await persistence.readOperationalMigrationJournal(binding.migrationId);
       assert.deepEqual(durable, first.journal, 'aborted target writes must not advance the durable checkpoint');
       console.log('Encrypted migration batch: target ciphertext and checkpoint commit atomically; aborted transaction rolls back both');
