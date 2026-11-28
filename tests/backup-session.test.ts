@@ -63,7 +63,11 @@ async function run() {
       new URL('../src/lib/operationalDb.ts', import.meta.url),
       'utf8'
     );
-    const restoreApply = operationalDb.match(/export async function applyOperationalRestoreJournalWorkspace([\\s\\S]*?)\\n}\\n\\n\\/\\*\\* Remove only an uncommitted/)?.[1];
+    const restoreStart = operationalDb.indexOf('export async function applyOperationalRestoreJournalWorkspace(');
+    const restoreEnd = operationalDb.indexOf('/** Remove only an uncommitted', restoreStart);
+    const restoreApply = restoreStart >= 0 && restoreEnd > restoreStart
+      ? operationalDb.slice(restoreStart, restoreEnd)
+      : '';
     assert.ok(restoreApply, 'operational restore apply must remain discoverable');
     assert.ok(
       restoreApply.includes('captureBackupSessionLease()') &&
@@ -72,7 +76,11 @@ async function run() {
       restoreApply.includes('tx.abort()'),
       'restore writes must be bound to a live session lease and abort when the session changes'
     );
-    const safetyBackup = operationalDb.match(/export async function savePreUpdateSafetyBackup([\\s\\S]*?)\\n}\\n\\nexport async function listPreUpdateSafetyBackups/)?.[1];
+    const safetyStart = operationalDb.indexOf('export async function savePreUpdateSafetyBackup(');
+    const safetyEnd = operationalDb.indexOf('export async function listPreUpdateSafetyBackups', safetyStart);
+    const safetyBackup = safetyStart >= 0 && safetyEnd > safetyStart
+      ? operationalDb.slice(safetyStart, safetyEnd)
+      : '';
     assert.ok(safetyBackup, 'pre-update safety backup writer must remain discoverable');
     assert.ok(
       safetyBackup.includes('captureBackupSessionLease()') &&
