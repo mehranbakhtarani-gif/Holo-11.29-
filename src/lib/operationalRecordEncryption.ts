@@ -144,8 +144,16 @@ export async function encryptOperationalRecord<T>(
   if (!key || key.type !== 'secret' || !key.usages.includes('encrypt')) {
     throw new Error('A valid operational AES encryption key is required.');
   }
-  let serialized = JSON.stringify(value);
+  const json = JSON.stringify(value);
+  if (typeof json !== 'string') {
+    throw new Error('Operational records must serialize to a JSON value.');
+  }
+  let serialized = json;
   const plaintext = new TextEncoder().encode(serialized);
+  if (plaintext.byteLength + GCM_TAG_BYTES > MAX_ENVELOPE_BYTES) {
+    plaintext.fill(0);
+    throw new Error('Operational record exceeds the maximum encrypted record size.');
+  }
   const plaintextBuffer = toArrayBuffer(plaintext);
   const iv = requireWebCrypto().getRandomValues(new Uint8Array(IV_BYTES));
   try {
