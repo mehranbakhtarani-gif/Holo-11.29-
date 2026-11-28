@@ -56,7 +56,7 @@ async function run() {
     await assert.rejects(
       () => deriveOperationalKeyFromDescriptor(
         'OperationalEncryption#1405',
-        { ...restored, saltB64: 'AAAAAAAAAAAAAAAAAAAAAA==' },
+        { ...restored, saltB64: 'AAAAAAAAAAAAAAAAAAAAA===' },
         'workspace-finance-01'
       ),
       /invalid|salt/i
