@@ -66,7 +66,7 @@ async function run() {
     );
 
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('holoo_apex_operational_db_v1', 6);
+      const request = indexedDB.open('holoo_apex_operational_db_v1', 7);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
