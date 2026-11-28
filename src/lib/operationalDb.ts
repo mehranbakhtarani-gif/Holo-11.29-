@@ -64,7 +64,7 @@ if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
 }
 
 const OP_DB_NAME = 'holoo_apex_operational_db_v1';
-export const OP_DB_VERSION = 5;
+export const OP_DB_VERSION = 6;
 
 export const OPERATIONAL_STORES = [
   'meta',
@@ -227,6 +227,7 @@ export interface OperationalRestoreJournalRecord {
 }
 
 const RESTORE_JOURNAL_STORE = 'restoreJournal';
+const OPERATIONAL_MIGRATION_JOURNAL_STORE = 'operationalMigrationJournal';
 const RESTORE_JOURNAL_TERMINAL_STATES: RestoreJournalState[] = ['committed'];
 
 export function isValidOperationalRestoreJournalRecord(value: unknown): value is OperationalRestoreJournalRecord {
@@ -627,6 +628,9 @@ function openOperationalDb(allowRestoreRecovery = false): Promise<IDBDatabase> {
       const upgradeTx = req.transaction;
       if (!db.objectStoreNames.contains(RESTORE_JOURNAL_STORE)) {
         db.createObjectStore(RESTORE_JOURNAL_STORE, { keyPath: 'restoreId' });
+      }
+      if (!db.objectStoreNames.contains(OPERATIONAL_MIGRATION_JOURNAL_STORE)) {
+        db.createObjectStore(OPERATIONAL_MIGRATION_JOURNAL_STORE, { keyPath: 'migrationId' });
       }
       for (const storeName of OPERATIONAL_STORES) {
         let store: IDBObjectStore;
