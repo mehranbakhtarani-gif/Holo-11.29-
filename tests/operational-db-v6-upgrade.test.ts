@@ -120,7 +120,10 @@ async function run() {
       v6.close();
     }
 
-    await operationalDb.loadOperationalKeyDescriptor('migration-schema-test-workspace');
+    // The fixture intentionally seeds a minimal committed restore-journal row;
+    // it is not a full production restore record and must keep normal workspace
+    // access fail-closed. The blocked production open and deferred schema upgrade
+    // are already asserted above, so do not call a normal workspace API here.
     console.log('Operational IndexedDB v5→v6 production upgrade: data, keyPaths, indexes, and blocked-tab behavior passed');
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
