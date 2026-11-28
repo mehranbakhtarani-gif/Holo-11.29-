@@ -10,6 +10,7 @@ import {
   captureBackupSessionLease,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
+import { initializeOperationalKeyDescriptor, loadOperationalKeyDescriptor } from './operationalDb';
 import {
   deriveOperationalKeyFromDescriptor,
   type OperationalKeyDescriptor,
@@ -85,4 +86,24 @@ export function assertOperationalDataKeyLease(lease: OperationalDataKeyLease): v
   if (!activeKey || lease.generation !== generation || lease.key !== activeKey) {
     throw new Error('Operational data-key lease expired; discard the pending operation.');
   }
+}
+
+
+/**
+ * Load the persisted workspace envelope (or initialize it once), then unlock
+ * the in-memory DEK under the currently active backup-session lease.
+ */
+export async function unlockOperationalDataSessionForWorkspace(workspaceId: string): Promise<void> {
+  let descriptor = await loadOperationalKeyDescriptor(workspaceId);
+  if (!descriptor) {
+    try {
+      descriptor = await initializeOperationalKeyDescriptor(workspaceId);
+    } catch (error) {
+      // Another tab may have initialized the same workspace concurrently.
+      const concurrentlyCreated = await loadOperationalKeyDescriptor(workspaceId);
+      if (!concurrentlyCreated) throw error;
+      descriptor = concurrentlyCreated;
+    }
+  }
+  await unlockOperationalDataSessionFromDescriptor(descriptor, workspaceId);
 }
