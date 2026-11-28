@@ -105,7 +105,7 @@ export function captureOperationalDataKeyLease(): OperationalDataKeyLease {
   if (isOperationalRestoreBarrierActive()) {
     throw new Error('Operational data access is blocked while workspace restore is active.');
   }
-  if (!activeKey || activeBackupSessionGeneration === null) {
+  if (!isOperationalDataSessionUnlocked()) {
     throw new Error('Operational data key is locked.');
   }
   return {
