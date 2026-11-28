@@ -5,22 +5,33 @@ import {
   deriveOperationalKeyFromDescriptor,
   isOperationalKeyDescriptor,
   OPERATIONAL_KEY_DESCRIPTOR_VERSION,
+  rewrapOperationalKeyDescriptor,
 } from '../src/lib/operationalKeyDescriptor';
+import {
+  decryptOperationalRecord,
+  encryptOperationalRecord,
+} from '../src/lib/operationalRecordEncryption';
 
 async function run() {
   const previousCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
   try {
-    const descriptor = createOperationalKeyDescriptor(
+    const oldPassphrase = 'OperationalEncryption#1405';
+    const newPassphrase = 'OperationalEncryption#1406';
+    const descriptor = await createOperationalKeyDescriptor(
       'workspace-finance-01',
-      'operational-key-1405'
+      'operational-key-1405',
+      oldPassphrase
     );
     assert.equal(descriptor.version, OPERATIONAL_KEY_DESCRIPTOR_VERSION);
+    assert.equal(descriptor.version, 2);
     assert.equal(descriptor.workspaceId, 'workspace-finance-01');
     assert.equal(descriptor.cipher, 'AES-256-GCM');
     assert.equal(descriptor.kdf, 'PBKDF2-SHA-256');
     assert.equal(descriptor.iterations, 600_000);
     assert.equal(atob(descriptor.saltB64).length, 16);
+    assert.equal(atob(descriptor.wrapIvB64).length, 12);
+    assert.equal(atob(descriptor.wrappedKeyB64).length, 48);
     assert.equal(isOperationalKeyDescriptor(descriptor), true);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, version: 99 }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, iterations: 100_000 }), false);
@@ -28,13 +39,15 @@ async function run() {
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, keyId: 'bad' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, cipher: 'AES-CBC' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: 'not-base64' }), false);
-    assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: `${descriptor.saltB64.slice(0, -3)}B==` }), false);
+    assert.equal(isOperationalKeyDescriptor({ ...descriptor, saltB64: 'AAAAAAAAAAAAAAAAAAAAA===' }), false);
     assert.equal(isOperationalKeyDescriptor({ ...descriptor, createdAt: 'invalid' }), false);
+    assert.equal(isOperationalKeyDescriptor({ ...descriptor, wrapIvB64: 'AA==' }), false);
+    assert.equal(isOperationalKeyDescriptor({ ...descriptor, wrappedKeyB64: 'AA==' }), false);
 
     const restored = JSON.parse(JSON.stringify(descriptor));
     assert.equal(isOperationalKeyDescriptor(restored), true);
     const key = await deriveOperationalKeyFromDescriptor(
-      'OperationalEncryption#1405',
+      oldPassphrase,
       restored,
       'workspace-finance-01'
     );
@@ -42,12 +55,23 @@ async function run() {
     assert.equal(key.extractable, false);
     assert.deepEqual(key.usages, ['encrypt', 'decrypt']);
 
+    const context = {
+      workspaceId: 'workspace-finance-01',
+      store: 'vouchers' as const,
+      recordId: 'voucher-0001',
+    };
+    const encrypted = await encryptOperationalRecord(
+      { voucherNumber: 1, debit: 2500, credit: 2500 },
+      context,
+      key
+    );
+    assert.deepEqual(
+      await decryptOperationalRecord(encrypted, context, key),
+      { voucherNumber: 1, debit: 2500, credit: 2500 }
+    );
+
     await assert.rejects(
-      () => deriveOperationalKeyFromDescriptor(
-        'OperationalEncryption#1405',
-        restored,
-        'workspace-other'
-      ),
+      () => deriveOperationalKeyFromDescriptor(oldPassphrase, restored, 'workspace-other'),
       /invalid or belongs to another workspace/
     );
     await assert.rejects(
@@ -55,15 +79,45 @@ async function run() {
       /at least 10/
     );
     await assert.rejects(
-      () => deriveOperationalKeyFromDescriptor(
-        'OperationalEncryption#1405',
-        { ...restored, saltB64: 'AAAAAAAAAAAAAAAAAAAAA===' },
-        'workspace-finance-01'
-      ),
-      /invalid|salt/i
+      () => deriveOperationalKeyFromDescriptor(newPassphrase, restored, 'workspace-finance-01')
     );
 
-    console.log('Operational key descriptor: 22 assertions passed');
+    const rewrapped = await rewrapOperationalKeyDescriptor(
+      restored,
+      oldPassphrase,
+      newPassphrase
+    );
+    assert.equal(rewrapped.workspaceId, restored.workspaceId);
+    assert.equal(rewrapped.keyId, restored.keyId);
+    assert.notEqual(rewrapped.saltB64, restored.saltB64);
+    assert.notEqual(rewrapped.wrapIvB64, restored.wrapIvB64);
+    assert.notEqual(rewrapped.wrappedKeyB64, restored.wrappedKeyB64);
+    const newKey = await deriveOperationalKeyFromDescriptor(
+      newPassphrase,
+      rewrapped,
+      'workspace-finance-01'
+    );
+    assert.deepEqual(await decryptOperationalRecord(encrypted, context, newKey), {
+      voucherNumber: 1,
+      debit: 2500,
+      credit: 2500,
+    });
+    await assert.rejects(
+      () => deriveOperationalKeyFromDescriptor(oldPassphrase, rewrapped, 'workspace-finance-01')
+    );
+    await assert.rejects(
+      () => rewrapOperationalKeyDescriptor(restored, 'incorrect-passphrase-1405', newPassphrase)
+    );
+    await assert.rejects(
+      () => createOperationalKeyDescriptor(
+        'workspace-finance-01',
+        'operational-key-1406',
+        'short'
+      ),
+      /at least 10/
+    );
+
+    console.log('Operational key descriptor: 31 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
