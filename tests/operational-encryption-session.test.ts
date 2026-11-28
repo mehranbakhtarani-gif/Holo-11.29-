@@ -164,7 +164,7 @@ async function run() {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
-      assert.deepEqual(Object.keys(rawVoucher).sort(), ['encryptedRecord', 'recordId', 'storeName', 'workspaceId']);
+      assert.deepEqual(Object.keys(rawVoucher).sort(), ['encryptedRecord', 'migrationId', 'recordId', 'storeName', 'workspaceId']);
       assert.equal(rawVoucher.recordId, 'enc-voucher-1');
       assert.equal(rawVoucher.storeName, 'vouchers');
       assert.equal(rawVoucher.workspaceId, 'workspace-session-01');
