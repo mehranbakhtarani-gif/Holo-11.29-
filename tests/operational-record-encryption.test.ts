@@ -29,7 +29,28 @@ async function run() {
       /serialize to a JSON value/,
       'undefined root values must not produce undecryptable ciphertext envelopes'
     );
+    const subtle = webcrypto.subtle;
+    const originalEncrypt = subtle.encrypt.bind(subtle);
+    const encryptionBuffers: Uint8Array[] = [];
+    Object.defineProperty(subtle, 'encrypt', {
+      configurable: true,
+      value: (algorithm: AlgorithmIdentifier | RsaOaepParams | AesCtrParams | AesCbcParams | AesGcmParams, cryptoKey: CryptoKey, data: BufferSource) => {
+        if (typeof algorithm === 'object' && 'name' in algorithm && algorithm.name === 'AES-GCM') {
+          const params = algorithm as AesGcmParams;
+          if (params.iv instanceof ArrayBuffer) encryptionBuffers.push(new Uint8Array(params.iv));
+          if (params.additionalData instanceof ArrayBuffer) encryptionBuffers.push(new Uint8Array(params.additionalData));
+          if (data instanceof ArrayBuffer) encryptionBuffers.push(new Uint8Array(data));
+        }
+        return originalEncrypt(algorithm, cryptoKey, data);
+      },
+    });
     const envelope = await encryptOperationalRecord(record, context, key);
+    assert.ok(encryptionBuffers.length >= 3, 'record encryption must use owned Web Crypto buffers');
+    assert.ok(
+      encryptionBuffers.every((buffer) => buffer.every((byte) => byte === 0)),
+      'record plaintext, IV, AAD, and Web Crypto copies must be zeroed after encryption'
+    );
+    Object.defineProperty(subtle, 'encrypt', { configurable: true, value: originalEncrypt });
     assert.equal(envelope.workspaceId, context.workspaceId);
     assert.equal(envelope.store, context.store);
     assert.equal(envelope.recordId, context.recordId);
@@ -89,7 +110,7 @@ async function run() {
       /work factor/
     );
 
-    console.log('Operational record encryption codec: 20 assertions passed');
+    console.log('Operational record encryption codec: 22 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
