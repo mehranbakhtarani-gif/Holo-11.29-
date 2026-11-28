@@ -1040,6 +1040,7 @@ export class HolooPeerMeshManager {
   private selfError: string | null = null;
   private destroyed = false;
   private reconnectTimer: number | null = null;
+  private peerReconnectTimers = new Map<MeshDevicePeerId, number>();
 
   constructor(
     myPeerId: MeshDevicePeerId,
@@ -1146,6 +1147,7 @@ export class HolooPeerMeshManager {
           // Normal when one of the other 2 devices is currently asleep/offline
           const targetMatch = errMsg.match(/holoo-mesh-[a-z0-9-]+/i);
           const targetPeer = targetMatch ? targetMatch[0] : 'peer';
+          if (isValidMeshPeerId(targetPeer)) this.schedulePeerReconnect(targetPeer);
           this.emitSyncEvent({
             peerId: targetPeer,
             eventType: 'peer_error',
@@ -1188,6 +1190,35 @@ export class HolooPeerMeshManager {
       });
       this.emitStatus();
     }
+  }
+
+  private schedulePeerReconnect(remotePeerId: MeshDevicePeerId): void {
+    if (this.destroyed || this.peerReconnectTimers.has(remotePeerId)) return;
+    const timer = window.setTimeout(() => {
+      this.peerReconnectTimers.delete(remotePeerId);
+      if (this.destroyed) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        this.schedulePeerReconnect(remotePeerId);
+        return;
+      }
+      const existing = this.connections.get(remotePeerId);
+      if (existing?.open) return;
+      if (!this.peer || this.peer.destroyed || !this.selfOnline) {
+        this.schedulePeerReconnect(remotePeerId);
+        return;
+      }
+      try {
+        const connection = this.peer.connect(remotePeerId, {
+          reliable: true,
+          serialization: 'json',
+        });
+        this.attachConnection(remotePeerId, connection);
+      } catch {
+        this.updatePeerState(remotePeerId, { status: 'offline' });
+        this.schedulePeerReconnect(remotePeerId);
+      }
+    }, 8000);
+    this.peerReconnectTimers.set(remotePeerId, timer);
   }
 
   private scheduleReconnect(): void {
@@ -1334,6 +1365,11 @@ export class HolooPeerMeshManager {
 
     conn.on('open', () => {
       if (this.destroyed) return;
+      const reconnectTimer = this.peerReconnectTimers.get(remotePeerId);
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+        this.peerReconnectTimers.delete(remotePeerId);
+      }
       this.updatePeerState(remotePeerId, {
         status: 'connected',
         lastSeenAt: new Date().toISOString(),
@@ -1365,6 +1401,7 @@ export class HolooPeerMeshManager {
           direction: 'local',
           summary: `اتصال مستقیم P2P با «${resolvePeerShortLabel(remotePeerId)}» بسته شد.`,
         });
+        this.schedulePeerReconnect(remotePeerId);
       }
     });
 
@@ -1383,6 +1420,7 @@ export class HolooPeerMeshManager {
           summary: `خطا در کانال ارتباطی با «${resolvePeerShortLabel(remotePeerId)}».`,
           errorDetail: err instanceof Error ? err.message : 'DataConnection error',
         });
+        this.schedulePeerReconnect(remotePeerId);
       }
     });
   }
@@ -1736,6 +1774,8 @@ export class HolooPeerMeshManager {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    for (const timer of this.peerReconnectTimers.values()) window.clearTimeout(timer);
+    this.peerReconnectTimers.clear();
     for (const [, conn] of this.connections.entries()) {
       try {
         conn.close();
