@@ -136,7 +136,7 @@ async function run() {
     // Re-wrap the same DEK under a new passphrase using a durable compare-and-swap.
     const rotatedDescriptor = await operationalDb.rewrapOperationalKeyDescriptorForWorkspace(
       'workspace-session-01',
-      'ReplacementSession#1405'
+      ' ReplacementSession#1405 '
     );
     assert.equal(rotatedDescriptor.keyId, descriptor.keyId);
     assert.notEqual(rotatedDescriptor.saltB64, descriptor.saltB64);
