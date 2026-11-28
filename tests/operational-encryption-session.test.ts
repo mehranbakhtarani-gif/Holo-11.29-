@@ -113,7 +113,7 @@ async function run() {
     );
 
     await assert.rejects(
-      () => operationalDb.rewrapOperationalKeyDescriptorForWorkspace('workspace-session-01', 'short'),
+      () => session.rewrapOperationalWorkspaceKey('workspace-session-01', 'short'),
       /at least 10/,
       'weak replacement passphrases must not rotate the operational key'
     );
@@ -124,7 +124,7 @@ async function run() {
     );
     operationalDb.setOperationalRestoreBarrier(true);
     await assert.rejects(
-      () => operationalDb.rewrapOperationalKeyDescriptorForWorkspace(
+      () => session.rewrapOperationalWorkspaceKey(
         'workspace-session-01',
         'ReplacementSession#1405'
       ),
@@ -134,7 +134,7 @@ async function run() {
     operationalDb.setOperationalRestoreBarrier(false);
 
     // Re-wrap the same DEK under a new passphrase using a durable compare-and-swap.
-    const rotatedDescriptor = await operationalDb.rewrapOperationalKeyDescriptorForWorkspace(
+    const rotatedDescriptor = await session.rewrapOperationalWorkspaceKey(
       'workspace-session-01',
       ' ReplacementSession#1405 '
     );
