@@ -16,11 +16,14 @@ export interface WorkspaceExtensionIndexedDbOptions {
   databaseName?: string;
   /** Test seam for deterministic transaction-abort coverage. */
   onTransactionCreated?: (transaction: IDBTransaction) => void;
+  /** Test seam invoked after row and journal writes are queued but before commit. */
+  onWritesQueued?: (transaction: IDBTransaction) => void;
   isRestoreBarrierActive?: () => boolean;
 }
 
 export interface WorkspaceExtensionIndexedDbRepository<T> {
   read(workspaceId: string): Promise<WorkspaceExtensionRecord<T> | null>;
+  readMigrationJournal(workspaceId: string, migrationId: string): Promise<WorkspaceExtensionMigrationJournal | null>;
   commit(params: {
     workspaceId: string;
     expectedGeneration: number;
@@ -45,6 +48,7 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
   const databaseName = options.databaseName ?? 'holoo_workspace_extensions_adapter_test_v1';
   return new Promise((resolve, reject) => {
     const request = options.factory.open(databaseName, 1);
+    let blocked = false;
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(ROWS)) db.createObjectStore(ROWS, { keyPath: 'workspaceId' });
@@ -52,10 +56,11 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
         db.createObjectStore(JOURNAL, { keyPath: ['workspaceId', 'migrationId'] });
       }
     };
-    request.onerror = () => reject(request.error ?? new Error('Unable to open extension adapter database.'));
-    request.onblocked = () => reject(new Error('Extension adapter database upgrade is blocked.'));
+    request.onerror = () => { if (!blocked) reject(request.error ?? new Error('Unable to open extension adapter database.')); };
+    request.onblocked = () => { blocked = true; reject(new Error('Extension adapter database upgrade is blocked.')); };
     request.onsuccess = () => {
       const db = request.result;
+      if (blocked) { db.close(); return; }
       db.onversionchange = () => db.close();
       const ensureWritable = () => {
         if (options.isRestoreBarrierActive?.()) {
@@ -77,6 +82,14 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
         get.onerror = () => rej(get.error ?? new Error('Unable to read workspace extension record.'));
         tx.onabort = () => rej(tx.error ?? new Error('Workspace extension read aborted.'));
       });
+      const readMigrationJournal = (workspaceId: string, migrationId: string) =>
+        new Promise<WorkspaceExtensionMigrationJournal | null>((res, rej) => {
+          const tx = db.transaction(JOURNAL, 'readonly');
+          const get = tx.objectStore(JOURNAL).get([workspaceId, migrationId]);
+          get.onsuccess = () => res((get.result as WorkspaceExtensionMigrationJournal | undefined) ?? null);
+          get.onerror = () => rej(get.error ?? new Error('Unable to read migration journal.'));
+          tx.onabort = () => rej(tx.error ?? new Error('Migration journal read aborted.'));
+        });
       const commit = (params: {
         workspaceId: string;
         expectedGeneration: number;
@@ -138,6 +151,7 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
                     )) throw new Error('Migration journal identity cannot change during a transition.');
                     journals.put(next);
                     rows.put(decision.record);
+                    options.onWritesQueued?.(tx);
                     outcome = decision;
                   } catch (error) {
                     failure = error instanceof Error ? error : new Error(String(error));
@@ -146,6 +160,7 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
                 };
               } else {
                 rows.put(decision.record);
+                options.onWritesQueued?.(tx);
                 outcome = decision;
               }
             } catch (error) {
@@ -164,7 +179,7 @@ export function createWorkspaceExtensionIndexedDbRepository<T = unknown>(
           rej(error instanceof Error ? error : new Error(String(error)));
         }
       });
-      resolve({ read, commit, close: () => db.close() });
+      resolve({ read, readMigrationJournal, commit, close: () => db.close() });
     };
   });
 }
