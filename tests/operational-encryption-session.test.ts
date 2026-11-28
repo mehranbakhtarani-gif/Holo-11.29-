@@ -114,7 +114,7 @@ async function run() {
 
     await assert.rejects(
       () => session.rewrapOperationalWorkspaceKey('workspace-session-01', 'short'),
-      /at least 10/,
+      /حداقل ۱۰ کاراکتر/,
       'weak replacement passphrases must not rotate the operational key'
     );
     assert.deepEqual(
