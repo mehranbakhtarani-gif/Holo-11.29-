@@ -15,7 +15,7 @@ import {
 import { db, handleFirestoreError, isFirestoreOfflineError, OperationType } from './firebase';
 import { getTodayShamsi } from './format';
 import { encryptBackupEnvelope, decryptAndVerifyBackupEnvelope } from './offlineFirstCore';
-import { requireBackupSessionPassphrase } from './backupSession';
+import { assertBackupSessionLease, captureBackupSessionLease } from './backupSession';
 
 export const MAX_CLOUD_BACKUPS = 3;
 
@@ -158,14 +158,16 @@ export async function saveAndPruneFirebaseBackup(params: {
     const maxRev = existing.backups.reduce((m, b) => Math.max(m, b.revision), 0);
     const nextRevision = maxRev + 1;
 
-    const passphrase = requireBackupSessionPassphrase();
-    const envelope = await encryptBackupEnvelope(params.snapshotJson, passphrase);
+    const lease = captureBackupSessionLease();
+    const envelope = await encryptBackupEnvelope(params.snapshotJson, lease.passphrase);
+    assertBackupSessionLease(lease);
     const encryptedEnvelopeJson = JSON.stringify(envelope);
     const sizeKb = Math.max(1, Math.round(new Blob([encryptedEnvelopeJson]).size / 1024));
     if (sizeKb > 900) {
       throw new Error('حجم پشتیبان رمزگذاری‌شده از سقف امن یک سند Firestore بیشتر است؛ برای این نسخه باید از ذخیره‌سازی قطعه‌ای استفاده شود.');
     }
     const backupId = `fbbak_${params.ownerId.slice(0, 12)}_${nowMs}_${nextRevision}`;
+    assertBackupSessionLease(lease);
 
     await setDoc(doc(db, 'cloudBackups', backupId), {
       ownerId: params.ownerId,
@@ -264,10 +266,12 @@ export async function pullFirebaseBackupSnapshot(
     }
     let snapshotJson: string | undefined;
     if (typeof data.snapshotEnvelope === 'string') {
+      const lease = captureBackupSessionLease();
       const decrypted = await decryptAndVerifyBackupEnvelope(
         data.snapshotEnvelope,
-        requireBackupSessionPassphrase()
+        lease.passphrase
       );
+      assertBackupSessionLease(lease);
       if (!decrypted.ok || !decrypted.snapshotJson) {
         return { ok: false, error: decrypted.error || 'رمزگشایی پشتیبان ابری ناموفق بود.' };
       }
