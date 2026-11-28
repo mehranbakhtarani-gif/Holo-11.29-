@@ -35,7 +35,7 @@ async function run() {
     syncOutbox: [{ operationId: 'op-1', target: 'firebase' as const, workspaceId: 'workspace-1', deviceId: 'dev-1', clientRevision: 7, payloadHash: 'abc', createdAt: '2026-11-27T00:00:00.000Z', retryCount: 0, status: 'pending' as const }],
     syncInbox: [{ operationId: 'in-1', sourceDeviceId: 'dev-2', payloadHash: 'def', receivedAt: '2026-11-27T00:00:00.000Z' }],
     businessLocalState: {
-      schemaVersion: 1,
+      schemaVersion: 1 as const,
       capturedAt: '2026-11-27T00:00:00.000Z',
       stores: { holoo_apex96_workspace_extensions_v2: JSON.stringify({
       warehouseTransfers: [{ id: 'trf-1', transferNumber: 'TRF-1', productId: 'p-1', fromWarehouse: 'Main', toWarehouse: 'Branch', qty: 2, status: 'in_transit' }],
