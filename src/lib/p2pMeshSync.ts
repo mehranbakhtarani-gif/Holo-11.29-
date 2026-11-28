@@ -1149,6 +1149,7 @@ export class HolooPeerMeshManager {
           const targetPeer = targetMatch ? targetMatch[0] : 'peer';
           if (isValidMeshPeerId(targetPeer)) {
             // PeerJS reports expired/unavailable offers on the Peer, not necessarily on DataConnection.
+            this.clearPeerReconnectTimer(targetPeer);
             // Remove the stale, not-yet-open attempt so retries do not accumulate orphaned connections.
             const pendingConnection = this.connections.get(targetPeer);
             if (pendingConnection && !pendingConnection.open) {
@@ -1235,6 +1236,36 @@ export class HolooPeerMeshManager {
         this.schedulePeerReconnect(remotePeerId);
       }
     }, 8000);
+    this.peerReconnectTimers.set(remotePeerId, timer);
+  }
+
+  private clearPeerReconnectTimer(remotePeerId: MeshDevicePeerId): void {
+    const timer = this.peerReconnectTimers.get(remotePeerId);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    this.peerReconnectTimers.delete(remotePeerId);
+  }
+
+  private watchPeerConnection(remotePeerId: MeshDevicePeerId, conn: DataConnection): void {
+    this.clearPeerReconnectTimer(remotePeerId);
+    if (conn.open) return;
+    const timer = window.setTimeout(() => {
+      if (this.peerReconnectTimers.get(remotePeerId) !== timer) return;
+      this.peerReconnectTimers.delete(remotePeerId);
+      if (this.destroyed || this.connections.get(remotePeerId) !== conn || conn.open) return;
+      // Some PeerJS failures do not emit open, error, or close; bound the attempt lifetime.
+      this.connections.delete(remotePeerId);
+      try {
+        conn.close();
+      } catch {
+        // ignore cleanup failures; the retry is still required
+      }
+      this.updatePeerState(remotePeerId, {
+        status: 'offline',
+        lastError: 'مهلت برقراری اتصال همتا پایان یافت',
+      });
+      this.schedulePeerReconnect(remotePeerId);
+    }, 20_000);
     this.peerReconnectTimers.set(remotePeerId, timer);
   }
 
@@ -1382,11 +1413,7 @@ export class HolooPeerMeshManager {
 
     conn.on('open', () => {
       if (this.destroyed) return;
-      const reconnectTimer = this.peerReconnectTimers.get(remotePeerId);
-      if (reconnectTimer !== undefined) {
-        window.clearTimeout(reconnectTimer);
-        this.peerReconnectTimers.delete(remotePeerId);
-      }
+      this.clearPeerReconnectTimer(remotePeerId);
       this.updatePeerState(remotePeerId, {
         status: 'connected',
         lastSeenAt: new Date().toISOString(),
@@ -1408,6 +1435,7 @@ export class HolooPeerMeshManager {
     });
 
     conn.on('close', () => {
+      this.clearPeerReconnectTimer(remotePeerId);
       if (this.connections.get(remotePeerId) === conn) {
         this.connections.delete(remotePeerId);
         this.updatePeerState(remotePeerId, { status: 'offline' });
@@ -1423,6 +1451,7 @@ export class HolooPeerMeshManager {
     });
 
     conn.on('error', (err) => {
+      this.clearPeerReconnectTimer(remotePeerId);
       if (this.connections.get(remotePeerId) === conn) {
         this.connections.delete(remotePeerId);
         this.updatePeerState(remotePeerId, {
@@ -1440,6 +1469,7 @@ export class HolooPeerMeshManager {
         this.schedulePeerReconnect(remotePeerId);
       }
     });
+    this.watchPeerConnection(remotePeerId, conn);
   }
 
   private async sendHello(
