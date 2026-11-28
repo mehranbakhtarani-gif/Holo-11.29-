@@ -29,6 +29,13 @@ async function run() {
     assert.equal(lease.key.extractable, false);
     session.assertOperationalDataKeyLease(lease);
 
+    // Replacing the backup vault secret invalidates the old operational key too.
+    unlockBackupSession('ReplacementSession#1405');
+    assert.throws(() => session.assertOperationalDataKeyLease(lease), /expired/);
+    await session.unlockOperationalDataSession(createOperationalDataSalt());
+    const replacementLease = session.captureOperationalDataKeyLease();
+    session.assertOperationalDataKeyLease(replacementLease);
+
     // Locking the existing backup vault synchronously invalidates the operational key.
     lockBackupSession();
     assert.equal(session.isOperationalDataSessionUnlocked(), false);
