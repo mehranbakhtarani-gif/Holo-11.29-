@@ -128,7 +128,75 @@ async function run() {
       /work factor/
     );
 
-    console.log('Operational record encryption codec: 24 assertions passed');
+    // A random-source failure occurs after plaintext encoding. The failure path
+    // must still clear the serialized record bytes and the owned ArrayBuffer copy.
+    const encoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'TextEncoder');
+    const randomDescriptor = Object.getOwnPropertyDescriptor(webcrypto, 'getRandomValues');
+    const originalEncoder = globalThis.TextEncoder;
+    const observedPlaintextBuffers: Uint8Array[] = [];
+    class TrackingTextEncoder extends originalEncoder {
+      encode(input?: string): Uint8Array {
+        const bytes = super.encode(input);
+        observedPlaintextBuffers.push(bytes);
+        return bytes;
+      }
+    }
+    try {
+      Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, value: TrackingTextEncoder });
+      Object.defineProperty(webcrypto, 'getRandomValues', {
+        configurable: true,
+        value: () => { throw new Error('simulated random source failure'); },
+      });
+      await assert.rejects(
+        () => encryptOperationalRecord(record, context, key),
+        /simulated random source failure/
+      );
+      assert.equal(observedPlaintextBuffers.length, 1);
+      assert.ok(
+        observedPlaintextBuffers[0].every((byte) => byte === 0),
+        'plaintext bytes must be cleared when random IV generation fails before encryption'
+      );
+    } finally {
+      if (encoderDescriptor) Object.defineProperty(globalThis, 'TextEncoder', encoderDescriptor);
+      else Reflect.deleteProperty(globalThis, 'TextEncoder');
+      if (randomDescriptor) Object.defineProperty(webcrypto, 'getRandomValues', randomDescriptor);
+      else Reflect.deleteProperty(webcrypto, 'getRandomValues');
+    }
+
+    // A failed Web Crypto key import must also clear the encoded passphrase bytes.
+    const importDescriptor = Object.getOwnPropertyDescriptor(webcrypto.subtle, 'importKey');
+    const kdfEncoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'TextEncoder');
+    const kdfObservedBuffers: Uint8Array[] = [];
+    class KdfTrackingTextEncoder extends originalEncoder {
+      encode(input?: string): Uint8Array {
+        const bytes = super.encode(input);
+        kdfObservedBuffers.push(bytes);
+        return bytes;
+      }
+    }
+    try {
+      Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, value: KdfTrackingTextEncoder });
+      Object.defineProperty(webcrypto.subtle, 'importKey', {
+        configurable: true,
+        value: () => { throw new Error('simulated key import failure'); },
+      });
+      await assert.rejects(
+        () => deriveOperationalDataKey('OperationalEncryption#1405', salt),
+        /simulated key import failure/
+      );
+      assert.equal(kdfObservedBuffers.length, 1);
+      assert.ok(
+        kdfObservedBuffers[0].every((byte) => byte === 0),
+        'passphrase bytes must be cleared when Web Crypto key import fails'
+      );
+    } finally {
+      if (kdfEncoderDescriptor) Object.defineProperty(globalThis, 'TextEncoder', kdfEncoderDescriptor);
+      else Reflect.deleteProperty(globalThis, 'TextEncoder');
+      if (importDescriptor) Object.defineProperty(webcrypto.subtle, 'importKey', importDescriptor);
+      else Reflect.deleteProperty(webcrypto.subtle, 'importKey');
+    }
+
+    console.log('Operational record encryption codec: 28 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
