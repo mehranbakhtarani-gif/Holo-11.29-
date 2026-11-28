@@ -133,7 +133,7 @@ async function run() {
 
     // Exercise the opt-in encrypted IndexedDB adapter against the real v5 keyPaths.
     const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('holoo_apex_operational_db_v1', 5);
+      const request = indexedDB.open('holoo_apex_operational_db_v1', 6);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
