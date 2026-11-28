@@ -136,7 +136,7 @@ export function isValidOperationalMigrationJournalRecord(
       typeof raw.storeName !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(raw.storeName) ||
       names.has(raw.storeName) ||
       !ALLOWED_STORE_STATES.includes(String(raw.state)) ||
-      !(raw.cursor === null || (typeof raw.cursor === 'string' && raw.cursor.length <= 180) ||
+      !(raw.cursor === null || (typeof raw.cursor === 'string' && raw.cursor.length <= 512) ||
         (typeof raw.cursor === 'number' && Number.isSafeInteger(raw.cursor))) ||
       !isNonNegativeSafeInteger(raw.batchSequence) ||
       !isNonNegativeSafeInteger(raw.sourceRecordCount) ||
