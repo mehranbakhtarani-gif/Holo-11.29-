@@ -496,3 +496,45 @@ This section narrows the next code change to a separate, non-cutover vertical sl
 ### Explicit non-goals for this slice
 
 No `OP_DB_VERSION` change, no production reader redirection, no deletion of legacy keys, no encrypted-store cutover, no automatic shadow-refresh scheduler, and no merge/deploy. First land the repository and migration primitives with isolated tests; only a later reviewed change may enable the new provider bootstrap after the complete compatibility matrix passes.
+
+
+## Workspace extension importer and mutation-path audit — 2026-11-28
+
+The read-only legacy source classifier and field selector are now implemented in `src/lib/workspaceExtensionLegacyImport.ts`. They are migration primitives only: they do not access IndexedDB, mutate localStorage, choose application defaults, or switch the provider's authority. Tests cover independent source reads, absent/valid-empty/malformed/inaccessible states, malformed aggregate fallback, prototype-sensitive top-level keys, and deterministic field precedence.
+
+### Verified precedence contract
+
+- A valid aggregate field wins over its mirror, including an explicitly empty array or object.
+- If the aggregate field is absent or malformed, a valid independent mirror may be selected.
+- If neither source is valid, the selector returns both source states as unavailable; defaults are intentionally outside this low-level selection function.
+- A malformed or inaccessible aggregate does not prevent independent mirror reads.
+- The classifier validates only top-level JSON shape for arrays/records. It does not claim deep schema validation of each invoice, favorite entry, product metadata item, or full extension snapshot. Deep validation remains a repository/bootstrap responsibility.
+
+### Existing provider behavior that must not be mistaken for the new contract
+
+A branch-pinned review of `WorkspaceExtensionsContext.tsx` and `smartIntelligence.ts` found legacy behavior that the importer must deliberately replace or preserve by explicit policy:
+
+- `loadInitialExtensions` parses the aggregate key as a generic object and then selects individual fields; it does not call the existing full-snapshot validator.
+- `favoriteMenus` accepts the aggregate only when its array is non-empty. An explicit empty aggregate array therefore falls through to the legacy mirror/default path, unlike the new deterministic selector contract.
+- `recurringTemplates` and `volumeDiscountRules` also treat empty aggregate arrays as a request for defaults. Other array fields accept empty arrays.
+- The legacy `loadFavoriteMenus` helper also treats an empty stored array as absent and returns `DEFAULT_FAVORITE_KEYS`. The product metadata helper accepts any parsed object (including an array at runtime); the reserved-invoice helper accepts any array without validating row contents.
+- These existing defaults are application bootstrap policy, not evidence that an empty persisted value is absent. The future importer must define explicit, versioned defaulting rules and must not accidentally overwrite a valid empty user choice.
+
+### Mutation and hydration paths observed
+
+| Path | Current ordering and persistence | Migration requirement |
+|---|---|---|
+| Initial provider state | Synchronous React state initializer calls `loadInitialExtensions`; it reads localStorage and helper fallbacks | Replace with readiness-gated async bootstrap; do not expose defaults before verified repository read |
+| General `updateExtensions` | Computes from `stateRef`; writes four localStorage keys with compensating rollback; updates ref/state; then queues cloud propagation | Make the API asynchronous or provide an explicit durable command result; cloud propagation must follow successful IndexedDB commit |
+| Initial dye-lot seed effect | Derives rows from products and calls React `setState` directly; it does not call `persistLocalMirror` or cloud propagation | Route seed through the same serialized repository commit path or make it a strictly derived non-persistent view |
+| Warehouse transfer state | `persistTransferState` writes local mirrors and React state; cloud transfer path separately commits product + transfer record in a Firestore transaction | Preserve the cross-entity cloud transaction and add a local generation commit; never treat the local mirror as durable acknowledgement |
+| Firestore extension listener | Merges remote fields into current state, writes local mirrors, then updates refs/state | Treat remote hydration as a repository command with generation/CAS and restore-barrier checks; distinguish cloud `_version` from local generation |
+| Encrypted outbox replay | Decrypts and validates previous/next snapshots, then calls cloud push; operation IDs/status are in operational sync persistence | Keep replay idempotency separate from local generation; decide and test when a replayed state change commits locally |
+
+The existing `cloudWriteQueueRef` serializes Firestore writes; it does not serialize or make localStorage writes atomic. The localStorage writer is still synchronous and independent of IndexedDB. The restore barrier is checked by the main mutation and hydration paths, but the initial React state initializer itself is synchronous and not an asynchronous repository readiness boundary.
+
+### Scope and safety decision
+
+The latest CI run for the branch-pinned importer selector commit passed all workflow steps, including TypeScript, the complete test suite, Firestore Emulator security tests, and production build. This validates the pure classifier/selector tests; it does not validate a provider cutover or IndexedDB migration.
+
+No production precedence behavior was changed in this audit. In particular, no database version bump, new IndexedDB store, provider reader redirection, legacy key deletion, encryption-at-rest cutover, merge, or deployment was performed. The next safe implementation unit is a separately tested IndexedDB extension repository and migration journal behind the repository abstraction, followed by an async provider bootstrap only after concurrency, restore, compatibility, and rollback gates pass.
