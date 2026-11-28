@@ -63,7 +63,7 @@ async function run() {
       /invalid|salt/i
     );
 
-    console.log('Operational key descriptor: 20 assertions passed');
+    console.log('Operational key descriptor: 22 assertions passed');
   } finally {
     if (previousCrypto) Object.defineProperty(globalThis, 'crypto', previousCrypto);
     else Reflect.deleteProperty(globalThis, 'crypto');
