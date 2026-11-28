@@ -264,12 +264,13 @@ export async function createOperationalKeyDescriptor(
   createdAt = new Date().toISOString()
 ): Promise<OperationalKeyDescriptor> {
   validateCreationInputs(workspaceId, keyId, createdAt);
-  const identity = createDescriptorIdentity(
-    workspaceId,
-    keyId,
-    createOperationalDataSalt(),
-    createdAt
-  );
+  const salt = createOperationalDataSalt();
+  let identity: DescriptorIdentity;
+  try {
+    identity = createDescriptorIdentity(workspaceId, keyId, salt, createdAt);
+  } finally {
+    salt.fill(0);
+  }
   const raw = requireRandomBytes(DATA_KEY_BYTES);
   try {
     return await wrapRawDataKey(raw, passphrase, identity);
@@ -321,12 +322,13 @@ export async function rewrapOperationalKeyDescriptor(
   }
   const raw = await unwrapRawDataKey(currentPassphrase, descriptor);
   try {
-    const identity = createDescriptorIdentity(
-      descriptor.workspaceId,
-      descriptor.keyId,
-      createOperationalDataSalt(),
-      createdAt
-    );
+    const salt = createOperationalDataSalt();
+    let identity: DescriptorIdentity;
+    try {
+      identity = createDescriptorIdentity(descriptor.workspaceId, descriptor.keyId, salt, createdAt);
+    } finally {
+      salt.fill(0);
+    }
     return await wrapRawDataKey(raw, nextPassphrase, identity);
   } finally {
     raw.fill(0);
