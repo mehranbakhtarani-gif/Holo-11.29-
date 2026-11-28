@@ -100,15 +100,12 @@ import {
 } from '../lib/audioFeedback';
 import {
   getOperationalDbStats,
-  isOperationalRestoreBarrierActive,
-  loadOperationalWorkspace,
   OperationalDbStats,
-  saveOperationalWorkspaceTx,
   prepareEncryptedOperationalWorkspaceMigration as prepareEncryptedOperationalWorkspaceMigrationInDb,
   getPreparedEncryptedOperationalWorkspaceMeta,
   type EncryptedOperationalWorkspaceMeta,
 } from '../lib/operationalDb';
-import { operationalTransactionPort } from '../lib/repositoryAbstraction';
+import { operationalTransactionPort, operationalWorkspacePersistencePort } from '../lib/repositoryAbstraction';
 import {
   deleteLocalSnapshot,
   downloadEncryptedBackupFileToDevice,
@@ -845,7 +842,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       // Primary Local Operational Database Hydration (IndexedDB object stores)
-      loadOperationalWorkspace()
+      operationalWorkspacePersistencePort.loadWorkspace()
         .then((opData) => {
           if (cancelledLocal) return;
           if (opData && opData.accounts.length > 0) {
@@ -6949,7 +6946,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Synchronous flush on close / tab hide + background IndexedDB rolling snapshot on close
   useEffect(() => {
     const handleBeforeClose = () => {
-      if (isOperationalRestoreBarrierActive()) return;
+      if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
       const cur = latestBackupRef.current;
       if (!cur.autoEnabled) return;
       try {
@@ -6994,12 +6991,12 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       hasMountedBackupRef.current = true;
       return;
     }
-    if (isOperationalRestoreBarrierActive()) return;
+    if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
 
     const opDbTimer = window.setTimeout(async () => {
-      if (isOperationalRestoreBarrierActive()) return;
+      if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
       try {
-        await saveOperationalWorkspaceTx({
+        await operationalWorkspacePersistencePort.saveWorkspace({
           profile,
           accounts,
           parties,
@@ -7026,7 +7023,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }, 650);
 
     const fastTimer = window.setTimeout(() => {
-      if (isOperationalRestoreBarrierActive()) return;
+      if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
       try {
         const cur = latestBackupRef.current;
         const payloadJson = cur.exportFn();
@@ -7043,7 +7040,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     const idbTimer = autoBackupOnClose && backupSessionUnlocked
       ? window.setTimeout(async () => {
-          if (isOperationalRestoreBarrierActive()) return;
+          if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
           try {
             const cur = latestBackupRef.current;
             const payloadJson = cur.exportFn();
@@ -7068,7 +7065,7 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     // until all transactional readers and writers have been migrated and tested.
     const encryptedMirrorTimer = backupSessionUnlocked
       ? window.setTimeout(async () => {
-          if (isOperationalRestoreBarrierActive()) return;
+          if (operationalWorkspacePersistencePort.isRestoreBarrierActive()) return;
           try {
             const workspaceId = String(profile.uid || DEMO_OWNER).trim();
             const encryptedMeta = await prepareEncryptedOperationalWorkspaceMigrationInDb(workspaceId);
