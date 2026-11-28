@@ -259,12 +259,9 @@ export async function writeEncryptedOperationalMigrationBatchAtomically(
   });
 }
 
-/** Read only the isolated ciphertext shadow store, never the plaintext source stores. */
 /**
- * Decrypt a bounded cursor scan. No business-field IDB indexes are used:
- * date/status/party/SKU lookups are filtered after authenticated decryption.
- * This intentionally trades query throughput for confidentiality until a
- * separately reviewed keyed blind-index design is approved.
+ * Decrypt a bounded cursor scan from the isolated shadow store. No business-field
+ * IDB indexes are used; predicates run only after authenticated decryption.
  */
 export async function queryEncryptedOperationalStore<T extends Record<string, unknown>>(
   db: IDBDatabase,
