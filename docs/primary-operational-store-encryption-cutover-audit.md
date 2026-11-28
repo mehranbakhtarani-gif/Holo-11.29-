@@ -339,3 +339,41 @@ The migration must be a one-way, journaled import into a dedicated IndexedDB ext
 Tests must cover: missing all keys; aggregate-only; mirror-only; valid aggregate with stale mirrors; partial aggregate with valid per-field mirrors; malformed aggregate with recoverable mirrors; malformed individual mirrors; disagreement diagnostics; duplicate migration; two tabs racing; crash before transaction commit; restart after commit but before UI hydration; blocked database upgrade; quota failure; restore barrier active; cloud hydration racing a local edit; outbox replay racing migration; old-version writer racing the new build; downgrade/rollback behavior.
 
 No migration code or schema change is authorized by this document alone. The next implementation gate is a complete branch-pinned storage-access inventory and a reviewed compatibility decision for old application versions.
+
+
+## Wider localStorage dependency scan — targeted source pass, 2026-11-28
+
+A branch-pinned source pass at the current migration-protocol commit inspected the main extension/context, snapshot, operational database, backup, sync, settings, and storage utility modules. This is a targeted pass, not yet an exhaustive repository-wide proof: remaining source files, tests, dynamically constructed keys, and indirect storage wrappers still require review.
+
+### Additional storage families found
+
+| Storage family / key(s) | Observed access | Migration classification |
+|---|---|---|
+| `holoo_apex_voucher_templates_v1`, `holoo_apex_voucher_template_usage_v1` | `voucherTemplates.ts` reads/writes; included in business snapshot allowlist | Durable business configuration; separate domain schema and validation required |
+| `holoo_apex_bank_recon_sessions_v1`, `holoo_apex_warehouse_transfers_v1` | Included in business snapshot allowlist; full writer/reader inventory still pending | Potentially operational business state; inspect all producers/consumers before authority move |
+| `holoo_apex_invoice_settings_v1` | `invoiceSettings.ts` reads/writes; included in business snapshot allowlist | Durable business configuration |
+| `holoo_apex_sync_conflict_default_v1` | Included in business snapshot allowlist; direct access inventory pending | Sync configuration |
+| `holoo_apex_conflict_policy_v1`, `holoo_apex_offline_outbox_v1`, `holoo_apex_supabase_revision_v1`, `holoo_apex_supabase_last_sync_v1`, `holoo_apex_supabase_workspace_id_v1`, `holoo_apex_supabase_auto_backup_v1` | `dualCloudSync.ts` reads/writes; most are in the business snapshot allowlist | Sync state/configuration; outbox requires payload sensitivity and replay semantics review |
+| `holoo_apex_mesh_device_peer_id_v1`, `holoo_apex_mesh_vector_clock_v1` | `p2pMeshSync.ts` reads/writes | Device identity and sync metadata; not business snapshot data |
+| `holoo_apex_mesh_passphrase_v1` | `p2pMeshSync.ts` reads/writes a generated or user-supplied pairing passphrase directly in localStorage | Sensitive credential material. Excluded from business snapshot allowlist; requires a separate credential-storage remediation decision and must not be copied into the business aggregate |
+| `holoo_apex_imported_backup_digests_v1` | `offlineFirstCore.ts` reads/writes imported backup digests | Import deduplication metadata |
+| `holoo_apex_invoice_settings_v1` | `invoiceSettings.ts` reads/writes | Included in business snapshot; inspect whether settings overlap other persistence sources before moving |
+| `holoo_dashboard_layout_v1`, `holoo_ui_theme_customizer_v1`, `holoo_theme_mode`, `holoo_apex96_dashboard_mode` | Dashboard/theme modules and `App.tsx` read/write | Presentation preferences; separate from operational business authority |
+| `holoo_profile_photo_*`, `holoo_apex_rbac_pin_hash_v1` | `AccountingContext.tsx` reads/writes/removes | Profile media and authentication/RBAC material; separate security and lifecycle review |
+| Device label/ID, auto-close preference, encrypted close snapshot | `localBackup.ts` reads/writes | Device metadata, preference, and encrypted snapshot; not part of extension aggregate |
+
+### Important security observation
+
+The mesh pairing passphrase is persisted as a raw localStorage string by `loadMeshPassphrase` and `saveMeshPassphrase`. This is not the backup encryption passphrase and must not be confused with the in-memory backup-session key lifecycle. Because localStorage is accessible to same-origin JavaScript, this is a distinct credential-at-rest exposure. Do not silently migrate it into the business extension record or claim it is protected by the encrypted operational shadow. A separate remediation should define platform-backed credential storage where available, rotation/re-pairing behavior, and a safe legacy cleanup plan.
+
+### Snapshot allowlist boundary
+
+The business snapshot allowlist contains 16 keys, including the four extension compatibility keys, voucher templates/usage, bank reconciliation sessions, warehouse transfers, invoice settings, and selected sync configuration/outbox keys. It intentionally excludes mesh passphrase, device identity, profile photo, RBAC PIN hash, and presentation preferences. The allowlist is therefore a restore boundary, not proof that every durable localStorage key has already been migrated to IndexedDB.
+
+### CI trigger behavior
+
+The checked-in CI workflow runs on pull requests targeting `main` and pushes to the configured branches, including `fix/phase-1-financial-core`. It has no path filter excluding documentation. The successful CI run for the current documentation commit confirms that docs-only commits do trigger verification on this branch.
+
+### Remaining scan gate
+
+Before implementation, inspect the remaining source modules and all test files for direct storage access, wrapper abstractions, computed key names, `Storage` enumeration, and storage event listeners. Reconcile every durable business key with its writer, reader, snapshot/restore behavior, validation, and concurrency semantics. The targeted pass above must not be described as complete repository-wide inventory.
