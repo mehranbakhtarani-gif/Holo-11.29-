@@ -7115,9 +7115,6 @@ export const AccountingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     let cancelled = false;
     const workspaceId = String(profile.uid || DEMO_OWNER).trim();
     void unlockOperationalDataSessionForWorkspace(workspaceId)
-      .then(() => {
-        if (cancelled) lockOperationalDataSession();
-      })
       .catch((error) => {
         if (!cancelled) {
           showToast(
