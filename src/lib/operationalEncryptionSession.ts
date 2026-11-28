@@ -9,6 +9,7 @@ import {
   assertBackupSessionLease,
   assertBackupSessionGeneration,
   captureBackupSessionLease,
+  getBackupSessionGeneration,
 } from './backupSession';
 import { deriveOperationalDataKey } from './operationalRecordEncryption';
 import {
@@ -96,7 +97,8 @@ export function lockOperationalDataSession(): void {
 }
 
 export function isOperationalDataSessionUnlocked(): boolean {
-  return activeKey !== null;
+  return activeKey !== null && activeBackupSessionGeneration !== null &&
+    activeBackupSessionGeneration === getBackupSessionGeneration();
 }
 
 export function captureOperationalDataKeyLease(): OperationalDataKeyLease {
