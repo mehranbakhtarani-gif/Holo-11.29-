@@ -550,3 +550,38 @@ A focused review of `createTrackedWarehouseTransfer` and `receiveTrackedWarehous
 - Consequently, the Firestore transaction is a remote atomicity guarantee only. It does not make the subsequent local mirror write durable or atomic, and the local mode path is not a multi-entity IndexedDB transaction.
 
 The extension repository integration must therefore expose a transaction that can commit the extension transfer record and the corresponding operational product update together when both are local IndexedDB entities, with restore-barrier and expected-revision checks. Cloud propagation and its `_version` remain a later, separate step. Required failure-injection tests include a crash after local product staging, after transfer-row staging, cloud success followed by local mirror failure, duplicate receipt, and concurrent receipt from two tabs. No production transfer code was changed in this audit.
+
+
+## Security and integrity follow-up — 2026-11-28
+
+### Authenticated audit actor binding
+
+The Firestore audit-log create rule now requires `actorUid` and enforces that it equals `request.auth.uid`. The application writer supplies the authenticated Firebase UID, and the Firestore Emulator suite includes both an accepted owner-bound record and a rejected forged actor UID.
+
+This binds the record to the authenticated account. It does **not** prove that `operatorName` or `operatorRole` is an authorized RBAC identity: those fields remain client-supplied contextual labels. They must not be treated as cryptographic proof of which local operator performed an action. A future trusted audit pipeline must resolve the operator against authoritative server-side RBAC state or explicitly label these fields as unverified.
+
+### Voucher line validation remains a server-side integrity blocker
+
+The current `isValidVoucher` Firestore rule validates balanced header totals, safe integer header amounts, line count, and only that the first line is a map. It does not validate every line's schema or prove that the sum of line debits and credits equals the header totals. A client can therefore submit internally inconsistent line details while satisfying the header checks.
+
+Firestore Security Rules do not provide a general loop/reduce primitive suitable for validating and summing a variable-length list of up to 100 rows. Adding a check for only a few fixed indices would leave a bypass and is not an acceptable remediation. Do not represent the current rule as full voucher validation. The durable fix is a trusted server-side voucher-write boundary that validates every row, exact integer amounts, account ownership/existence, debit/credit totals, status transition, and idempotency before committing; direct client writes of permanent vouchers must be disabled as part of that coordinated migration. Until that backend exists and is exercised in integration tests, this remains a high-severity financial-integrity finding.
+
+### P2P pairing-secret lifecycle
+
+The insecure `Date.now()`/`Math.random()` fallback for generating a mesh pairing secret has been removed. Pairing initialization now fails closed if Web Crypto secure randomness is unavailable, with a regression test forbidding the old fallback.
+
+Two related findings intentionally remain open:
+- Existing passphrases are still accepted at length >= 4 even though `isWeakMeshPassphrase` classifies values shorter than 10 characters as weak.
+- The pairing passphrase is still stored as raw localStorage content.
+
+Automatically replacing an existing shared passphrase could disconnect paired devices, so no silent rotation or minimum-length migration was performed. A safe remediation requires a user-visible re-pair/rotation protocol, authenticated device enrollment, and migration/cleanup tests. This pairing secret is distinct from the backup-session encryption passphrase.
+
+### Encryption and recovery boundary
+
+The operational IndexedDB business stores remain plaintext. The encrypted `secureWorkspace` shadow/checkpoint path and encrypted backup envelopes do not constitute encryption-at-rest for the primary operational records. No database schema bump, primary-store rewrite, or authority cutover was made.
+
+Real multi-device PeerJS/WebRTC behavior (including restrictive NAT/mobile networks and TURN-backed connectivity) has not been proven by the browser/unit CI. A source-level reconnect test is not a substitute for two physical devices and real network conditions.
+
+### Audit status
+
+The branch CI run for the mesh-randomness change passed TypeScript, rules lint, the complete test suite, Firestore Emulator security tests, and production build. The later audit-actor rule/writer/test changes are being validated by a fresh CI run. No merge or deployment was performed. The permanent-voucher server-side validation, pairing-secret migration, primary-store encryption cutover, and physical-device WebRTC tests remain explicit release gates.
