@@ -191,10 +191,10 @@ async function run() {
           binding,
           {
             state: 'copying',
-            cursor: 'account-atomic-2',
+            cursor: 'account-atomic-3',
             batchSequence: 2,
             sourceRecordCount: 3,
-            copiedRecordCount: 2,
+            copiedRecordCount: 3,
             sourceDigest,
             targetDigest: null,
             storeName: 'accounts',
@@ -202,7 +202,7 @@ async function run() {
         ),
         /abort|Abort|transaction/i
       );
-      assert.equal(await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-atomic-2']), undefined);
+      assert.equal(await readRow(db, 'encryptedOperationalRecords', [workspaceId, binding.migrationId, 'accounts', 'account-atomic-3']), undefined);
       const durable = await persistence.readOperationalMigrationJournal(binding.migrationId);
       assert.deepEqual(durable, first.journal, 'aborted target writes must not advance the durable checkpoint');
 
@@ -232,7 +232,7 @@ async function run() {
             cursor: 'account-restore-barrier',
             batchSequence: 2,
             sourceRecordCount: 3,
-            copiedRecordCount: 2,
+            copiedRecordCount: 3,
             sourceDigest,
             targetDigest: null,
             storeName: 'accounts',
@@ -271,7 +271,7 @@ async function run() {
             cursor: 'account-stale-source',
             batchSequence: 2,
             sourceRecordCount: 3,
-            copiedRecordCount: 2,
+            copiedRecordCount: 3,
             sourceDigest,
             targetDigest: null,
             storeName: 'accounts',
