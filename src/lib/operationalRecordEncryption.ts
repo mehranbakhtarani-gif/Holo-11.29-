@@ -96,9 +96,19 @@ export async function deriveOperationalDataKey(
   if (!Number.isInteger(iterations) || iterations < 600_000 || iterations > 1_000_000) {
     throw new Error('Operational encryption KDF work factor is outside the accepted range.');
   }
-  const material = await cryptoApi.subtle.importKey(
-    'raw', toArrayBuffer(new TextEncoder().encode(passphrase)), 'PBKDF2', false, ['deriveKey']
-  );
+  // Web Crypto copies imported key material, but the caller-owned byte buffers remain
+  // in JavaScript memory unless explicitly cleared after importKey resolves.
+  const passphraseBytes = new TextEncoder().encode(passphrase);
+  const passphraseBuffer = toArrayBuffer(passphraseBytes);
+  let material: CryptoKey;
+  try {
+    material = await cryptoApi.subtle.importKey(
+      'raw', passphraseBuffer, 'PBKDF2', false, ['deriveKey']
+    );
+  } finally {
+    passphraseBytes.fill(0);
+    new Uint8Array(passphraseBuffer).fill(0);
+  }
   return cryptoApi.subtle.deriveKey(
     { name: 'PBKDF2', salt: toArrayBuffer(salt), iterations, hash: 'SHA-256' },
     material,
@@ -122,21 +132,30 @@ export async function encryptOperationalRecord<T>(
   if (!key || key.type !== 'secret' || !key.usages.includes('encrypt')) {
     throw new Error('A valid operational AES encryption key is required.');
   }
-  const plaintext = new TextEncoder().encode(JSON.stringify(value));
+  let serialized = JSON.stringify(value);
+  const plaintext = new TextEncoder().encode(serialized);
+  const plaintextBuffer = toArrayBuffer(plaintext);
   const iv = requireWebCrypto().getRandomValues(new Uint8Array(IV_BYTES));
-  const ciphertext = await requireWebCrypto().subtle.encrypt(
-    { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(additionalData(context)), tagLength: 128 },
-    key,
-    toArrayBuffer(plaintext)
-  );
-  return {
-    format: OPERATIONAL_RECORD_ENVELOPE_FORMAT,
-    version: OPERATIONAL_RECORD_ENVELOPE_VERSION,
-    ...context,
-    cipher: 'AES-256-GCM',
-    ivB64: toBase64(iv),
-    ciphertextB64: toBase64(new Uint8Array(ciphertext)),
-  };
+  try {
+    const ciphertext = await requireWebCrypto().subtle.encrypt(
+      { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: toArrayBuffer(additionalData(context)), tagLength: 128 },
+      key,
+      plaintextBuffer
+    );
+    return {
+      format: OPERATIONAL_RECORD_ENVELOPE_FORMAT,
+      version: OPERATIONAL_RECORD_ENVELOPE_VERSION,
+      ...context,
+      cipher: 'AES-256-GCM',
+      ivB64: toBase64(iv),
+      ciphertextB64: toBase64(new Uint8Array(ciphertext)),
+    };
+  } finally {
+    // Clear both the encoder output and the copy passed to Web Crypto on every path.
+    plaintext.fill(0);
+    new Uint8Array(plaintextBuffer).fill(0);
+    serialized = '';
+  }
 }
 
 /** Decrypt only when envelope identity exactly matches the requested IndexedDB location. */
@@ -169,5 +188,13 @@ export async function decryptOperationalRecord<T>(
     key,
     toArrayBuffer(ciphertext)
   );
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  let serialized: string | undefined;
+  try {
+    serialized = new TextDecoder().decode(plaintext);
+    return JSON.parse(serialized) as T;
+  } finally {
+    // Do not leave decrypted record bytes resident after parsing or a parse failure.
+    new Uint8Array(plaintext).fill(0);
+    serialized = undefined;
+  }
 }
