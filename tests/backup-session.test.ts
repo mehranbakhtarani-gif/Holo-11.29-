@@ -35,9 +35,9 @@ async function run() {
 
   try {
     lockBackupSession();
+    assert.equal(isBackupSessionUnlocked(), false);
     assert.throws(() => assertBackupSessionLease(replacementLease), /نشست رمزگذاری/,
       'locking must invalidate in-flight work before it can commit');
-    assert.equal(isBackupSessionUnlocked(), false);
     assert.throws(() => requireBackupSessionPassphrase(), /قفل پشتیبان/);
 
     unlockBackupSession('SessionOnly#1405');
