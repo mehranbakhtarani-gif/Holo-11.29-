@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { webcrypto } from 'node:crypto';
 
 const indexedDb = globalThis.indexedDB;
+const sessionListeners = new Set<(event: Event) => void>();
 const localStorageValues = new Map<string, string>();
 const localStorageMock = {
   getItem: (key: string) => localStorageValues.get(key) ?? null,
@@ -27,7 +28,18 @@ Object.defineProperty(globalThis, 'window', {
     localStorage: localStorageMock,
     crypto: webcrypto,
     location: { reload: () => undefined },
-    dispatchEvent: () => true,
+    addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'holoo:backup-session-changed') sessionListeners.add(listener as (event: Event) => void);
+    },
+    removeEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'holoo:backup-session-changed') sessionListeners.delete(listener as (event: Event) => void);
+    },
+    dispatchEvent: (event: Event) => {
+      if (event.type === 'holoo:backup-session-changed') {
+        for (const listener of [...sessionListeners]) listener(event);
+      }
+      return true;
+    },
   },
 });
 
@@ -39,10 +51,29 @@ const {
   getActiveOperationalRestoreJournal,
   isOperationalRestoreBarrierActive,
   saveOperationalWorkspaceTx,
+  savePreUpdateSafetyBackup,
+  listPreUpdateSafetyBackups,
 } = await import('../src/lib/operationalDb');
 const { restoreCompleteBackupPackage, resumePendingCompleteBackupRestore } = await import('../src/lib/completeBackupRestore');
 
 const passphrase = 'IndexedDB-Restore-Test#1405';
+unlockBackupSession(passphrase);
+
+// A lock during asynchronous envelope verification must prevent the safety
+// backup from reaching IndexedDB with a stale session lease.
+const safetyEnvelope = await encryptBackupEnvelope(JSON.stringify({ profile: { uid: 'lease-test' }, accounts: [] }), passphrase);
+const safetyWrite = savePreUpdateSafetyBackup({
+  id: 'session-race-safety-backup',
+  reason: 'manual_guard',
+  schemaVersion: 5,
+  sha256: safetyEnvelope.plaintextSha256,
+  envelopeJson: JSON.stringify(safetyEnvelope),
+  createdAt: new Date().toISOString(),
+});
+lockBackupSession();
+await assert.rejects(safetyWrite, /نشست رمزگذاری/);
+assert.equal((await listPreUpdateSafetyBackups()).some((row) => row.id === 'session-race-safety-backup'), false,
+  'a safety backup verified under a stale lease must never be persisted');
 unlockBackupSession(passphrase);
 
 // A new tab must be able to observe the durable preparation record before any
