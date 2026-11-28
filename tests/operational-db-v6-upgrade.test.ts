@@ -86,12 +86,15 @@ async function run() {
     );
     heldV5.close();
 
-    // The production open request resumes after the old connection closes and creates v6.
-    const v6 = await openAtVersion(6);
+    // The production open request resumes after the old connection closes and creates v7.
+    const v6 = await openAtVersion(7);
     try {
-      assert.equal(v6.version, 6);
+      assert.equal(v6.version, 7);
       assert.equal(v6.objectStoreNames.contains('operationalMigrationJournal'), true);
       assert.equal(v6.transaction(['operationalMigrationJournal']).objectStore('operationalMigrationJournal').keyPath, 'migrationId');
+      const encryptedStore = v6.transaction(['encryptedOperationalRecords']).objectStore('encryptedOperationalRecords');
+      assert.deepEqual(encryptedStore.keyPath, ['workspaceId', 'storeName', 'recordId']);
+      assert.deepEqual([...encryptedStore.indexNames], ['workspaceStore']);
       const expectedKeyPaths: Record<string, string> = {
         meta: 'key', syncOutbox: 'operationId', syncInbox: 'operationId',
         localProfiles: 'workspaceId', secureWorkspace: 'workspaceId', restoreJournal: 'restoreId',
@@ -124,7 +127,7 @@ async function run() {
     // it is not a full production restore record and must keep normal workspace
     // access fail-closed. The blocked production open and deferred schema upgrade
     // are already asserted above, so do not call a normal workspace API here.
-    console.log('Operational IndexedDB v5→v6 production upgrade: data, keyPaths, indexes, and blocked-tab behavior passed');
+    console.log('Operational IndexedDB v5→v7 production upgrade: data, keyPaths, indexes, and blocked-tab behavior passed');
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
     else Reflect.deleteProperty(globalThis, 'window');
