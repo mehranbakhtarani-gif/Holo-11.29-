@@ -611,3 +611,34 @@ Remaining Stage 3 blockers after this groundwork:
 4. Ensure lock/session-generation changes abort all in-flight reads/writes before commit, including every multi-store transaction.
 5. Prove crash recovery, multi-tab versionchange behavior, quota handling, rollback, restore, and backup interoperability with failure-injection tests.
 6. Only then increment the operational database schema and switch the authoritative reader/writer. No schema bump, production cutover, plaintext deletion, merge, or deployment was performed in this change.
+
+
+### Primary-store schema and query inventory — 2026-11-28
+
+A second source-level pass against the current branch confirms the concrete IndexedDB layout that the encrypted adapter must preserve:
+
+| Store class | Object-store key path | Existing plaintext indexes / query behavior |
+|---|---|---|
+| `meta` | `key` | `profile` and `workspace_meta` are stored as separate rows; the company profile is business data, while the revision/schema row is control metadata |
+| Entity stores (`accounts`, `parties`, `products`, `vouchers`, `invoices`, `cheques`, `employees`, `assets`, `costCenters`, `currencies`, `exchangeRates`, `importDossiers`, `salesOrders`, `subcontractJobs`, `rbacOperators`, `auditLogs`, `warehouses`, `taxReports`) | `id` | vouchers: `date`, `status`, `voucherNumber`; invoices: `date`, `partyId`, `status`; products: `warehouse`, `sku`; cheques: `dueDate`, `status`; tax reports: `period` |
+| `syncOutbox` | `operationId` | `status`, `createdAt`, `nextRetryAt`; payload may be plaintext `payload` or an encrypted `encryptedPayload`, and the current API rejects rows containing both |
+| `syncInbox` | `operationId` | `receivedAt`; durable operation IDs and device IDs are still metadata requiring an explicit privacy classification |
+| `localProfiles`, `secureWorkspace` | `workspaceId` | local profiles are included in the record codec allowlist; secureWorkspace is the encrypted snapshot/checkpoint store |
+| `preUpdateBackups` | `id` | stores an independently authenticated AES-256-GCM backup envelope, not raw workspace rows |
+
+The generic `queryOperationalStorePaginated` reads raw object-store records or an explicitly selected existing index using IndexedDB cursors. It currently excludes `secureWorkspace`, but otherwise can expose the active plaintext row shape. A primary-store adapter therefore cannot be considered complete if it only replaces `loadOperationalWorkspace` and `saveOperationalWorkspaceTx`; it must also replace or deliberately constrain this generic query API.
+
+The complete write transaction sets observed in source are:
+- `saveOperationalWorkspaceTx`: `meta` plus the 16 main entity stores, with incremental diffing.
+- `commitInvoiceOperationalTx`: `meta`, `products`, `vouchers`, `cheques`, `invoices`.
+- `commitSalesOrderDispatchOperationalTx`: `salesOrders`, `meta`.
+- `commitChequeStatusOperationalTx`: `meta`, `cheques`, `vouchers`.
+- `commitDepreciationOperationalTx`: `meta`, `assets`, `vouchers`.
+- `commitStockAdjustmentOperationalTx`: `meta`, `products`, `vouchers`.
+- Sync outbox/inbox, restore journal, encrypted shadow, pre-update backup, diagnostics, and wipe APIs open additional dedicated transactions and must remain separately covered.
+
+Two concrete blockers are now explicit in the adapter design:
+1. Current per-record AAD binds ciphertext to workspace/store/record ID, but current object stores require `id`, `key`, or `operationId` as their IndexedDB key path. The encrypted storage wrapper must preserve those key paths without duplicating plaintext business fields.
+2. Current secondary indexes expose business attributes such as dates, statuses, party IDs, warehouse IDs, SKUs, and voucher numbers. The migration must choose and test a leakage policy (for example, narrowly scoped keyed blind indexes for approved query fields, or decrypt-and-filter bounded partitions); silently retaining ordinary plaintext indexes is not acceptable.
+
+No production reader, writer, query, or schema was changed by this inventory. It is a design constraint for the next encrypted repository implementation slice, not a claim of encryption-at-rest.
